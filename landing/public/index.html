@@ -439,6 +439,7 @@ td:first-child, td:first-child * { color: var(--yellow); font-weight: 700; }
       <ul>
         <li><button class="row unread" data-ch="dm"><span class="ico on" aria-label="online">●</span><span class="name">slick</span><span class="badge">1</span></button></li>
         <li><button class="row unread" data-ch="requests"><span class="ico on" aria-label="online">●</span><span class="name">feature-requests</span><span class="badge"></span></button></li>
+        <li><button class="row unread" data-ch="advanced"><span class="ico on" aria-label="online">●</span><span class="name">advanced-setup</span><span class="badge"></span></button></li>
       </ul>
     </div>
     <p class="empty" id="noMatch" hidden></p>
@@ -478,15 +479,10 @@ td:first-child, td:first-child * { color: var(--yellow); font-weight: 700; }
           <div>
             <div><span class="who">slick</span><span class="app"> APP</span><span class="time">09:10</span></div>
             <div class="body">
-              <p data-i18n="i1"><b>1.</b> Install it. On Linux (x86_64 and arm64) the script downloads the latest release for your machine, checks its SHA-256 and puts <code>slick</code> in <code>~/.local/bin</code>, no sudo. The sign-in window needs WebKitGTK (<code>webkit2gtk-4.1</code>).</p>
+              <p data-i18n="i1"><b>1.</b> Install it. On Linux (x86_64 and arm64):</p>
               <div class="block"><pre>curl -fsSL https://slick.leonavas.com/install.sh | sh</pre><button class="btn" data-copy="install">[Copy]</button></div>
-              <p data-i18n="i1win">On Windows 10/11 (x86_64), in PowerShell. It installs to <code>%LOCALAPPDATA%\Programs\slick</code> and adds it to your PATH. Use Windows Terminal (or another terminal with colors and images); there's no tray icon on Windows yet.</p>
+              <p data-i18n="i1win">On Windows 10/11 (x86_64), in PowerShell:</p>
               <div class="block"><pre>irm https://slick.leonavas.com/install.ps1 | iex</pre><button class="btn" data-copy="windows">[Copy]</button></div>
-              <details class="more">
-              <summary data-i18n="i1sum">Prefer to build from source?</summary>
-              <p data-i18n="i1src">You need Rust, cargo and the WebKitGTK development package (<code>libwebkit2gtk-4.1-dev</code> on Debian/Ubuntu).</p>
-              <div class="block"><pre>cargo install --locked --git https://github.com/leonavas/slick</pre><button class="btn" data-copy="source">[Copy]</button></div>
-              </details>
             </div>
           </div>
         </article>
@@ -495,23 +491,9 @@ td:first-child, td:first-child * { color: var(--yellow); font-weight: 700; }
           <div>
             <div><span class="who">slick</span><span class="app"> APP</span><span class="time">09:11</span></div>
             <div class="body">
-              <p data-i18n="i2"><b>2.</b> Run it. With no session yet, a small window opens Slack's own sign-in page; once you're in, it hands the session to slick and closes. Inside the app, <kbd>Ctrl</kbd>+<kbd>L</kbd> opens the same screen.</p>
+              <p data-i18n="i2"><b>2.</b> Run it. The first time, a small window opens Slack's own sign-in page.</p>
               <div class="block"><pre>slick</pre><button class="btn" data-copy="run">[Copy]</button></div>
-              <p data-i18n="i5"><span class="me">@you</span> the first launch fetches your channels and users. Every launch after that opens from the local cache, already on screen.</p>
               <p data-i18n="i2ws">Optional: <code>slick login acme</code> goes straight to that workspace's email-and-password form.</p>
-              <p data-i18n="i2keep">The session is saved to <code>~/.config/slick/config</code>, readable only by you. The window keeps its own profile, so signing out of Slack in your browser doesn't sign you out here. If the session expires, slick asks you to sign in again.</p>
-              <details class="more">
-              <summary data-i18n="i2sum">Prefer a token or environment variables?</summary>
-              <p data-i18n="i2b">Put one of these in <code>~/.config/slick/config</code>:</p>
-              <div class="block"><pre data-i18n="i2cfg"><span class="c"># A) internal Slack app (official): create it from
-#    slack-app-manifest.yml, install it, use the User OAuth Token</span>
-token = xoxp-…
-
-<span class="c"># B) browser session, no admin needed</span>
-token = xoxc-…
-cookie = xoxd-…</pre></div>
-              <p data-i18n="i3">Or set <code>SLACK_TOKEN</code> and <code>SLACK_COOKIE</code> in the environment. You can also paste the token and the cookie straight into the sign-in screen.</p>
-              </details>
             </div>
           </div>
         </article>
@@ -734,6 +716,60 @@ cache on disk    13 MB    800 MB</pre></div>
           </div>
         </article>
       </section>
+
+      <!-- DM: everything past the two install commands -->
+      <section class="chan" id="ch-advanced" data-topic="tAdv">
+        <div class="chd"><span class="n">● advanced-setup</span><span class="t" data-topic-of="tAdv"></span></div>
+        <div class="day" data-day="2026-10-12"></div>
+        <article class="msg">
+          <span class="av" aria-hidden="true">s</span>
+          <div>
+            <div><span class="who">slick</span><span class="app"> APP</span><span class="time">09:20</span></div>
+            <div class="body">
+              <p data-i18n="aSrc"><b>Build from source.</b></p>
+              <p data-i18n="i1src">You need Rust, cargo and the WebKitGTK development package (<code>libwebkit2gtk-4.1-dev</code> on Debian/Ubuntu).</p>
+              <div class="block"><pre>cargo install --locked --git https://github.com/leonavas/slick</pre><button class="btn" data-copy="source">[Copy]</button></div>
+            </div>
+          </div>
+        </article>
+        <article class="msg">
+          <span class="av" aria-hidden="true">s</span>
+          <div>
+            <div><span class="who">slick</span><span class="app"> APP</span><span class="time">09:21</span></div>
+            <div class="body">
+              <p data-i18n="aTok"><b>A token or environment variables instead of the sign-in window.</b></p>
+              <p data-i18n="i2b">Put one of these in <code>~/.config/slick/config</code>:</p>
+              <div class="block"><pre data-i18n="i2cfg"><span class="c"># A) internal Slack app (official): create it from
+#    slack-app-manifest.yml, install it, use the User OAuth Token</span>
+token = xoxp-…
+
+<span class="c"># B) browser session, no admin needed</span>
+token = xoxc-…
+cookie = xoxd-…</pre></div>
+              <p data-i18n="i3">Or set <code>SLACK_TOKEN</code> and <code>SLACK_COOKIE</code> in the environment. You can also paste the token and the cookie straight into the sign-in screen.</p>
+            </div>
+          </div>
+        </article>
+        <article class="msg">
+          <span class="av" aria-hidden="true">s</span>
+          <div>
+            <div><span class="who">slick</span><span class="app"> APP</span><span class="time">09:22</span></div>
+            <div class="body">
+              <p data-i18n="aSess"><b>Your session.</b> It's saved to <code>~/.config/slick/config</code>, readable only by you. The sign-in window keeps its own profile, so signing out of Slack in your browser doesn't sign you out here. If the session expires, slick asks you to sign in again; <kbd>Ctrl</kbd>+<kbd>L</kbd> opens the same screen any time.</p>
+            </div>
+          </div>
+        </article>
+        <article class="msg">
+          <span class="av" aria-hidden="true">s</span>
+          <div>
+            <div><span class="who">slick</span><span class="app"> APP</span><span class="time">09:23</span></div>
+            <div class="body">
+              <p data-i18n="aLinux"><b>Linux.</b> The script downloads the latest release for your machine, checks its SHA-256 and puts <code>slick</code> in <code>~/.local/bin</code>, no sudo. <code>SLICK_INSTALL_DIR</code> changes the folder.</p>
+              <p data-i18n="aWin"><b>Windows.</b> It installs to <code>%LOCALAPPDATA%\Programs\slick</code> and adds it to your PATH. Use Windows Terminal (or another terminal with colors and images); there's no tray icon on Windows yet.</p>
+            </div>
+          </div>
+        </article>
+      </section>
     </div>
 
     <div class="dock" id="dock">
@@ -828,18 +864,19 @@ cache on disk    13 MB    800 MB</pre></div>
     heroH: "Uma TUI de Slack ultrarrápida, enxuta e bonita.",
     heroLede: "Um binário Rust pequeno, sem navegador dentro. Tem todas as features e atalhos importantes do Slack.",
     copyCmd: "Copiar",
-    i1: "<b>1.</b> Instale. No Linux (x86_64 e arm64), o script baixa a última release para a sua máquina, confere o SHA-256 e coloca o <code>slick</code> em <code>~/.local/bin</code>, sem sudo. A janela de login precisa do WebKitGTK (<code>webkit2gtk-4.1</code>).",
-    i1win: "No Windows 10/11 (x86_64), no PowerShell. Ele instala em <code>%LOCALAPPDATA%\\Programs\\slick</code> e coloca a pasta no PATH. Use o Windows Terminal (ou outro terminal com cores e imagens); por enquanto não há ícone na bandeja no Windows.",
-    i1sum: "Prefere compilar do código-fonte?",
+    i1: "<b>1.</b> Instale. No Linux (x86_64 e arm64):",
+    i1win: "No Windows 10/11 (x86_64), no PowerShell:",
     i1src: "Você precisa do Rust, do cargo e do pacote de desenvolvimento do WebKitGTK (<code>libwebkit2gtk-4.1-dev</code> no Debian/Ubuntu).",
-    i2: "<b>2.</b> Rode. Sem sessão ainda, uma janelinha abre a página de login do próprio Slack; quando você entra, ela passa a sessão para o slick e fecha. Dentro do app, <kbd>Ctrl</kbd>+<kbd>L</kbd> abre a mesma tela.",
+    i2: "<b>2.</b> Rode. Na primeira vez, uma janelinha abre a página de login do próprio Slack.",
     i2ws: "Opcional: <code>slick login acme</code> vai direto ao formulário de e-mail e senha desse workspace.",
-    i2keep: "A sessão fica salva em <code>~/.config/slick/config</code>, que só você consegue ler. A janela tem um perfil próprio, então sair do Slack no navegador não te desconecta aqui. Se a sessão expirar, o slick pede para você entrar de novo.",
-    i2sum: "Prefere um token ou variáveis de ambiente?",
     i2b: "Coloque uma destas opções em <code>~/.config/slick/config</code>:",
     i2cfg: '<span class="c"># A) app interno do Slack (oficial): crie a partir do\n#    slack-app-manifest.yml, instale e use o User OAuth Token</span>\ntoken = xoxp-…\n\n<span class="c"># B) sessão do navegador, sem precisar de admin</span>\ntoken = xoxc-…\ncookie = xoxd-…',
     i3: "Ou defina <code>SLACK_TOKEN</code> e <code>SLACK_COOKIE</code> no ambiente. Também dá para colar o token e o cookie direto na tela de login.",
-    i5: '<span class="me">@você</span> a primeira execução busca seus canais e usuários. Nas próximas, ele abre direto do cache local, com tudo já na tela.',
+    aSrc: "<b>Compilar do código-fonte.</b>",
+    aTok: "<b>Um token ou variáveis de ambiente em vez da janela de login.</b>",
+    aSess: "<b>A sua sessão.</b> Fica salva em <code>~/.config/slick/config</code>, que só você consegue ler. A janela de login tem um perfil próprio, então sair do Slack no navegador não te desconecta aqui. Se a sessão expirar, o slick pede para você entrar de novo; <kbd>Ctrl</kbd>+<kbd>L</kbd> abre a mesma tela quando quiser.",
+    aLinux: "<b>Linux.</b> O script baixa a última release para a sua máquina, confere o SHA-256 e coloca o <code>slick</code> em <code>~/.local/bin</code>, sem sudo. <code>SLICK_INSTALL_DIR</code> muda a pasta.",
+    aWin: "<b>Windows.</b> Ele instala em <code>%LOCALAPPDATA%\Programs\slick</code> e coloca a pasta no PATH. Use o Windows Terminal (ou outro terminal com cores e imagens); por enquanto não há ícone na bandeja no Windows.",
     f1: "tá, mas por que ele é tão rápido?",
     f2: "Rust, principalmente. Olha o meu <i>trust me bro benchmark</i>: slick e o app desktop do Slack, mesmo workspace, rodando lado a lado na minha máquina agora:",
     fb: '<span class="c">                 slick    Slack</span>\nmemória          24 MB    650 MB\nprocessos        1        10\nthreads          5        131\ninstalação       8 MB     295 MB\ncache em disco   13 MB    800 MB',
@@ -944,7 +981,7 @@ cache on disk    13 MB    800 MB</pre></div>
       hintCopy: "Enter copies the command", hintSend: "Enter sends · Shift+Enter new line",
       copyBtn: "[Copy]", copiedBtn: "[Copied]", copyCmd: "Copy", copiedCmd: "Copied",
       tWelcome: "Start here", tInstall: "Install, sign in, run", tWhy: "Rust, not a browser",
-      tDisk: "Small on disk", tKeys: "Everything has a key", tFeatures: "Shipping today", tRoadmap: "Planned, not shipped", tOmarchy: "Made for your desktop", tDm: "Changelog", tReq: "Ask for what's missing",
+      tDisk: "Small on disk", tKeys: "Everything has a key", tFeatures: "Shipping today", tRoadmap: "Planned, not shipped", tOmarchy: "Made for your desktop", tDm: "Changelog", tReq: "Ask for what's missing", tAdv: "Source builds, tokens and the details",
       hintReq: "Enter sends your proposal",
       rqCheck: "Before it goes out: one quick check that you're human.",
       rqSending: "↻ Sending…",
@@ -979,7 +1016,7 @@ cache on disk    13 MB    800 MB</pre></div>
       hintCopy: "Enter copia o comando", hintSend: "Enter envia · Shift+Enter nova linha",
       copyBtn: "[Copiar]", copiedBtn: "[Copiado]", copyCmd: "Copiar", copiedCmd: "Copiado",
       tWelcome: "Comece por aqui", tInstall: "Instalar, entrar, rodar", tWhy: "Rust, não um navegador",
-      tDisk: "Pequeno no disco", tKeys: "Tudo tem um atalho", tFeatures: "Já funciona hoje", tRoadmap: "Planejado, ainda não lançado", tOmarchy: "Feito para o seu desktop", tDm: "Changelog", tReq: "Peça o que está faltando",
+      tDisk: "Pequeno no disco", tKeys: "Tudo tem um atalho", tFeatures: "Já funciona hoje", tRoadmap: "Planejado, ainda não lançado", tOmarchy: "Feito para o seu desktop", tDm: "Changelog", tReq: "Peça o que está faltando", tAdv: "Código-fonte, tokens e os detalhes",
       hintReq: "Enter envia sua proposta",
       rqCheck: "Antes de enviar: uma verificação rápida de que você é humano.",
       rqSending: "↻ Enviando…",
@@ -1111,7 +1148,7 @@ cache on disk    13 MB    800 MB</pre></div>
   }
 
   // Direct messages are named after who you talk to, not the channel id.
-  const DMS = { dm: "slick", requests: "feature-requests" };
+  const DMS = { dm: "slick", requests: "feature-requests", advanced: "advanced-setup" };
   const label = id => DMS[id] || "#" + id;
   function renderHeader() {
     const sec = $(`#ch-${current}`);
@@ -1460,6 +1497,7 @@ cache on disk    13 MB    800 MB</pre></div>
         setTheme(i >= 0 ? i : themeIdx + 1, true);
       } else if (cmd === "lang") setLang(arg === "pt" ? "pt" : "en", true);
       else if (cmd === "help") open("hotkeys", { focusInput: true });
+      else if (cmd === "source") open("advanced", { focusInput: true });
       else if (COPY[cmd] || cmd === "install") open("install", { focusInput: true });
       else { flash(t("unknown"), "err"); return; }
     } else {
