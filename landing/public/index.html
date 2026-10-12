@@ -123,9 +123,11 @@ b, strong { color: var(--bright); }
   overflow-y: auto;
   padding-bottom: 1lh;
 }
-.team { padding: 0 1ch; font-weight: 800; font-size: 1.15em; letter-spacing: .02em; height: 2lh; display: flex; align-items: center; width: 100%; text-align: left; }
-.team .mark { width: 1.5em; height: 1.5em; margin-right: 1ch; flex: none; }
-.team .wm { height: .95em; width: auto; overflow: visible; }
+.team { padding: 0 1ch; font-weight: 800; font-size: 1.15em; letter-spacing: .02em; height: 3lh; display: flex; align-items: center; width: 100%; text-align: left; }
+.team .mark { width: 1.9em; height: 1.9em; margin-right: 1.2ch; flex: none; }
+.team .wm { height: 1.9em; width: auto; overflow: visible; }
+/* the hero's wordmark, small: thicker outlines so the shadow still reads */
+.team .wm .sh { stroke-width: 3; opacity: .7; }
 .team:focus-visible { outline: 1px solid var(--yellow); outline-offset: -1px; }
 .search {
   display: flex; align-items: center; gap: 1ch;
