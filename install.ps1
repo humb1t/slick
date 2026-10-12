@@ -76,11 +76,16 @@
 
     $path = [Environment]::GetEnvironmentVariable('Path', 'User')
     $parts = @($path -split ';' | Where-Object { $_ })
-    if ($parts -notcontains $dir) {
+    $added = $parts -notcontains $dir
+    if ($added) {
         [Environment]::SetEnvironmentVariable('Path', (($parts + $dir) -join ';'), 'User')
         Write-Host "slick: added $dir to your user PATH"
     }
     if (($env:Path -split ';') -notcontains $dir) { $env:Path = "$env:Path;$dir" }
 
-    Write-Host 'slick: done. Open a new terminal and run: slick login' -ForegroundColor Green
+    if ($added) {
+        Write-Host 'slick: done. Open a new terminal and run: slick' -ForegroundColor Green
+    } else {
+        Write-Host 'slick: done. Run: slick' -ForegroundColor Green
+    }
 }

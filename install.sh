@@ -114,7 +114,7 @@ main() {
     esac
 
     check_webkit
-    say "done. Now run: slick login"
+    say "done. Run: slick"
 }
 
 main "$@"

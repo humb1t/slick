@@ -95,7 +95,7 @@ irm https://slick.leonavas.com/install.ps1 | iex
 The script ([install.ps1](install.ps1)) downloads the latest release, checks its
 SHA-256, puts `slick.exe` in `%LOCALAPPDATA%\Programs\slick` and adds that folder
 to your user `PATH`, without admin rights (`$env:SLICK_VERSION = 'v0.2.0'` picks
-a version). Open a new terminal and run `slick login`. Only x86_64 for now.
+a version). Open a new terminal and run `slick`. Only x86_64 for now.
 
 ### From source
 
@@ -125,11 +125,14 @@ cargo build --release
 
 ## Sign in
 
+Just run `slick`: with no session yet it opens the sign-in screen by itself.
+You can also open it with `Ctrl+L` inside the app, or directly with:
+
 ```sh
 slick login [workspace]
 ```
 
-or `Ctrl+L` inside the app. It opens Slack's own sign-in page in a small window
+It opens Slack's own sign-in page in a small window
 (run by the same binary, in a process of its own); `workspace` (`acme` or `acme.slack.com`) goes straight to that
 workspace's email-and-password form. Once you are in, the window closes and the
 session (the browser token `xoxc-…` and its `d` cookie `xoxd-…`) is saved

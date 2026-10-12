@@ -489,9 +489,10 @@ td:first-child, td:first-child * { color: var(--yellow); font-weight: 700; }
           <div>
             <div><span class="who">slick</span><span class="app"> APP</span><span class="time">09:11</span></div>
             <div class="body">
-              <p data-i18n="i2"><b>2.</b> Sign in. A small window opens Slack's own sign-in page; once you're in, it hands the session to slick and closes. Inside the app, <kbd>Ctrl</kbd>+<kbd>L</kbd> opens the same screen.</p>
-              <div class="block"><pre>slick login</pre><button class="btn" data-copy="login">[Copy]</button></div>
-              <p data-i18n="i2ws">Add your workspace (<code>slick login acme</code>) to go straight to its email-and-password form.</p>
+              <p data-i18n="i2"><b>2.</b> Run it. With no session yet, a small window opens Slack's own sign-in page; once you're in, it hands the session to slick and closes. Inside the app, <kbd>Ctrl</kbd>+<kbd>L</kbd> opens the same screen.</p>
+              <div class="block"><pre>slick</pre><button class="btn" data-copy="run">[Copy]</button></div>
+              <p data-i18n="i5"><span class="me">@you</span> the first launch fetches your channels and users. Every launch after that opens from the local cache, already on screen.</p>
+              <p data-i18n="i2ws">Optional: <code>slick login acme</code> goes straight to that workspace's email-and-password form.</p>
               <p data-i18n="i2keep">The session is saved to <code>~/.config/slick/config</code>, readable only by you. The window keeps its own profile, so signing out of Slack in your browser doesn't sign you out here. If the session expires, slick asks you to sign in again.</p>
               <details class="more">
               <summary data-i18n="i2sum">Prefer a token or environment variables?</summary>
@@ -505,17 +506,6 @@ token = xoxc-…
 cookie = xoxd-…</pre></div>
               <p data-i18n="i3">Or set <code>SLACK_TOKEN</code> and <code>SLACK_COOKIE</code> in the environment. You can also paste the token and the cookie straight into the sign-in screen.</p>
               </details>
-            </div>
-          </div>
-        </article>
-        <article class="msg">
-          <span class="av" aria-hidden="true">s</span>
-          <div>
-            <div><span class="who">slick</span><span class="app"> APP</span><span class="time">09:12</span></div>
-            <div class="body">
-              <p data-i18n="i4"><b>3.</b> Run it.</p>
-              <div class="block"><pre>slick</pre><button class="btn" data-copy="run">[Copy]</button></div>
-              <p data-i18n="i5"><span class="me">@you</span> the first launch fetches your channels and users. Every launch after that opens from the local cache, already on screen.</p>
             </div>
           </div>
         </article>
@@ -836,14 +826,13 @@ cache on disk    13 MB    800 MB</pre></div>
     i1win: "No Windows 10/11 (x86_64), no PowerShell. Ele instala em <code>%LOCALAPPDATA%\\Programs\\slick</code> e coloca a pasta no PATH. Use o Windows Terminal (ou outro terminal com cores e imagens); por enquanto não há ícone na bandeja no Windows.",
     i1sum: "Prefere compilar do código-fonte?",
     i1src: "Você precisa do Rust, do cargo e do pacote de desenvolvimento do WebKitGTK (<code>libwebkit2gtk-4.1-dev</code> no Debian/Ubuntu).",
-    i2: "<b>2.</b> Entre na sua conta. Uma janelinha abre a página de login do próprio Slack; quando você entra, ela passa a sessão para o slick e fecha. Dentro do app, <kbd>Ctrl</kbd>+<kbd>L</kbd> abre a mesma tela.",
-    i2ws: "Passe o seu workspace (<code>slick login acme</code>) para ir direto ao formulário de e-mail e senha dele.",
+    i2: "<b>2.</b> Rode. Sem sessão ainda, uma janelinha abre a página de login do próprio Slack; quando você entra, ela passa a sessão para o slick e fecha. Dentro do app, <kbd>Ctrl</kbd>+<kbd>L</kbd> abre a mesma tela.",
+    i2ws: "Opcional: <code>slick login acme</code> vai direto ao formulário de e-mail e senha desse workspace.",
     i2keep: "A sessão fica salva em <code>~/.config/slick/config</code>, que só você consegue ler. A janela tem um perfil próprio, então sair do Slack no navegador não te desconecta aqui. Se a sessão expirar, o slick pede para você entrar de novo.",
     i2sum: "Prefere um token ou variáveis de ambiente?",
     i2b: "Coloque uma destas opções em <code>~/.config/slick/config</code>:",
     i2cfg: '<span class="c"># A) app interno do Slack (oficial): crie a partir do\n#    slack-app-manifest.yml, instale e use o User OAuth Token</span>\ntoken = xoxp-…\n\n<span class="c"># B) sessão do navegador, sem precisar de admin</span>\ntoken = xoxc-…\ncookie = xoxd-…',
     i3: "Ou defina <code>SLACK_TOKEN</code> e <code>SLACK_COOKIE</code> no ambiente. Também dá para colar o token e o cookie direto na tela de login.",
-    i4: "<b>3.</b> Rode.",
     i5: '<span class="me">@você</span> a primeira execução busca seus canais e usuários. Nas próximas, ele abre direto do cache local, com tudo já na tela.',
     f1: "tá, mas por que ele é tão rápido?",
     f2: "Rust, principalmente. Olha o meu <i>trust me bro benchmark</i>: slick e o app desktop do Slack, mesmo workspace, rodando lado a lado na minha máquina agora:",
