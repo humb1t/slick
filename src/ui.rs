@@ -1188,6 +1188,7 @@ fn profile(f: &mut Frame, app: &mut App, area: Rect) {
     app.areas.profile_star = Rect::default();
     app.areas.profile_vip = Rect::default();
     app.areas.profile_id = Rect::default();
+    app.areas.profile_email = Rect::default();
     app.areas.profile_edit = Rect::default();
     let Some((uid, data)) = app.profile.clone() else { return };
     let block = Block::new().borders(Borders::LEFT).border_style(dim());
@@ -1328,9 +1329,13 @@ fn profile(f: &mut Frame, app: &mut App, area: Rect) {
     y += 4;
 
     let mut contact = Vec::new();
+    let mut email_at = None;
     if !p.email.is_empty() {
         contact.push(Line::from("Endereço de e-mail").style(dim()));
-        contact.push(Line::from(truncate(&p.email, w)).style(Style::new().fg(Color::Blue)));
+        // Click to copy; its row is known once the header lines are in.
+        let email = truncate(&p.email, w);
+        email_at = Some((contact.len() as u16, email.width() as u16));
+        contact.push(Line::from(Span::styled(email, Style::new().fg(Color::Blue).underlined())));
     }
     if !p.phone.is_empty() {
         contact.push(Line::from("Telefone").style(dim()));
@@ -1344,6 +1349,9 @@ fn profile(f: &mut Frame, app: &mut App, area: Rect) {
         contact.insert(0, Line::from(""));
         contact.insert(1, Line::from("Informações de contato").bold());
         contact.insert(2, Line::from(""));
+        if let Some((row, ew)) = email_at.filter(|(row, _)| y + 3 + row < bottom) {
+            app.areas.profile_email = Rect::new(inner.x, y + 3 + row, ew, 1).intersection(inner);
+        }
         f.render_widget(Paragraph::new(contact), Rect::new(inner.x, y, inner.width, bottom - y));
     }
 }

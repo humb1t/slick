@@ -264,6 +264,8 @@ pub struct Areas {
     pub profile_star: Rect,
     pub profile_vip: Rect,
     pub profile_id: Rect,
+    /// The e-mail address, click to copy.
+    pub profile_email: Rect,
     /// "Editar", on your own profile.
     pub profile_edit: Rect,
     /// The workspace name (shows the address) and the address itself.
@@ -2328,6 +2330,12 @@ impl App {
             if self.areas.profile_id.contains(at) {
                 self.copy(&uid);
                 self.status = format!("ID {uid} copiado");
+                self.dirty = true;
+                return;
+            }
+            if let Some(p) = data.as_ref().filter(|p| !p.email.is_empty() && self.areas.profile_email.contains(at)) {
+                self.copy(&p.email);
+                self.status = "E-mail copiado".into();
                 self.dirty = true;
                 return;
             }
