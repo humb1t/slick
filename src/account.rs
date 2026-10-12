@@ -586,7 +586,7 @@ impl App {
             }
             Note::Checked(Ok(None)) => {
                 let v = crate::update::current();
-                self.status = trf!("slick is up to date ({v})", "slick está atualizado ({v})");
+                self.brief(trf!("slick is up to date ({v})", "slick está atualizado ({v})"), 10);
             }
             Note::Checked(Err(e)) => {
                 self.status = String::new();

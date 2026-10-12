@@ -405,6 +405,8 @@ pub struct App {
     /// Whose data the cache holds.
     owner: String,
     pub status: String,
+    /// A status that clears itself: the text and when it goes.
+    pub status_until: Option<(String, Instant)>,
     /// A newer version, shown as the button by your name.
     pub update: Option<crate::update::State>,
     /// Quitting to run the updated binary.
@@ -485,6 +487,7 @@ impl App {
             status: tr("connecting…", "conectando…").into(),
             update: None,
             restart: false,
+            status_until: None,
             error: None,
             loading: HashSet::new(),
             no_older: HashSet::new(),
@@ -1413,6 +1416,12 @@ impl App {
     // ---- events --------------------------------------------------------
 
 
+    /// A status line that goes away after `secs`.
+    pub fn brief(&mut self, text: String, secs: u64) {
+        self.status_until = Some((text.clone(), Instant::now() + std::time::Duration::from_secs(secs)));
+        self.status = text;
+    }
+
     pub fn tick(&mut self) {
         if self.login.is_some() {
             return;
@@ -1426,6 +1435,16 @@ impl App {
             self.spawn(|s| Event::Counts(s.counts()));
         }
         self.poll_thread();
+        // Only if nothing replaced it in the meantime.
+        if let Some((text, at)) = &self.status_until {
+            if Instant::now() >= *at {
+                if self.status == *text {
+                    self.status.clear();
+                    self.dirty = true;
+                }
+                self.status_until = None;
+            }
+        }
         if self.flash.as_ref().is_some_and(|(_, at)| at.elapsed() >= FLASH) {
             self.flash = None;
             self.dirty = true;
