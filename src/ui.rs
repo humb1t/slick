@@ -227,7 +227,7 @@ pub(crate) fn draw_mark(f: &mut Frame, app: &mut App, rect: Rect) {
     if !app.protocols.contains_key(&key) {
         let Some(picker) = app.picker.as_ref() else { return };
         let Ok(img) = image::load_from_memory(MARK_PNG) else { return };
-        let Ok(p) = picker.new_protocol(img, Rect::new(0, 0, rect.width, rect.height).into(), Resize::Fit(None)) else { return };
+        let Ok(p) = picker.new_protocol(img.clone(), Rect::new(0, 0, rect.width, rect.height).into(), fit(&img)) else { return };
         app.protocols.insert(key.clone(), p);
     }
     f.render_widget(Image::new(&app.protocols[&key]), rect);
@@ -533,7 +533,8 @@ fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
             }
             let Some(uid) = c.user.clone() else { continue };
             let Some(url) = app.users.avatars.get(&uid).cloned() else { continue };
-            draw_image(f, app, &ImgRef::avatar(&uid, &url), rect);
+            let px = app.picker.as_ref().map_or(0, |p| p.font_size().height as u32);
+            draw_image(f, app, &ImgRef::avatar_px(&uid, &url, px), rect);
         }
     }
     // Custom status emoji go over the two cells their row left blank.
@@ -1327,6 +1328,13 @@ fn intro_line(l: String, mention: Option<&str>) -> Line<'static> {
     ])
 }
 
+/// Shrinking with a smooth filter (the default, nearest, is jagged); a
+/// cheaper one for big pictures, so encoding them doesn't stall a frame.
+fn fit(img: &image::DynamicImage) -> Resize {
+    let big = img.width() as u64 * img.height() as u64 > 1_000_000;
+    Resize::Fit(Some(if big { ratatui_image::FilterType::Triangle } else { ratatui_image::FilterType::CatmullRom }))
+}
+
 /// Draws a fetched image into `rect`, or a placeholder while it loads.
 pub(crate) fn draw_image(f: &mut Frame, app: &mut App, r: &ImgRef, rect: Rect) {
     let label = |state: &str| Paragraph::new(format!("🖼  {}{state}", r.name)).style(dim());
@@ -1343,7 +1351,7 @@ pub(crate) fn draw_image(f: &mut Frame, app: &mut App, r: &ImgRef, rect: Rect) {
             if !app.protocols.contains_key(&key) {
                 let Some(picker) = app.picker.as_ref() else { return };
                 let size = Rect::new(0, 0, rect.width, rect.height).into();
-                match picker.new_protocol(img.clone(), size, Resize::Fit(None)) {
+                match picker.new_protocol(img.clone(), size, fit(img)) {
                     Ok(p) => {
                         app.protocols.insert(key.clone(), p);
                     }
@@ -2039,7 +2047,7 @@ pub(crate) fn message_lines(
             if let (Some(cols), Some(url)) = (avatar_cols, m.user.as_ref().and_then(|u| app.users.avatars.get(u))) {
                 let uid = m.user.as_deref().unwrap_or("");
                 let user = Some(uid.to_string());
-                slots.push(Slot { line: lines.len() - 1, x: 0, cols, rows: 2, img: ImgRef::avatar(uid, url), full: None, user });
+                slots.push(Slot { line: lines.len() - 1, x: 0, cols, rows: 2, img: ImgRef::avatar_px(uid, url, 2 * font.map_or(0, |f| f.1 as u32)), full: None, user });
             }
         }
         prev = Some(m);
@@ -2111,7 +2119,7 @@ pub(crate) fn message_lines(
                 let cols = (cols / 2).max(1);
                 for uid in m.reply_users.iter().take(3) {
                     let Some(url) = app.users.avatars.get(uid) else { continue };
-                    let img = ImgRef::avatar(uid, url);
+                    let img = ImgRef::avatar_px(uid, url, font.map_or(0, |f| f.1 as u32));
                     slots.push(Slot { line: lines.len(), x, cols, rows: 1, img, full: None, user: Some(uid.clone()) });
                     spans.push(Span::raw(" ".repeat(cols as usize + 1)));
                     x += cols + 1;

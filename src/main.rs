@@ -46,6 +46,24 @@ use crossterm::event::{
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+/// One cell's size in pixels, from the tty (TIOCGWINSZ), when it reports pixels.
+fn cell_px() -> Option<(u16, u16)> {
+    let s = crossterm::terminal::window_size().ok()?;
+    (s.columns > 0 && s.rows > 0 && s.width > 0 && s.height > 0).then(|| (s.width / s.columns, s.height / s.rows))
+}
+
+/// Measures the cell again; a change (zoom) goes to every workspace's picker.
+fn recheck_cell(cell: &mut Option<(u16, u16)>, ws: &mut workspaces::Workspaces) -> bool {
+    let now = cell_px();
+    if now.is_none() || now == *cell {
+        return false;
+    }
+    *cell = now;
+    let (w, h) = now.unwrap();
+    ws.set_font_size(w, h);
+    true
+}
+
 /// Asks the terminal for the given ANSI palette entries (OSC 4), with a
 /// device attributes query after them so we know when the replies are over.
 /// Gives up after a short wait; raw mode must be on.
@@ -230,7 +248,15 @@ fn main() {
     #[cfg(target_os = "linux")]
     let (tray_tx, mut tray) = (tx.clone(), None::<tray::Tray>);
     let mut ws = workspaces::Workspaces::new(picker, owner);
+    // Zooming the terminal changes the cell's pixels: images are re-encoded for the new size.
+    let (mut cell, mut cell_at) = (cell_px(), Instant::now());
     while !ws.quit() {
+        if cell_at.elapsed() >= Duration::from_secs(1) {
+            cell_at = Instant::now();
+            if recheck_cell(&mut cell, &mut ws) {
+                let _ = terminal.clear();
+            }
+        }
         if ws.dirty() {
             ws.fill_infos();
             // Turned on or off in the settings: dropping it takes it off the bar.
@@ -297,11 +323,17 @@ fn main() {
                 }
                 Ok(TermEvent::Mouse(m)) => app.on_mouse(m),
                 Ok(TermEvent::Paste(s)) => app.on_paste(&s),
-                Ok(TermEvent::FocusGained) => app.set_focused(true),
+                Ok(TermEvent::FocusGained) => {
+                    app.set_focused(true);
+                    if recheck_cell(&mut cell, &mut ws) {
+                        let _ = terminal.clear();
+                    }
+                }
                 Ok(TermEvent::FocusLost) => app.set_focused(false),
                 Ok(TermEvent::Resize(..)) => {
                     app.protocols.clear();
                     app.dirty = true;
+                    recheck_cell(&mut cell, &mut ws);
                 }
                 _ => {}
             }

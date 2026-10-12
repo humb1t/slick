@@ -126,6 +126,21 @@ impl Workspaces {
         }
     }
 
+    /// The terminal's cell size changed (zoom): every picker follows, and
+    /// what was encoded for the old size is dropped.
+    pub fn set_font_size(&mut self, w: u16, h: u16) {
+        for ws in &mut self.list {
+            let app = &mut ws.app;
+            let Some(old) = app.picker.as_ref() else { continue };
+            // No setter in ratatui-image: a new picker, same protocol.
+            #[allow(deprecated)]
+            let mut p = Picker::from_fontsize(ratatui_image::FontSize::new(w, h));
+            p.set_protocol_type(old.protocol_type());
+            app.picker = Some(p);
+            app.font_changed();
+        }
+    }
+
     pub fn tick(&mut self) {
         for w in &mut self.list {
             w.app.tick();

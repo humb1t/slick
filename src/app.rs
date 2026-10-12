@@ -190,6 +190,11 @@ impl ImgRef {
         Self { key: format!("avatar-{uid}"), url: url.to_string(), name: String::new(), link: None }
     }
 
+    /// The photo sharp enough for `px` pixels: Slack's 72px one, or 192px past that.
+    pub fn avatar_px(uid: &str, url: &str, px: u32) -> Self {
+        if px > 72 { Self::avatar_big(uid, url) } else { Self::avatar(uid, url) }
+    }
+
     /// A sharper copy for the large avatar at the top of a conversation.
     pub fn avatar_big(uid: &str, url: &str) -> Self {
         let url = url.replace("_72.", "_192.").replace("s=72", "s=192");
@@ -1352,6 +1357,14 @@ impl App {
             Some(id) => self.open(id),
             None => self.spawn(move |s| Event::Dm(s.open_conversation(&[uid]))),
         }
+    }
+
+    /// After the cell's pixel size changed: encodings and the pictures drawn
+    /// for one cell size go, and are made again at the next draw.
+    pub fn font_changed(&mut self) {
+        self.protocols.clear();
+        self.images.retain(|k, _| !["presence-", "badge-", "team-stack-"].iter().any(|p| k.starts_with(p)));
+        self.dirty = true;
     }
 
     /// Downloads what the last draw asked for; files are kept on disk.
