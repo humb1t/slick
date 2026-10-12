@@ -248,6 +248,23 @@ b, strong { color: var(--bright); }
 :is(.logo, .wm) .ink { fill: var(--c); shape-rendering: crispEdges; }
 :is(.logo, .wm) .sh { fill: none; stroke: var(--c); stroke-width: 1.4; stroke-linecap: square; opacity: .55; }
 .hero-copy { margin-top: clamp(1.75rem, 3cqi, 2.75rem); }
+/* a screenshot on the right of the hero, only where it fits beside the text */
+.hero { position: relative; }
+.hero > .logo, .hero-copy { position: relative; z-index: 1; }
+.hero > .shots { display: none; }
+@media (min-width: 1500px) {
+  .hero > :not(.shots) { width: min(100%, 1400px); }
+  .hero > .shots {
+    display: block; position: absolute; top: 50%; translate: 0 -50%;
+    right: calc((100cqi - min(100cqi, 1400px)) / 2);
+    width: min(42cqi, 670px); pointer-events: none;
+  }
+}
+.shots img {
+  width: 100%; height: auto; display: block;
+  border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 18px 50px rgb(0 0 0 / .45);
+}
 .hero h1 {
   margin: 0; max-width: 26ch; color: var(--bright); font-weight: 800;
   font-size: clamp(1.9rem, 3.3cqi, 3.1rem); line-height: 1.08; letter-spacing: -0.03em;
@@ -463,6 +480,9 @@ td:first-child, td:first-child * { color: var(--yellow); font-weight: 700; }
       <section class="chan" id="ch-welcome" data-topic="tWelcome">
         <div class="hero" id="hero">
           <svg class="logo" id="logo" style="--n:35" preserveAspectRatio="xMinYMid meet" aria-hidden="true" focusable="false"></svg>
+          <div class="shots" aria-hidden="true">
+            <img src="screens/reaction-picker.webp" alt="" width="1400" height="803">
+          </div>
           <div class="hero-copy">
             <h1 data-i18n="heroH">Ultrafast, slim and beautiful Slack TUI.</h1>
             <div>

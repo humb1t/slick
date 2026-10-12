@@ -14,26 +14,29 @@ pub const ARG: &str = "__login-window";
 #[cfg(target_os = "linux")]
 const HELPER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/slick-login"));
 
-/// The helper, written to the cache once per build (named by its hash), with
-/// older copies removed.
+/// The helper, written to the cache once per build (a folder named by its
+/// hash), with older copies removed. The file itself is `slick-login`: GTK
+/// takes the window's class from it.
 #[cfg(target_os = "linux")]
 fn program() -> Res<PathBuf> {
     use sha2::{Digest, Sha256};
     use std::os::unix::fs::PermissionsExt;
     let hash: String = Sha256::digest(HELPER).iter().take(6).map(|b| format!("{b:02x}")).collect();
-    let dir = crate::config::cache_dir();
-    let path = dir.join(format!("slick-login-{hash}"));
+    let cache = crate::config::cache_dir();
+    let dir = cache.join(format!("login-{hash}"));
+    let path = dir.join("slick-login");
     if path.exists() {
         return Ok(path);
     }
     let write = || -> std::io::Result<()> {
-        std::fs::create_dir_all(&dir)?;
-        for e in std::fs::read_dir(&dir)?.flatten() {
-            if e.file_name().to_string_lossy().starts_with("slick-login-") {
-                let _ = std::fs::remove_file(e.path());
+        std::fs::create_dir_all(&cache)?;
+        for e in std::fs::read_dir(&cache)?.flatten() {
+            if e.file_name().to_string_lossy().starts_with("login-") {
+                let _ = std::fs::remove_dir_all(e.path());
             }
         }
-        let tmp = dir.join(format!(".slick-login-{hash}.tmp"));
+        std::fs::create_dir_all(&dir)?;
+        let tmp = dir.join(".slick-login.tmp");
         std::fs::write(&tmp, HELPER)?;
         std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
         std::fs::rename(&tmp, &path)
