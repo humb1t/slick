@@ -42,6 +42,11 @@ pub(crate) fn dim() -> Style {
 pub(crate) const SELECTED: Color = Color::Indexed(238);
 /// A surface a little lighter than the background, for pills and bars.
 pub(crate) const SURFACE: Color = Color::Indexed(236);
+/// Inline code's text: the theme's warning color, as for `warning` attachments.
+pub(crate) const CODE_FG: Color = Color::Yellow;
+/// Code's fill: lighter than `SURFACE`, which the picked message is painted
+/// with, so code still stands out on it.
+pub(crate) const CODE_BG: Color = Color::Indexed(238);
 
 /// A text input: a rounded frame, dim or in the focus accent, with the
 /// text a column in from each side. Returns where the text went.

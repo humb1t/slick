@@ -47,16 +47,16 @@ screen (from a local cache) and refreshes in the background.
 
 Slick and the Slack desktop app, same workspace, running side by side on my
 machine. Not a lab benchmark: these are just the numbers the OS reports for
-each app (resident memory, processes and threads from `/proc`, and the size of
+each app (memory as PSS, processes and threads from `/proc`, and the size of
 each install and cache directory on disk).
 
 |               | Slick | <a href="https://aur.archlinux.org/packages/slack-desktop" target="_blank">Slack App</a> |
 | ------------- | ----: | -----: |
-| memory        | 24 MB | 650 MB |
+| memory        | 68 MB | 706 MB |
 | processes     |     1 |     10 |
-| threads       |     5 |    131 |
-| install       |  8 MB | 295 MB |
-| cache on disk | 13 MB | 800 MB |
+| threads       |     6 |    146 |
+| install       | 10 MB | 295 MB |
+| cache on disk | 17 MB | 808 MB |
 
 ## Requirements
 
@@ -84,7 +84,7 @@ The script ([install.sh](install.sh)) downloads the latest
 (built on Ubuntu 24.04, so glibc 2.39 or newer), checks its SHA-256 and puts
 `slick` in `~/.local/bin`, without sudo. It warns when that folder is not on
 your `PATH`. `SLICK_INSTALL_DIR` changes the folder and
-`SLICK_VERSION=v0.3.0` picks a version. Installed this way, slick updates itself
+`SLICK_VERSION=v0.4.0` picks a version. Installed this way, slick updates itself
 (see below).
 
 ### Windows
@@ -102,7 +102,7 @@ irm https://slick.leonavas.com/install.ps1 | iex
 
 The script ([install.ps1](install.ps1)) downloads the latest release, checks its
 SHA-256, puts `slick.exe` in `%LOCALAPPDATA%\Programs\slick` and adds that folder
-to your user `PATH`, without admin rights (`$env:SLICK_VERSION = 'v0.3.0'` picks
+to your user `PATH`, without admin rights (`$env:SLICK_VERSION = 'v0.4.0'` picks
 a version). Open a new terminal and run `slick`. Only x86_64 for now.
 
 ### From source

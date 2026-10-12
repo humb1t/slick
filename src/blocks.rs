@@ -35,7 +35,17 @@ const PILL_MINE_BG: Color = Color::Rgb(0x4A, 0x3E, 0x12);
 const LOCK: &str = "\u{f023}";
 
 fn code() -> Style {
-    Style::new().fg(Color::Red)
+    Style::new().fg(crate::ui::CODE_FG).bg(crate::ui::CODE_BG)
+}
+
+/// Inline code in a thin box: a cell of fill each side, with an
+/// eighth-block line on its outer edge.
+fn code_pill(seg: Seg, out: &mut Vec<Seg>) {
+    // The wires sit on the cell edges next to the text: no padding.
+    let edge = Style::new().fg(CODE_BORDER);
+    out.push(Seg::new("\u{2595}", edge));
+    out.push(seg);
+    out.push(Seg::new("\u{258f}", edge));
 }
 
 fn code_block() -> Style {
@@ -507,7 +517,7 @@ fn inline(s: &str, style: Style, n: &Names, out: &mut Vec<Seg>) {
             }),
             '`' => rest.find('`').filter(|&j| j > 0).map(|j| {
                 flush(&mut buf, out);
-                out.push(Seg::new(unescape(&rest[..j]), style.patch(code())));
+                code_pill(Seg::new(unescape(&rest[..j]), style.patch(code())), out);
                 j
             }),
             '*' | '_' | '~' if prev.is_none_or(|p| !p.is_alphanumeric()) && rest.starts_with(|a: char| !a.is_whitespace()) => {
@@ -630,7 +640,7 @@ fn user(id: &str, label: &str, style: Style, n: &Names) -> Seg {
 
 fn channel(id: &str, label: &str, style: Style, n: &Names) -> Seg {
     let name = n.chan(id).or(Some(label).filter(|l| !l.is_empty())).unwrap_or(id);
-    let sign = if n.private.contains(id) { format!("{LOCK}\u{a0}") } else { "#".into() };
+    let sign = if n.private.contains(id) { LOCK } else { "#" };
     mention(format!("{sign}{name}"), style, false, Some(Target::Channel(id.into())))
 }
 
@@ -702,7 +712,8 @@ fn rich_inline(e: &Value, base: Style, n: &Names, out: &mut Vec<Seg>) {
             style = style.add_modifier(m);
         }
     }
-    if st["code"] == true {
+    let is_code = st["code"] == true;
+    if is_code {
         style = style.patch(code());
     }
     let seg = match s("type") {
@@ -726,6 +737,9 @@ fn rich_inline(e: &Value, base: Style, n: &Names, out: &mut Vec<Seg>) {
         "color" => Seg::new(s("value"), style),
         _ => return,
     };
+    if is_code && s("type") == "text" {
+        return code_pill(seg, out);
+    }
     push(out, seg);
 }
 
@@ -1074,19 +1088,20 @@ fn para_rows(p: &Para, width: usize, base: Style) -> Vec<Row> {
 fn code_box(segs: &[Seg], width: usize, base: Style) -> Vec<Row> {
     let width = width.max(5);
     let inner = width - 4;
-    let fill = Style::new().bg(crate::ui::SURFACE);
-    let border = fill.fg(CODE_BORDER);
+    // Only the inside is filled; the frame sits on the message's background.
+    let fill = Style::new().bg(crate::ui::CODE_BG);
+    let border = Style::new().fg(CODE_BORDER);
     let text: String = segs.iter().map(|s| s.text.as_str()).collect();
     let mut top = Row::default();
     if width >= 8 {
         top.push(format!("╭{}", "─".repeat(width - 6)), border, None);
-        top.push(format!(" {COPY} "), fill.fg(Color::Gray), Some(Target::Copy(text)));
+        top.push(format!(" {COPY} "), Style::new().fg(Color::Gray), Some(Target::Copy(text)));
         top.push("─╮".into(), border, None);
     } else {
         top.push(format!("╭{}╮", "─".repeat(width - 2)), border, None);
     }
     let mut rows = vec![top];
-    for r in code_lines(segs, inner, base.bg(crate::ui::SURFACE)) {
+    for r in code_lines(segs, inner, base.bg(crate::ui::CODE_BG)) {
         let mut row = Row::default();
         row.push("│".into(), border, None);
         row.push(" ".into(), fill, None);

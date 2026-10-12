@@ -614,18 +614,18 @@ td:first-child, td:first-child * { color: var(--yellow); font-weight: 700; }
             <div class="body">
               <p data-i18n="f2">Rust, mostly. Here's my <i>trust me bro benchmark</i>: slick and the Slack desktop app, same workspace, running side by side on my machine right now:</p>
               <div class="block"><pre data-i18n="fb"><span class="c">                 slick    Slack</span>
-memory           24 MB    650 MB
+memory           68 MB    706 MB
 processes        1        10
-threads          5        131
-install          8 MB     295 MB
-cache on disk    13 MB    800 MB</pre></div>
+threads          6        146
+install          10 MB    295 MB
+cache on disk    17 MB    808 MB</pre></div>
               <p data-i18n="f2b">Here's what makes that possible:</p>
               <ul class="quote">
                 <li><span data-i18n="fr1"><b>Native code, not a browser.</b> slick is written in Rust and compiled ahead of time to machine code. No JavaScript engine to boot, no garbage collector pausing to clean up, nothing to warm up.</span></li>
-                <li><span data-i18n="fr2"><b>Light on memory.</b> About 24 MB with my workspace open, against 650 MB spread over Slack's 10 processes. The terminal only redraws when something on screen changed.</span></li>
+                <li><span data-i18n="fr2"><b>Light on memory.</b> About 70 MB with my workspace open, against 700 MB spread over Slack's 10 processes. The terminal only redraws when something on screen changed.</span></li>
                 <li><span data-i18n="f3"><b>Cache first.</b> Users, channels, your recent conversations and their last 50 messages are saved locally, so they're on screen before Slack answers.</span></li>
                 <li><span data-i18n="f4"><b>Never blocks.</b> Every request runs on its own thread, and Rust guarantees those threads can't corrupt each other's data. Typing and scrolling never wait on the network.</span></li>
-                <li><span data-i18n="f5"><b>One small binary.</b> About 8 MB (Slack installs 295 MB), no runtime to install. No webview, no Electron. A browser window shows up only to sign in.</span></li>
+                <li><span data-i18n="f5"><b>One small binary.</b> About 10 MB (Slack installs 295 MB), no runtime to install. No webview, no Electron. A browser window shows up only to sign in.</span></li>
                 <li><span data-i18n="f6"><b>Asks for less.</b> The open conversation checks for new messages every 3 seconds and only fetches what's newer than what you have.</span></li>
               </ul>
             </div>
@@ -655,8 +655,8 @@ cache on disk    13 MB    800 MB</pre></div>
               </ul>
               <p data-i18n="d4">No more bloated disk space for a chat app. On my machine, right now:</p>
               <div class="block"><pre><span class="c">$ du -sh ~/.cache/slick ~/.config/Slack</span>
-13M   ~/.cache/slick
-800M  ~/.config/Slack</pre></div>
+17M   ~/.cache/slick
+808M  ~/.config/Slack</pre></div>
             </div>
           </div>
         </article>
@@ -796,16 +796,11 @@ omarchy plugin enable leonavas.slack --section right</pre><button class="btn" da
           <div>
             <div><span class="who">slick</span><span class="app"> APP</span><span class="time">11:30</span></div>
             <div class="body">
-              <p data-i18n="cph"><b class="ver">slick 0.3.0</b> is out.</p>
+              <p data-i18n="cph"><b class="ver">slick 0.4.0</b> is out.</p>
               <ul class="dash">
-                <li><span data-i18n="cp0">Several workspaces: add one from the workspace menu, switch with <kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>9</kbd>, and see what is waiting in each. The logo stacks up and shows a badge when another workspace needs you. They all keep notifying, and pausing pauses them all.</span></li>
-                <li><span data-i18n="cp1">Formatting: <code>*bold*</code>, <code>_italic_</code>, <code>~strike~</code>, <code>`code`</code>, <code>```</code> blocks, quotes and lists, styled as you type and sent as rich text, like the official app. <kbd>Ctrl</kbd>+<kbd>B</kbd>, <kbd>Ctrl</kbd>+<kbd>I</kbd>, <kbd>Alt</kbd>+<kbd>X</kbd> and <kbd>Alt</kbd>+<kbd>C</kbd> for the markers.</span></li>
-                <li><span data-i18n="cp2">Code blocks come in a box of their own, spaces and blank lines kept, with a button to copy them.</span></li>
-                <li><span data-i18n="cp3">Invite people to your workspace from the account menu, by email, with a message and the channels to join.</span></li>
-                <li><span data-i18n="cp4">Pause notifications until next week, or until the day and time you pick, letting your VIPs through if you want.</span></li>
-                <li><span data-i18n="cp5">Delete a channel from its settings, after a confirmation.</span></li>
-                <li><span data-i18n="cp6">Topic changes, joins and renames read in the app's language. The Threads view marks threads read as you see them, and the search box looks like one.</span></li>
-                <li><span data-i18n="cp7">For your scripts: every event and item says its workspace, the state file lists them and adds up the counts, and <code>slick open</code> takes a Slack link or <code>--team</code>.</span></li>
+                <li><span data-i18n="cp0">Pictures follow your terminal's zoom: avatars, icons and images are redrawn for the new font size, smooth and sharp, instead of breaking or turning blocky.</span></li>
+                <li><span data-i18n="cp1">Code looks like code: <code>`inline`</code> in your theme's warning color with a thin frame, and <code>```</code> blocks in a framed box, easy to tell apart even on a selected message.</span></li>
+                <li><span data-i18n="cp2">Channel mentions show the icon right next to the name, like the official app.</span></li>
               </ul>
             </div>
           </div>
@@ -990,13 +985,13 @@ cookie = xoxd-…</pre></div>
     aWin: "<b>Windows.</b> Ele instala em <code>%LOCALAPPDATA%\Programs\slick</code> e coloca a pasta no PATH. Use o Windows Terminal (ou outro terminal com cores e imagens); por enquanto não há ícone na bandeja no Windows.",
     f1: "tá, mas por que ele é tão rápido?",
     f2: "Rust, principalmente. Olha o meu <i>trust me bro benchmark</i>: slick e o app desktop do Slack, mesmo workspace, rodando lado a lado na minha máquina agora:",
-    fb: '<span class="c">                 slick    Slack</span>\nmemória          24 MB    650 MB\nprocessos        1        10\nthreads          5        131\ninstalação       8 MB     295 MB\ncache em disco   13 MB    800 MB',
+    fb: '<span class="c">                 slick    Slack</span>\nmemória          68 MB    706 MB\nprocessos        1        10\nthreads          6        146\ninstalação       10 MB    295 MB\ncache em disco   17 MB    808 MB',
     f2b: "Isto é o que torna isso possível:",
     fr1: "<b>Código nativo, não um navegador.</b> O slick é escrito em Rust e compilado direto para código de máquina. Nenhum motor de JavaScript para subir, nenhum coletor de lixo pausando para limpar, nada para aquecer.",
-    fr2: "<b>Leve na memória.</b> Uns 24 MB com o meu workspace aberto, contra 650 MB espalhados pelos 10 processos do Slack. O terminal só é redesenhado quando algo na tela mudou.",
+    fr2: "<b>Leve na memória.</b> Uns 70 MB com o meu workspace aberto, contra 700 MB espalhados pelos 10 processos do Slack. O terminal só é redesenhado quando algo na tela mudou.",
     f3: "<b>Cache primeiro.</b> Usuários, canais, suas conversas recentes e as últimas 50 mensagens de cada uma ficam salvos localmente, então aparecem na tela antes de o Slack responder.",
     f4: "<b>Nunca trava.</b> Cada requisição roda em uma thread própria, e o Rust garante que essas threads não corrompam os dados umas das outras. Digitar e rolar nunca esperam a rede.",
-    f5: "<b>Um binário pequeno.</b> Cerca de 8 MB (o Slack instala 295 MB), sem runtime para instalar. Sem webview, sem Electron. Uma janela de navegador só aparece para fazer login.",
+    f5: "<b>Um binário pequeno.</b> Cerca de 10 MB (o Slack instala 295 MB), sem runtime para instalar. Sem webview, sem Electron. Uma janela de navegador só aparece para fazer login.",
     f6: "<b>Pede menos.</b> A conversa aberta procura mensagens novas a cada 3 segundos e só traz o que for mais novo do que você já tem.",
     f7: "justo.",
     k1: "O teclado é a interface principal. O mouse também funciona.",
@@ -1104,15 +1099,10 @@ cookie = xoxd-…</pre></div>
     co2: "O \"(você)\" ao lado do seu nome fica mais apagado que o nome.",
     co3: "\"E-mail copiado\" e todo outro \"copiado\" somem da tela em 2 segundos.",
     co4: "Para os seus scripts: as prévias das mensagens também vêm em HTML, com os emojis do seu workspace, até 5 por conversa, e a preferência de notificação de cada canal. O arquivo de estado espera as contagens reais, então nada de badges velhos ao abrir.",
-    cph: '<b class="ver">slick 0.3.0</b> saiu.',
-    cp0: "Vários workspaces: adicione pelo menu do workspace, troque com <kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>9</kbd> e veja o que espera em cada um. O logo fica empilhado e ganha badge quando outro workspace precisa de você. Todos continuam notificando, e pausar pausa todos.",
-    cp1: "Formatação: <code>*negrito*</code>, <code>_itálico_</code>, <code>~riscado~</code>, <code>`código`</code>, blocos <code>```</code>, citações e listas, com o estilo aparecendo enquanto você digita e enviados como texto rico, igual ao app oficial. <kbd>Ctrl</kbd>+<kbd>B</kbd>, <kbd>Ctrl</kbd>+<kbd>I</kbd>, <kbd>Alt</kbd>+<kbd>X</kbd> e <kbd>Alt</kbd>+<kbd>C</kbd> para os marcadores.",
-    cp2: "Blocos de código ganham uma caixa própria, com espaços e linhas em branco preservados, e um botão para copiar.",
-    cp3: "Convide pessoas para o workspace pelo menu da conta, por e-mail, com uma mensagem e os canais em que vão entrar.",
-    cp4: "Pause as notificações até a próxima semana, ou até o dia e a hora que escolher, deixando passar os seus VIPs se quiser.",
-    cp5: "Apague um canal pelas configurações dele, depois de uma confirmação.",
-    cp6: "Mudanças de tópico, entradas e renomeações aparecem no idioma do app. A tela de Threads marca como lidas as threads que você vê, e a busca tem cara de campo de busca.",
-    cp7: "Para os seus scripts: todo evento e item diz o seu workspace, o arquivo de estado lista os workspaces e soma as contagens, e o <code>slick open</code> aceita link do Slack ou <code>--team</code>.",
+    cph: '<b class="ver">slick 0.4.0</b> saiu.',
+    cp0: "As imagens acompanham o zoom do terminal: avatares, ícones e imagens são redesenhados para o novo tamanho da fonte, suaves e nítidos, em vez de quebrar ou ficar pixelados.",
+    cp1: "Código parece código: <code>`inline`</code> na cor de aviso do seu tema com uma moldura fina, e blocos <code>```</code> numa caixa com borda, fáceis de distinguir até em mensagem selecionada.",
+    cp2: "Menções de canal mostram o ícone colado ao nome, como no app oficial.",
     hints: "j k · Alt+↑↓ canais · ^K procurar · t tema",
     themeWord: "tema",
   };

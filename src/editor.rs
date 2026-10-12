@@ -8,7 +8,7 @@ use crate::emoji::{Emoji, Glyph};
 use crate::markup;
 use crate::slack::Users;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use crate::ui::SURFACE;
+use crate::ui::{CODE_BG, CODE_FG};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -29,7 +29,7 @@ pub fn is_token(c: char) -> bool {
 fn typed_style(look: u16) -> Style {
     let mut s = Style::new();
     if look & markup::PRE != 0 {
-        s = s.fg(Color::Gray).bg(SURFACE);
+        s = s.fg(Color::Gray).bg(CODE_BG);
     }
     for (bit, m) in [(markup::BOLD, Modifier::BOLD), (markup::ITALIC, Modifier::ITALIC), (markup::STRIKE, Modifier::CROSSED_OUT)] {
         if look & bit != 0 {
@@ -37,7 +37,7 @@ fn typed_style(look: u16) -> Style {
         }
     }
     if look & markup::CODE != 0 {
-        s = s.fg(Color::Red).bg(SURFACE);
+        s = s.fg(CODE_FG).bg(CODE_BG);
     }
     if look & markup::MARK != 0 {
         s = s.fg(Color::DarkGray).remove_modifier(Modifier::CROSSED_OUT);
@@ -569,7 +569,7 @@ pub fn draw(f: &mut Frame, app: &mut App, thread: bool, area: Rect, focused: boo
             n => pre(row.start + n - 1),
         };
         if in_pre && x < area.width as usize {
-            spans.push(Span::styled(" ".repeat(area.width as usize - x), Style::new().bg(SURFACE)));
+            spans.push(Span::styled(" ".repeat(area.width as usize - x), Style::new().bg(CODE_BG)));
         }
         lines.push(Line::from(spans));
     }
