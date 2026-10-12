@@ -207,9 +207,15 @@ b, strong { color: var(--bright); }
 .msg.pending { opacity: .55; }
 .body .err { color: var(--red); }
 .body .ts { margin-top: .5lh; min-height: 65px; }
-/* changelog entry head */
 .body .ver { color: var(--bright); }
-.body .date { color: var(--dim); margin-left: 1ch; }
+/* day divider, like Slack's: a rule with the date in a pill */
+.day {
+  display: flex; align-items: center; margin-top: 1lh;
+  white-space: nowrap; color: var(--bright); font-weight: 700; font-size: 14px;
+}
+.day::before, .day::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+.day span { border: 1px solid var(--line); border-radius: 999px; padding: .15em 1.5ch; }
+.day + .msg { margin-top: .5lh; }
 /* secondary setup, folded like a thread under the message */
 .more summary { width: fit-content; margin-top: .75lh; color: var(--blue); cursor: pointer; list-style: none; }
 .more summary::-webkit-details-marker { display: none; }
@@ -692,13 +698,13 @@ cache on disk    13 MB    800 MB</pre></div>
       <!-- DM -->
       <section class="chan" id="ch-dm" data-topic="tDm">
         <div class="chd"><span class="n">● slick</span><span class="t" data-topic-of="tDm"></span></div>
+        <div class="day" data-day="2026-10-12"></div>
         <article class="msg">
           <span class="av" aria-hidden="true">s</span>
           <div>
             <div><span class="who">slick</span><span class="app"> APP</span><span class="time">09:02</span></div>
             <div class="body">
-              <p><b class="ver">0.1.0</b> <span class="date">2026-10-12</span></p>
-              <p data-i18n="cl0">First release.</p>
+              <p data-i18n="cl0"><b class="ver">slick 0.1.0</b> is out, the first release.</p>
               <ul class="dash">
                 <li><span data-i18n="cl1">Channels, private channels, DMs and group DMs, with threads in a side panel, reactions, pinned messages and every message action Slack has.</span></li>
                 <li><span data-i18n="cl2">Your Slack sidebar sections, starred conversations, unread state and mention badges. Sections fold and reorder, and the order syncs back to Slack.</span></li>
@@ -716,6 +722,7 @@ cache on disk    13 MB    800 MB</pre></div>
       <!-- DM: feature requests; Enter in the box opens a prefilled GitHub issue -->
       <section class="chan" id="ch-requests" data-topic="tReq">
         <div class="chd"><span class="n">● feature-requests</span><span class="t" data-topic-of="tReq"></span></div>
+        <div class="day" data-day="2026-10-12"></div>
         <article class="msg">
           <span class="av" aria-hidden="true">s</span>
           <div>
@@ -908,7 +915,7 @@ cache on disk    13 MB    800 MB</pre></div>
     d2: "<b>Só o que é útil vai para o cache.</b> Usuários, canais, suas 8 conversas mais recentes e as últimas 50 mensagens de cada uma, num único arquivo.",
     d3: "<b>Imagens antigas vão embora.</b> Fotos, avatares e emojis que você não vê há 7 dias são apagados quando o slick abre. O que você continua vendo fica.",
     d4: "Chega de espaço em disco inchado por um app de chat. Na minha máquina, agora:",
-    cl0: "Primeira versão.",
+    cl0: '<b class="ver">slick 0.1.0</b> saiu, a primeira versão.',
     cl1: "Canais, canais privados, DMs e DMs em grupo, com threads num painel ao lado, reações, mensagens fixadas e todas as ações de mensagem do Slack.",
     cl2: "As seções da sua barra lateral do Slack, favoritos, não lidas e badges de menção. As seções recolhem e mudam de ordem, e a ordem volta para o Slack.",
     cl3: "Avatares, imagens, Block Kit e os emojis do seu workspace, inclusive os animados, em terminais com gráficos kitty, sixel ou iTerm2.",
@@ -922,7 +929,8 @@ cache on disk    13 MB    800 MB</pre></div>
   const S = {
     en: {
       title: "slick — ultrafast, slim and beautiful Slack TUI",
-      desc: "slick is an ultrafast, slim and beautiful Slack TUI: one small Rust binary, no browser inside.",
+      desc: "slick is an ultrafast, slim and beautiful Slack client for the terminal. One small Rust binary, no browser inside: channels, DMs, threads, search, reactions and Slack's hotkeys.",
+      today: "Today", yesterday: "Yesterday",
       idle: "",
       syncing: "↻ refreshing in the background…",
       synced: "✓ up to date",
@@ -956,7 +964,8 @@ cache on disk    13 MB    800 MB</pre></div>
     },
     pt: {
       title: "slick — TUI de Slack ultrarrápida, enxuta e bonita",
-      desc: "slick é uma TUI de Slack ultrarrápida, enxuta e bonita: um binário Rust pequeno, sem navegador dentro.",
+      desc: "slick é um cliente de Slack para o terminal, ultrarrápido, enxuto e bonito. Um binário Rust pequeno, sem navegador dentro: canais, DMs, threads, busca, reações e os atalhos do Slack.",
+      today: "Hoje", yesterday: "Ontem",
       idle: "",
       syncing: "↻ atualizando em segundo plano…",
       synced: "✓ tudo atualizado",
@@ -1025,6 +1034,7 @@ cache on disk    13 MB    800 MB</pre></div>
     $$(".lang [data-lang]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.lang === lang)));
     $$(".btn[data-copy]").forEach(b => { b.textContent = t("copyBtn"); });
     $$("[data-t]").forEach(el => { el.textContent = t(el.dataset.t); });
+    $$(".day").forEach(el => { el.innerHTML = `<span>${dayLabel(el.dataset.day)}</span>`; });
     if (persist) store.set("fs-lang", lang);
     renderHeader();
     updateHint();
@@ -1385,6 +1395,31 @@ cache on disk    13 MB    800 MB</pre></div>
   }
   box.addEventListener("input", () => { grow(); updateHint(); measure(); });
   const hhmm = d => String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+  // ---------- day dividers: "Today", "Yesterday" or "Monday, October 12th", like Slack ----------
+  function ymd(d) {
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  }
+  function dayLabel(key) {
+    const [y, m, n] = key.split("-").map(Number);
+    const at = new Date(y, m - 1, n), now = new Date();
+    if (key === ymd(now)) return t("today");
+    now.setDate(now.getDate() - 1);
+    if (key === ymd(now)) return t("yesterday");
+    const year = y === now.getFullYear() ? "" : (lang === "pt" ? " de " : ", ") + y;
+    if (lang === "pt") return at.toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" }) + year;
+    const th = n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th";
+    return at.toLocaleDateString("en-US", { weekday: "long" }) + ", " + at.toLocaleDateString("en-US", { month: "long" }) + " " + n + th + year;
+  }
+  // A divider before a channel's first message of the day.
+  function dayFor(where, at) {
+    const ch = $(`#ch-${where}`), key = ymd(at), days = ch.querySelectorAll(".day");
+    if (days.length && days[days.length - 1].dataset.day === key) return;
+    const el = document.createElement("div");
+    el.className = "day";
+    el.dataset.day = key;
+    el.innerHTML = `<span>${dayLabel(key)}</span>`;
+    ch.append(el);
+  }
   function post(text, at = new Date(), where = current) {
     const art = document.createElement("article");
     art.className = "msg fresh";
@@ -1393,6 +1428,7 @@ cache on disk    13 MB    800 MB</pre></div>
     art.querySelector(".who").textContent = lang === "pt" ? "você" : "you";
     art.querySelector("p").textContent = text;
     art.querySelector("p").style.whiteSpace = "pre-wrap";
+    dayFor(where, at);
     $(`#ch-${where}`).append(art);
     if (where === current) art.scrollIntoView({ block: "nearest", behavior: reduced ? "auto" : "smooth" });
     return art;
@@ -1402,6 +1438,7 @@ cache on disk    13 MB    800 MB</pre></div>
     const art = document.createElement("article");
     art.className = "msg fresh";
     art.innerHTML = `<span class="av" aria-hidden="true">s</span><div><div><span class="who">slick</span><span class="app"> APP</span><span class="time">${hhmm(at)}</span></div><div class="body">${html}</div></div>`;
+    dayFor(where, at);
     $(`#ch-${where}`).append(art);
     if (where === current) art.scrollIntoView({ block: "nearest", behavior: reduced ? "auto" : "smooth" });
     return art.querySelector(".body");
