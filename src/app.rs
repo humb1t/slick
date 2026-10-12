@@ -664,17 +664,25 @@ impl App {
         self.me.as_ref().is_some_and(|m| m.user_id == uid)
     }
 
+    /// The open conversation is a DM with a deactivated account: like
+    /// Slack, only its archives, with no message box.
+    pub(crate) fn archived(&self) -> bool {
+        let Some(c) = self.current.as_ref().and_then(|id| self.convs.iter().find(|c| &c.id == id)) else { return false };
+        c.kind == Kind::Direct && c.user.as_ref().is_some_and(|u| self.users.deleted.contains(u))
+    }
+
+    /// " (you)" closing the label of the user's own DM; drawn dimmer than the name.
+    pub(crate) fn you_suffix(&self, c: &Conversation) -> Option<&'static str> {
+        (c.kind == Kind::Direct && c.user.as_deref().is_some_and(|u| self.is_me(u))).then(|| tr(" (you)", " (você)"))
+    }
+
     pub fn label(&self, c: &Conversation) -> String {
         match c.kind {
             Kind::Channel | Kind::Private => c.name.clone(),
             Kind::Direct => {
                 let uid = c.user.as_deref().unwrap_or("");
                 let name = self.users.names.get(uid).map(String::as_str).unwrap_or(uid);
-                if self.is_me(uid) {
-                    trf!("{name} (you)", "{name} (você)")
-                } else {
-                    name.to_string()
-                }
+                format!("{name}{}", self.you_suffix(c).unwrap_or_default())
             }
             Kind::Group => {
                 // mpdm-ana--bruno.silva--leonavas-1 → Ana, Bruno Silva
@@ -1009,7 +1017,7 @@ impl App {
         self.fetch(id.clone(), Fetch::Initial);
         // A DM tells when the other person paused their notifications.
         if let Some(uid) = self.convs.iter().find(|c| c.id == id && c.kind == Kind::Direct).and_then(|c| c.user.clone()) {
-            if !self.is_me(&uid) {
+            if !self.is_me(&uid) && !self.users.deleted.contains(&uid) {
                 self.refresh_user_dnd(uid);
             }
         }
@@ -1378,7 +1386,7 @@ impl App {
             let _ = write!(out, "\x1b]52;c;{}\x07", base64(text.as_bytes()));
             let _ = out.flush();
         }
-        self.status = tr("copied", "copiado").into();
+        self.brief_copied(tr("copied", "copiado").into());
     }
 
     /// The right-click menu for a sidebar row, at a screen position.
@@ -1573,6 +1581,12 @@ impl App {
     /// A status line that goes away after `secs`.
     pub fn brief(&mut self, text: String, secs: u64) {
         self.status_until = Some((text.clone(), Instant::now() + std::time::Duration::from_secs(secs)));
+        self.status = text;
+    }
+
+    /// A "… copied" status line, gone with the "✓ copied" beside a card.
+    pub fn brief_copied(&mut self, text: String) {
+        self.status_until = Some((text.clone(), Instant::now() + COPIED_FOR));
         self.status = text;
     }
 
@@ -1884,6 +1898,13 @@ impl App {
             Ev::Dnd => self.refresh_dnd(),
             Ev::Prefs => self.refresh_prefs(),
             Ev::Convs => self.spawn(|s| Event::Convs(s.conversations())),
+            Ev::User { id, deleted } => {
+                if deleted {
+                    self.users.deleted.insert(id);
+                } else {
+                    self.users.deleted.remove(&id);
+                }
+            }
         }
     }
 
@@ -2274,6 +2295,8 @@ impl App {
             return self.profile_paste(s);
         }
         match self.focus {
+            // No message box in a deactivated account's archives.
+            Focus::Input if self.archived() => {}
             // A pasted picture arrives empty: the terminal can't carry it.
             Focus::Input | Focus::Thread if s.is_empty() => self.paste_clipboard(self.focus == Focus::Thread),
             Focus::Input => self.editor.insert(s),
@@ -2486,6 +2509,17 @@ impl App {
     }
 
     fn on_input_key(&mut self, k: KeyEvent, ctrl: bool) {
+        // A deactivated account's archives: reading only, nothing to type in.
+        if self.archived() {
+            match k.code {
+                KeyCode::Esc => self.focus = Focus::Sidebar,
+                KeyCode::End => self.to_present(),
+                KeyCode::Up => self.scroll_by(1),
+                KeyCode::Down => self.scroll_down(1),
+                _ => {}
+            }
+            return;
+        }
         let newline = k.modifiers.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT);
         match k.code {
             KeyCode::Esc => self.focus = Focus::Sidebar,
@@ -2694,7 +2728,7 @@ impl App {
                 } else if button == MouseButton::Left && self.areas.team_id.contains(at) {
                     let id = self.me.as_ref().map(|m| m.team_id.clone()).unwrap_or_default();
                     self.copy(&id);
-                    self.status = trf!("ID {id} copied", "ID {id} copiado");
+                    self.brief_copied(trf!("ID {id} copied", "ID {id} copiado"));
                     self.copied = Some(("team", Instant::now()));
                 } else if !self.areas.team_popup.contains(at) {
                     self.team_popup = false;
@@ -2725,14 +2759,14 @@ impl App {
             }
             if self.areas.profile_id.contains(at) {
                 self.copy(&uid);
-                self.status = trf!("ID {uid} copied", "ID {uid} copiado");
+                self.brief_copied(trf!("ID {uid} copied", "ID {uid} copiado"));
                 self.copied = Some(("id", Instant::now()));
                 self.dirty = true;
                 return;
             }
             if let Some(p) = data.as_ref().filter(|p| !p.email.is_empty() && self.areas.profile_email.contains(at)) {
                 self.copy(&p.email);
-                self.status = tr("Email copied", "E-mail copiado").into();
+                self.brief_copied(tr("Email copied", "E-mail copiado").into());
                 self.copied = Some(("email", Instant::now()));
                 self.dirty = true;
                 return;
@@ -2817,7 +2851,7 @@ impl App {
     }
 
     fn send(&mut self) {
-        let Some(chan) = self.current.clone() else { return };
+        let Some(chan) = self.current.clone().filter(|_| !self.archived()) else { return };
         if self.send_files(false) {
             return;
         }

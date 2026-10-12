@@ -40,6 +40,8 @@ pub enum Ev {
     Prefs,
     /// You were added to a conversation or one was created.
     Convs,
+    /// Someone's account changed: deactivated (or back) is what the app keeps.
+    User { id: String, deleted: bool },
 }
 
 /// Slack expects a word from the client now and then; quiet sockets get dropped.
@@ -179,6 +181,7 @@ fn classify(v: &Value) -> Option<Ev> {
         "dnd_updated" => Ev::Dnd,
         "pref_change" if matches!(v["name"].as_str(), Some("all_notifications_prefs" | "muted_channels")) => Ev::Prefs,
         "channel_joined" | "group_joined" | "im_created" | "mpim_joined" | "mpim_open" | "im_open" | "group_open" | "channel_created" => Ev::Convs,
+        "user_change" => Ev::User { id: v["user"]["id"].as_str()?.to_string(), deleted: v["user"]["deleted"].as_bool() == Some(true) },
         _ => return None,
     })
 }

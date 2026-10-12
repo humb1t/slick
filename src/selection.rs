@@ -119,10 +119,10 @@ impl App {
         let n = b - a + 1;
         let text = out.trim_end().to_string();
         self.copy(&text);
-        self.status = if n == 1 {
+        self.brief_copied(if n == 1 {
             crate::i18n::tr("message copied", "mensagem copiada").into()
         } else {
             trf!("{n} messages copied", "{n} mensagens copiadas")
-        };
+        });
     }
 }

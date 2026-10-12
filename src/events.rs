@@ -42,6 +42,9 @@ pub struct State {
     reactions: Vec<Reacted>,
     /// Each conversation's own notification preference, as Slack keeps it.
     prefs: HashMap<String, Pref>,
+    /// The first answer about them came (or failed): until then every channel
+    /// would look like it notifies, and the badges would count them all.
+    prefs_loaded: bool,
 }
 
 /// A conversation's notification preference: muted, and the desktop level
@@ -241,8 +244,13 @@ impl App {
 
     /// New preferences: channels that stopped being quiet get their preview.
     pub(crate) fn on_prefs(&mut self, res: Res<HashMap<String, Pref>>) {
-        let Ok(p) = res else { return };
-        if p != self.events.prefs {
+        let first = !self.events.prefs_loaded;
+        self.events.prefs_loaded = true;
+        let Ok(p) = res else {
+            self.dirty |= first;
+            return;
+        };
+        if first || p != self.events.prefs {
             self.events.prefs = p;
             self.on_counts(self.counts.clone());
             self.dirty = true;
@@ -523,6 +531,11 @@ impl App {
         if !self.events.on || self.login.is_some() || self.me.is_none() {
             return;
         }
+        // Nothing until the counts and the preferences are in: a snapshot
+        // before them would show badges that are not the real ones yet.
+        if !self.events.primed || !self.events.prefs_loaded {
+            return;
+        }
         // Reactions stop being news after a day, or once their conversation
         // is read: open in front of you, or no longer unread (`conversation.read`).
         let was_unread = |id: &str| {
@@ -644,6 +657,15 @@ impl App {
         text["updated"] = json!(chrono::Local::now().timestamp());
         let _ = worker().send(Job::State(text.to_string()));
         self.events.last = Some(snapshot);
+    }
+
+    /// On the way in: a snapshot left by a slick that died without its
+    /// goodbye (its terminal closed) would show its old badges until the
+    /// first real one.
+    pub fn starting(&self) {
+        if self.events.on {
+            write_state(&json!({ "v": VERSION, "running": false, "pid": std::process::id(), "updated": chrono::Local::now().timestamp() }).to_string());
+        }
     }
 
     /// On the way out: the snapshot says so, and the subscribers hear it.

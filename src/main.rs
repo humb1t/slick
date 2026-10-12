@@ -193,7 +193,9 @@ fn main() {
     std::thread::spawn(cache::prune_images);
     let (tx, rx) = mpsc::channel();
 
-    let mut terminal = ratatui::init();
+    ratatui::init();
+    let mut terminal = ratatui::Terminal::new(emoji::Toned(ratatui::backend::CrosstermBackend::new(std::io::stdout())))
+        .expect("terminal");
     // Asks the terminal what graphics it speaks (kitty, sixel…), so it must
     // run before we start reading input ourselves.
     let picker = ratatui_image::picker::Picker::from_query_stdio().ok();
@@ -222,6 +224,7 @@ fn main() {
     let logged_in = creds.is_some();
     let mut app = app::App::new(slack::Slack::new(creds.unwrap_or_default()), tx, cache::load(), picker, logged_in);
     app.events.on = owner;
+    app.starting();
     #[cfg(target_os = "linux")]
     {
         app.account.tray = config::tray();

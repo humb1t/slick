@@ -495,13 +495,13 @@ impl App {
             Act::CopyLink => {
                 let url = self.permalink(&it.chan, &m);
                 self.copy(&url);
-                self.status = tr("link copied", "link copiado").into();
+                self.brief_copied(tr("link copied", "link copiado").into());
             }
             Act::CopyText => {
                 let names = self.names();
                 let text = typed(&m.text, &names);
                 self.copy(&text);
-                self.status = tr("message copied", "mensagem copiada").into();
+                self.brief_copied(tr("message copied", "mensagem copiada").into());
             }
             Act::Delete => {
                 if !self.is_mine(&m) {
@@ -523,6 +523,11 @@ impl App {
     fn start_edit(&mut self, it: Item, m: &Message) {
         if !self.is_mine(m) {
             self.status = tr("you can only edit your own messages", "só dá para editar as suas mensagens").into();
+            return;
+        }
+        // A deactivated account's archives have no box to edit in.
+        if !it.thread && self.archived() {
+            self.status = tr("this conversation is read-only", "esta conversa é só para leitura").into();
             return;
         }
         self.cancel_edit();

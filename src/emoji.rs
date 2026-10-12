@@ -6,10 +6,13 @@ use crate::editor::Lookup;
 use crate::slack::{Res, Slack};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use emojis::SkinTone;
-use ratatui::layout::{Position, Rect};
+use ratatui::backend::{Backend, ClearType, WindowSize};
+use ratatui::buffer::Cell;
+use ratatui::layout::{Position, Rect, Size};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
+use unicode_width::UnicodeWidthChar;
 
 /// What the picker offers before anything is typed, and ranks first after.
 const FREQUENT: [&str; 6] = ["+1", "heart", "joy", "tada", "eyes", "white_check_mark"];
@@ -122,6 +125,66 @@ pub fn standard(name: &str) -> Option<String> {
         _ => return Some(e.as_str().to_string()),
     };
     Some(e.with_skin_tone(tone).unwrap_or(e).as_str().to_string())
+}
+
+/// The terminal, with a skin tone on a text-style base (✌ ☝ ✍) sent as
+/// `✌ FE0F 🏾`. Without the FE0F the terminal draws the plain glyph and drops
+/// the tone; with it in the buffer, ratatui would count four columns where
+/// the terminal draws two. So the cell keeps `✌🏾` and gets it on the way out.
+pub struct Toned<B>(pub B);
+
+impl<B: Backend> Backend for Toned<B> {
+    type Error = B::Error;
+
+    fn draw<'a, I>(&mut self, content: I) -> Result<(), Self::Error>
+    where
+        I: Iterator<Item = (u16, u16, &'a Cell)>,
+    {
+        let fixed: Vec<(u16, u16, Cell)> = content
+            .map(|(x, y, c)| {
+                let mut chars = c.symbol().chars();
+                let (base, tone) = (chars.next(), chars.next());
+                let mut c = c.clone();
+                if let (Some(b), Some(t @ '\u{1f3fb}'..='\u{1f3ff}')) = (base, tone) {
+                    if b.width() == Some(1) {
+                        c.set_symbol(&format!("{b}\u{fe0f}{t}{}", chars.as_str()));
+                    }
+                }
+                (x, y, c)
+            })
+            .collect();
+        self.0.draw(fixed.iter().map(|(x, y, c)| (*x, *y, c)))
+    }
+    fn append_lines(&mut self, n: u16) -> Result<(), Self::Error> {
+        self.0.append_lines(n)
+    }
+    fn hide_cursor(&mut self) -> Result<(), Self::Error> {
+        self.0.hide_cursor()
+    }
+    fn show_cursor(&mut self) -> Result<(), Self::Error> {
+        self.0.show_cursor()
+    }
+    fn get_cursor_position(&mut self) -> Result<Position, Self::Error> {
+        self.0.get_cursor_position()
+    }
+    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> Result<(), Self::Error> {
+        self.0.set_cursor_position(position)
+    }
+    fn clear(&mut self) -> Result<(), Self::Error> {
+        self.0.clear()
+    }
+    fn clear_region(&mut self, clear_type: ClearType) -> Result<(), Self::Error> {
+        self.0.clear_region(clear_type)
+    }
+    fn size(&self) -> Result<Size, Self::Error> {
+        self.0.size()
+    }
+    fn window_size(&mut self) -> Result<WindowSize, Self::Error> {
+        self.0.window_size()
+    }
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        self.0.flush()
+    }
 }
 
 /// A custom emoji's picture. The hash in its URL names the file on disk, so
