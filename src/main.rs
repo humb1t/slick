@@ -8,6 +8,7 @@ mod cache;
 mod cli;
 mod compose;
 mod config;
+mod details;
 mod edit;
 mod editor;
 mod icons;
@@ -23,8 +24,10 @@ mod pins;
 mod rtm;
 mod selection;
 mod slack;
+mod slash;
 mod text;
 mod thread;
+mod threads;
 #[cfg(target_os = "linux")]
 mod tray;
 mod ui;

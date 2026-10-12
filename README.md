@@ -174,6 +174,7 @@ for creating that app with the scopes slick uses.
 | `E` `R` `T` `F` `A` `U` `L` `Del` | on a picked message: edit, react, reply in thread, forward, save, mark unread, copy link, delete |
 | `Ctrl+C` | copy the picked or selected messages; otherwise quit |
 | `Ctrl+B` | in a thread, also send the reply to the channel |
+| `Alt+I` or click on the name | channel details (about, members, settings); a DM's profile |
 | `Ctrl+N` | new message or channel |
 | `Ctrl+P` | your account, status and profile |
 | `Ctrl+R` | reload channels and users |

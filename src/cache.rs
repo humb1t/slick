@@ -27,6 +27,9 @@ pub struct Cache {
     pub boot: Option<Boot>,
     #[serde(default)]
     pub emoji: crate::emoji::Emoji,
+    /// The workspace's slash commands, for the `/` autocomplete.
+    #[serde(default)]
+    pub commands: Vec<crate::slash::Command>,
 }
 
 pub fn dir() -> PathBuf {

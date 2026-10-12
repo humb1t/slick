@@ -206,6 +206,8 @@ pub enum Ev {
     Level(Res<String>),
     /// Someone else's pause; on failure the notice just does not show.
     UserDnd { uid: String, res: Res<bool> },
+    /// Someone's user object, read again on opening their DM.
+    User(Res<serde_json::Value>),
     /// A change made here reached Slack, or not and is undone.
     Saved { res: Res<()>, undo: Undo },
     /// The profile as Slack has it after editing, and whether the photo changed.
@@ -213,7 +215,8 @@ pub enum Ev {
 }
 
 pub enum Undo {
-    Status(Option<(String, String)>),
+    /// The status before, and when it was to clear itself (0: never).
+    Status(Option<(String, String)>, i64),
     Away(bool),
 }
 
@@ -347,7 +350,7 @@ fn photo_path(s: &str) -> std::path::PathBuf {
 
 /// The part of a one-line field that fits `w` cells with the cursor in view:
 /// its first char, the text and the cursor's column.
-fn window(e: &Editor, w: usize) -> (usize, String, usize) {
+pub(crate) fn window(e: &Editor, w: usize) -> (usize, String, usize) {
     let chars: Vec<char> = e.text.chars().collect();
     let cur = e.cursor.min(chars.len());
     let width = |s: &[char]| s.iter().map(|c| c.width().unwrap_or(0)).sum::<usize>();
@@ -510,7 +513,7 @@ impl App {
     }
 
     fn my_status(&self) -> (String, String) {
-        self.my_id().and_then(|me| self.users.statuses.get(&me).cloned()).unwrap_or_default()
+        self.my_id().and_then(|me| self.users.status(&me).cloned()).unwrap_or_default()
     }
 
     /// Presence and pause, and the notification level when asked.
@@ -545,6 +548,34 @@ impl App {
         });
     }
 
+    /// Someone's name, photo and status as Slack has them now.
+    pub(crate) fn refresh_user(&self, uid: String) {
+        self.spawn(move |s| Event::Account(Ev::User(s.user(&uid))));
+    }
+
+    /// A user object, from the websocket (`user_change`) or `users.info`:
+    /// the sidebar, messages, the composer and an open profile card all
+    /// read from `users`, so they show the change on the next draw.
+    pub(crate) fn on_user(&mut self, u: &serde_json::Value) {
+        let Some(uid) = u["id"].as_str().map(String::from) else { return };
+        let (name, avatar) = (self.users.names.get(&uid).cloned(), self.users.avatars.get(&uid).cloned());
+        self.users.apply(u);
+        if self.users.avatars.get(&uid) != avatar.as_ref() && avatar.is_some() {
+            self.forget_photo(&uid);
+        }
+        let status = self.users.status(&uid).map(|(e, t)| [e.as_str(), t.as_str()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" "));
+        if let Some(p) = self.profile.as_mut().filter(|(id, _)| *id == uid).and_then(|(_, p)| p.as_mut()) {
+            p.status = status.unwrap_or_default();
+            if let Some(n) = self.users.names.get(&uid) {
+                p.name = n.clone();
+            }
+        }
+        // A new name moves their DM in the sidebar.
+        if self.users.names.get(&uid) != name.as_ref() {
+            self.resort();
+        }
+    }
+
     pub(crate) fn on_account(&mut self, ev: Ev) {
         match ev {
             Ev::Presence(Ok((online, away))) => {
@@ -562,6 +593,9 @@ impl App {
             Ev::UserDnd { uid, res: Err(_) } => {
                 self.account.others_paused.remove(&uid);
             }
+            Ev::User(Ok(u)) => self.on_user(&u),
+            // What was read before stays.
+            Ev::User(Err(_)) => {}
             // What was read before stays.
             Ev::Presence(Err(_)) | Ev::Dnd(Err(_)) | Ev::Level(Err(_)) => {}
             Ev::DndSaved(Err(e)) => self.error = Some(e),
@@ -569,8 +603,8 @@ impl App {
             Ev::Saved { res: Err(e), undo } => {
                 self.error = Some(e);
                 match undo {
-                    Undo::Status(prev) => {
-                        self.put_status(prev);
+                    Undo::Status(prev, end) => {
+                        self.put_status(prev, end);
                     }
                     Undo::Away(away) => self.show_away(away),
                 }
@@ -772,12 +806,21 @@ impl App {
         }
     }
 
-    fn put_status(&mut self, status: Option<(String, String)>) -> Option<(String, String)> {
-        let me = self.my_id()?;
-        match status {
+    /// Your status here, with when it clears itself (0: never); the one it replaced.
+    fn put_status(&mut self, status: Option<(String, String)>, end: i64) -> (Option<(String, String)>, i64) {
+        let Some(me) = self.my_id() else { return (None, 0) };
+        let prev_end = match end {
+            0 => self.users.status_ends.remove(&me),
+            end => self.users.status_ends.insert(me.clone(), end),
+        };
+        // What Slack sent for the old emoji would stand in for the new one.
+        self.users.status_unicode.remove(&me);
+        self.users.status_image.remove(&me);
+        let prev = match status {
             Some(s) => self.users.statuses.insert(me, s),
             None => self.users.statuses.remove(&me),
-        }
+        };
+        (prev, prev_end.unwrap_or(0))
     }
 
     fn show_away(&mut self, away: bool) {
@@ -789,17 +832,17 @@ impl App {
     }
 
     /// Here at once, then in Slack; `emoji` with its colons.
-    fn save_status(&mut self, emoji: String, text: String, expiration: i64) {
+    pub(crate) fn save_status(&mut self, emoji: String, text: String, expiration: i64) {
         let status = (!emoji.is_empty() || !text.is_empty()).then(|| (emoji.clone(), text.clone()));
-        let prev = self.put_status(status);
-        self.spawn(move |s| Event::Account(Ev::Saved { res: set_status(s, &emoji, &text, expiration), undo: Undo::Status(prev) }));
+        let (prev, prev_end) = self.put_status(status, expiration);
+        self.spawn(move |s| Event::Account(Ev::Saved { res: set_status(s, &emoji, &text, expiration), undo: Undo::Status(prev, prev_end) }));
     }
 
-    fn clear_status(&mut self) {
+    pub(crate) fn clear_status(&mut self) {
         self.save_status(String::new(), String::new(), 0);
     }
 
-    fn toggle_away(&mut self) {
+    pub(crate) fn toggle_away(&mut self) {
         let was = self.account.away;
         self.show_away(!was);
         self.spawn(move |s| Event::Account(Ev::Saved { res: set_away(s, !was), undo: Undo::Away(was) }));
@@ -815,7 +858,7 @@ impl App {
         self.dirty = true;
     }
 
-    fn open_status_dialog(&mut self) {
+    pub(crate) fn open_status_dialog(&mut self) {
         let (emoji, text) = self.my_status();
         let emoji = emoji.trim_matches(':').to_string();
         self.account.dialog = Some(StatusDialog { emoji, text, clear: 0, field: 1, picker: None });

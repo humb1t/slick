@@ -38,7 +38,7 @@ touches the disk on Linux: `$XDG_RUNTIME_DIR` is a tmpfs.
   "dnd": { "paused": true, "until": 1760003600, "snooze": true },
   "attention": 4,
   "totals": { "mentions": 2, "dms": 2, "groups": 1, "channels": 5, "channels_mentioned": 1, "channels_quiet": 2,
-              "direct_messages": 3, "channel_mentions": 1, "reactions": 1 },
+              "direct_messages": 3, "channel_mentions": 1, "reactions": 1, "threads": 1, "thread_mentions": 0, "thread_new": 1 },
   "conversations": [
     {
       "id": "D0123", "kind": "dm", "name": "Bruno Lima", "user": "U0456",
@@ -61,7 +61,22 @@ touches the disk on Linux: `$XDG_RUNTIME_DIR` is a tmpfs.
       "user": { "id": "U0456", "name": "Bruno Lima" },
       "at": 1759999000
     }
-  ]
+  ],
+  "threads": {
+    "unread": true, "new": 1, "mentions": 0,
+    "list": [
+      {
+        "conversation": { "id": "C0789", "kind": "channel", "name": "deploys", "user": null },
+        "ts": "1759980000.000300", "latest": "1760000100.000400", "unread": 1, "new": 1, "mention": false,
+        "root": { "ts": "1759980000.000300", "user": "U0123", "author": "Ana",
+                  "text": "Who takes the rollback?", "html": "Who takes the rollback?", "thread_ts": null },
+        "messages": [
+          { "ts": "1760000100.000400", "user": "U0456", "author": "Bruno Lima",
+            "text": "I do", "html": "I do", "thread_ts": "1759980000.000300" }
+        ]
+      }
+    ]
+  }
 }
 ```
 
@@ -97,6 +112,21 @@ touches the disk on Linux: `$XDG_RUNTIME_DIR` is a tmpfs.
   copy of it in `file` (`emoji/<name>.<ext>` next to the snapshot, animated
   GIFs as they are). `file` is `null` until the copy is downloaded, a moment
   after the reaction first shows up; the snapshot is rewritten then.
+- `threads` are the threads you follow (you started, replied to, were
+  mentioned in or followed them, as Slack's Threads view lists them) with
+  replies you haven't read, newest activity first. `ts` names the thread
+  (its first message, in `root`); `messages` are its newest unread replies,
+  up to 5, oldest first; `unread` counts them; `mention` is true when one of
+  them mentions you; `new` is the same count (at least 1). `threads.new` is
+  how many replies are unread in all the threads you follow (the Threads
+  row's blue badge): Slack's own total, less what was read in slick since,
+  so it can be more than the list adds up to. `threads.unread` and
+  `threads.mentions` are Slack's own counts (the Threads row bold, and its
+  red badge). `totals.threads` counts the list, `totals.thread_mentions` is
+  `threads.mentions` and `totals.thread_new` is `threads.new`; like the rest
+  of `totals`, they come in `counts.changed` when they change. `attention` also
+  counts the threads in the list that mention you or are in a DM or group DM.
+  Only the 30 most recently active threads are looked at.
 - `dnd` is `null` when notifications are on. `snooze: true` is a pause you
   set; `false` is Slack's notification schedule (the night hours).
 - The conversation open in slick only counts as unread while slick's window
@@ -117,8 +147,9 @@ Each event is one line of JSON:
 | `app.started` | `pid`, `version`, `team` |
 | `app.stopped` | `pid` |
 | `counts.changed` | `attention`, `totals` (as in the snapshot) |
-| `message.new` | `conversation` (`id`, `kind`, `name`, `user`), `message` (as in the snapshot), `mention` |
+| `message.new` | `conversation` (`id`, `kind`, `name`, `user`), `message` (as in the snapshot), `mention`, and `thread: true` for a reply in a thread you follow |
 | `conversation.read` | `conversation` |
+| `thread.read` | `conversation`, `ts` (the thread) |
 | `dnd.changed` | `paused`, and `until` and `snooze` while paused |
 | `reaction.added` | `conversation`, `message` (`ts`, and the rest as in the snapshot when slick has it loaded), `reaction` (`thumbsup`, without colons), `emoji` (as in the snapshot), `user` (`id`, `name`: who reacted), `mine`, `by_me` |
 | `reaction.removed` | as `reaction.added` |
@@ -129,6 +160,14 @@ read, as slick learns about them: at once, through Slack's real-time
 websocket, or within 15 seconds while that is down. It does not
 replay what was already unread when slick started. `mention` is true when the
 message names you, `@here`, `@channel` or `@everyone`.
+
+It also covers replies other people send to threads you follow, with
+`thread: true` and the reply's `message.thread_ts`: like Slack, whatever the
+channel's notification level, except in a muted channel unless the reply
+mentions you, and not for the thread open in slick while its window has
+focus (it is read there). `thread.read` says a thread left the snapshot's
+unread ones: read in slick (opening it marks it read in Slack too) or
+elsewhere.
 
 `reaction.added` and `reaction.removed` come through the websocket only:
 while it is down slick sees that a conversation changed, not which reaction,

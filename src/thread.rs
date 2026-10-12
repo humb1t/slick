@@ -36,6 +36,9 @@ pub struct Thread {
     pub jump: Option<String>,
     /// Set by the last draw: the text width of the reply box.
     pub input_width: usize,
+    /// A reply typed in a card of the Threads view (`threads`), not in the
+    /// panel: only its box is used, the replies are not fetched.
+    pub inline: bool,
     polling: bool,
     last_poll: Instant,
 }
@@ -86,12 +89,18 @@ impl App {
         let Some(chan) = self.current.clone() else { return };
         // The parent shows at once when it is loaded; the fetch brings the rest.
         let parent = self.messages.get(&chan).and_then(|l| l.iter().find(|m| m.ts == ts)).cloned();
+        self.open_thread_in(chan, ts, parent, false);
+    }
+
+    /// Opens a thread of any conversation, in the panel or (`inline`) only
+    /// its reply box, for a card of the Threads view.
+    pub(crate) fn open_thread_in(&mut self, chan: String, ts: String, parent: Option<Message>, inline: bool) {
         self.profile = None;
         self.edit.forget_thread();
         self.thread = Some(Thread {
             chan,
             ts,
-            msgs: parent.into_iter().collect(),
+            msgs: if inline { Vec::new() } else { parent.into_iter().collect() },
             loaded: false,
             editor: Editor::default(),
             broadcast: false,
@@ -99,11 +108,16 @@ impl App {
             max_scroll: 0,
             jump: None,
             input_width: 40,
+            inline,
             polling: false,
             last_poll: Instant::now(),
         });
         self.focus = Focus::Thread;
-        self.fetch_thread();
+        if !inline {
+            self.fetch_thread();
+            // Opening it reads it, as in Slack.
+            self.read_open_thread();
+        }
     }
 
     pub(crate) fn close_thread(&mut self) {
@@ -129,14 +143,14 @@ impl App {
     /// From `tick`: the open thread refreshes as often as the conversation.
     pub(crate) fn poll_thread(&mut self) {
         let every = self.poll_every();
-        if self.thread.as_ref().is_some_and(|t| !t.polling && t.last_poll.elapsed() >= every) {
+        if self.thread.as_ref().is_some_and(|t| !t.inline && !t.polling && t.last_poll.elapsed() >= every) {
             self.fetch_thread();
         }
     }
 
     /// Now, for the websocket's news; a fetch already on its way will do.
     pub(crate) fn refresh_thread(&mut self) {
-        if self.thread.as_ref().is_some_and(|t| !t.polling) {
+        if self.thread.as_ref().is_some_and(|t| !t.inline && !t.polling) {
             self.fetch_thread();
         }
     }
@@ -171,10 +185,15 @@ impl App {
         let Some(t) = self.open_thread_mut(&chan, &ts) else { return };
         // A reply sent while this was on its way stays until a fetch has it.
         let last = new.last().map(|m| m.ts.clone()).unwrap_or_default();
-        let sent: Vec<Message> = t.msgs.drain(..).filter(|m| m.ts > last).collect();
+        // So do answers only you saw (`slash`), which no fetch has.
+        let sent: Vec<Message> = t.msgs.drain(..).filter(|m| m.ts > last || crate::slash::is_ephemeral(m)).collect();
         t.msgs = new;
-        t.msgs.extend(sent);
+        for m in sent {
+            insert(&mut t.msgs, m);
+        }
         t.loaded = true;
+        // Replies arriving in the open thread are read, like an open conversation's.
+        self.read_open_thread();
     }
 
     pub(crate) fn on_replied(&mut self, chan: String, ts: String, text: String, res: Res<Message>) {
@@ -201,6 +220,10 @@ impl App {
                 insert(list, m.clone());
             }
         }
+        // A reply from a card of the Threads view: the list shows it next.
+        if self.thread.as_ref().is_some_and(|t| t.inline) {
+            return self.threads_soon();
+        }
         if let Some(t) = self.open_thread_mut(&chan, &ts) {
             insert(&mut t.msgs, m);
         }
@@ -210,10 +233,10 @@ impl App {
         if self.send_files(true) {
             return;
         }
-        let Some(t) = self.thread.as_mut() else { return };
-        if t.editor.is_empty() {
+        if self.thread.as_ref().is_none_or(|t| t.editor.is_empty()) || self.run_slash(true) {
             return;
         }
+        let Some(t) = self.thread.as_mut() else { return };
         let text = t.editor.take().trim().to_string();
         let (chan, ts, broadcast) = (t.chan.clone(), t.ts.clone(), t.broadcast);
         // Like Slack, "também enviar" is for one reply.
@@ -309,6 +332,11 @@ impl App {
 /// The thread panel: the parent, the replies and a box to reply.
 pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     let a = &mut app.areas;
+    // A reply typed in the Threads view: its box is there (`threads::draw`).
+    if app.thread.as_ref().is_some_and(|t| t.inline) {
+        (a.thread, a.thread_close, a.thread_broadcast) = Default::default();
+        return;
+    }
     (a.thread, a.thread_close, a.thread_input, a.thread_broadcast) = Default::default();
     let Some(t) = app.thread.as_ref() else { return };
     let block = Block::new().borders(Borders::LEFT).border_style(dim());

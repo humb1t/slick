@@ -3,7 +3,9 @@
 //! something changed: the app then fetches what it would have fetched on its
 //! next poll, just now instead of seconds later. Polling stays, slower, as
 //! the fallback for when the socket is down. Reactions and presence come
-//! with their details, which polling can't tell.
+//! with their details, which polling can't tell. With a browser session it
+//! is the official client's socket (see `Slack::rtm_url`), the only one told
+//! when someone else's status or profile changes.
 
 use crate::app::Event;
 use crate::slack::Slack;
@@ -34,14 +36,26 @@ pub enum Ev {
     Typing { chan: String, user: String },
     /// Something was read, here or elsewhere.
     Counts,
+    /// A thread you follow changed: read, followed, unfollowed, or its
+    /// unread state (`threads`).
+    Threads,
     /// Your pause was set or ended.
     Dnd,
     /// Your notification preferences changed: a channel muted, or set to mentions only.
     Prefs,
     /// You were added to a conversation or one was created.
     Convs,
-    /// Someone's account changed: deactivated (or back) is what the app keeps.
-    User { id: String, deleted: bool },
+    /// Someone's account changed: name, photo, status, deactivated (or
+    /// back). The user object as Slack sent it, for `Users::apply`.
+    User(Value),
+    /// Someone's account changed, without the details: what the official
+    /// client's socket says (`user_invalidated`); fetch them again.
+    UserStale(String),
+    /// A channel was archived (or unarchived), here or elsewhere.
+    Archived { chan: String, archived: bool },
+    /// A message only you see, like a slash command's answer: Slack never
+    /// lists it, so it comes whole.
+    Ephemeral { chan: String, msg: crate::slack::Message },
 }
 
 /// Slack expects a word from the client now and then; quiet sockets get dropped.
@@ -120,6 +134,13 @@ fn run(slack: &Slack, tx: &Sender<Event>) -> bool {
         }
         match ws.read() {
             Ok(Frame::Text(t)) => {
+                // SLICK_RTM_LOG=<file>: every frame, as it came, for debugging.
+                if let Some(path) = std::env::var_os("SLICK_RTM_LOG") {
+                    use std::io::Write;
+                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                        let _ = writeln!(f, "{t}");
+                    }
+                }
                 let Ok(v) = serde_json::from_str::<Value>(&t) else { continue };
                 if v["type"] == "goodbye" {
                     return true;
@@ -153,6 +174,7 @@ fn tcp(s: &mut MaybeTlsStream<TcpStream>) -> Option<&mut TcpStream> {
 fn classify(v: &Value) -> Option<Ev> {
     let s = |k: &str| v[k].as_str().map(String::from);
     Some(match v["type"].as_str()? {
+        "message" if v["is_ephemeral"].as_bool() == Some(true) => Ev::Ephemeral { chan: s("channel")?, msg: crate::slack::parse_message(v) },
         "message" => {
             // Edits and deletions carry the thread in the message they change.
             let inner = if v["message"].is_object() { &v["message"] } else if v["previous_message"].is_object() { &v["previous_message"] } else { v };
@@ -177,11 +199,17 @@ fn classify(v: &Value) -> Option<Ev> {
         }
         "manual_presence_change" => Ev::MyPresence,
         "user_typing" if v["thread_ts"].is_null() => Ev::Typing { chan: s("channel")?, user: s("user")? },
-        "channel_marked" | "group_marked" | "im_marked" | "mpim_marked" | "badge_counts_updated" | "thread_marked" => Ev::Counts,
+        "channel_marked" | "group_marked" | "im_marked" | "mpim_marked" | "badge_counts_updated" => Ev::Counts,
+        "thread_marked" | "thread_subscribed" | "thread_unsubscribed" | "update_thread_state" => Ev::Threads,
         "dnd_updated" => Ev::Dnd,
         "pref_change" if matches!(v["name"].as_str(), Some("all_notifications_prefs" | "muted_channels")) => Ev::Prefs,
         "channel_joined" | "group_joined" | "im_created" | "mpim_joined" | "mpim_open" | "im_open" | "group_open" | "channel_created" => Ev::Convs,
-        "user_change" => Ev::User { id: v["user"]["id"].as_str()?.to_string(), deleted: v["user"]["deleted"].as_bool() == Some(true) },
+        "channel_archive" | "group_archive" => Ev::Archived { chan: s("channel")?, archived: true },
+        "channel_unarchive" | "group_unarchive" => Ev::Archived { chan: s("channel")?, archived: false },
+        // The whole user object, profile and status included; the last two
+        // are what Slack sends when only those changed.
+        "user_change" | "user_status_changed" | "user_profile_changed" if v["user"]["id"].is_string() => Ev::User(v["user"].clone()),
+        "user_invalidated" => Ev::UserStale(v["user"]["id"].as_str()?.to_string()),
         _ => return None,
     })
 }

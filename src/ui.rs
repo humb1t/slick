@@ -2,7 +2,7 @@
 //! foreground/background) is used, so the app follows the terminal theme;
 //! the sign-in screen is the exception and wears Slack's own colors.
 
-use crate::app::{Action, App, Focus, Img, ImgRef, Row};
+use crate::app::{Action, App, Focus, Img, ImgRef, ReadOnly, Row};
 use crate::emoji;
 use crate::blocks;
 use crate::files;
@@ -29,13 +29,30 @@ const ONLINE: &str = "\u{f111}";
 const OFFLINE: &str = "\u{f10c}";
 const STAR_ON: &str = "\u{f005}";
 const STAR_OFF: &str = "\u{f006}";
-/// nf-fa-archive: Slack's mark on a deactivated account's archives.
+/// nf-fa-archive: Slack's mark on a deactivated account's archives and archived channels.
 const ARCHIVE: &str = "\u{f187}";
 pub(crate) const PROFILE: u16 = 44;
 pub(crate) const MAX_INPUT_ROWS: usize = 8;
 
 pub(crate) fn dim() -> Style {
     Style::new().fg(Color::DarkGray)
+}
+
+/// The bar under a selected row, the sidebar's: quieter than inverting it.
+pub(crate) const SELECTED: Color = Color::Indexed(238);
+
+/// Marks the selected row of a popup list, already padded to its width:
+/// the bar under all of it, a thin accent where it starts with a space,
+/// and the dim parts lifted a little so they still read on the bar.
+pub(crate) fn mark_selected(line: &mut Line) {
+    if let Some(first) = line.spans.first_mut().filter(|s| s.content.starts_with(' ')) {
+        first.content = first.content[1..].to_string().into();
+        line.spans.insert(0, Span::styled("▎", Style::new().fg(Color::Cyan)));
+    }
+    for s in line.spans.iter_mut().filter(|s| s.style.fg == Some(Color::DarkGray)) {
+        s.style.fg = Some(Color::Indexed(246));
+    }
+    line.style = line.style.bg(SELECTED);
 }
 
 pub fn draw(f: &mut Frame, app: &mut App) {
@@ -45,7 +62,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // The profile or thread panel takes the right side, leaving the conversation room to read.
     let panel_w = if app.profile.is_some() {
         PROFILE.min(right.width.saturating_sub(40))
-    } else if app.thread.is_some() {
+    } else if app.thread.as_ref().is_some_and(|t| !t.inline) {
         crate::thread::width(right.width)
     } else {
         0
@@ -54,8 +71,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     let input_width = right.width.saturating_sub(4) as usize;
     app.input_width = input_width;
-    let input_rows = if app.archived() {
-        1
+    let input_rows = if let Some(why) = app.read_only() {
+        read_only_lines(app, why, input_width).len() as u16
     } else {
         app.editor.rows(input_width).len().clamp(1, MAX_INPUT_ROWS) as u16 + crate::attach::rows(app, false)
     };
@@ -71,21 +88,28 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     .areas(right);
 
     sidebar(f, app, side);
-    conversation_header(f, app, header);
-    messages(f, app, msgs);
-    if let Some(name) = paused {
-        paused_notice(f, app, &name, notice);
+    // The Threads view takes the conversation's place, header and box included.
+    if app.threads.open {
+        crate::threads::draw(f, app, right);
+    } else {
+        conversation_header(f, app, header);
+        messages(f, app, msgs);
+        if let Some(name) = paused {
+            paused_notice(f, app, &name, notice);
+        }
+        input_box(f, app, input);
     }
-    input_box(f, app, input);
     status_line(f, app, status);
     profile(f, app, panel);
     crate::thread::draw(f, app, panel);
     // After the thread panel: they may sit over its reply box.
     emoji_popup(f, app);
     crate::mention::draw(f, app);
+    crate::slash::draw(f, app);
     team_popup(f, app);
     menu(f, app);
     crate::account::draw(f, app);
+    crate::details::draw(f, app);
     react_picker(f, app);
     crate::edit::draw(f, app);
     viewer(f, app);
@@ -387,11 +411,13 @@ fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
     let photos = app.sidebar_avatars && app.picker.is_some();
     let drag = app.drag.filter(|d| d.over.is_some());
     let target = drag.and_then(|d| App::section_of(&rows, d.over?));
+    let mut pics = Vec::new();
     let items: Vec<ListItem> = rows
         .iter()
         .enumerate()
         .map(|(n, r)| {
-            let item = sidebar_row(app, r, width, photos);
+            let (item, pic) = sidebar_row(app, r, width, photos);
+            pics.extend(pic.map(|p| (n, p)));
             match drag {
                 Some(d) if n == d.from => item.style(dim()),
                 // The section the row would land in.
@@ -403,7 +429,7 @@ fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = matches!(app.focus, Focus::Sidebar | Focus::Filter);
     // A quiet bar, like Slack's, instead of inverting the row's own colors.
     let list = List::new(items).highlight_style(if focused {
-        Style::new().bg(Color::Indexed(238))
+        Style::new().bg(SELECTED)
     } else {
         Style::new()
     });
@@ -419,9 +445,13 @@ fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     // Like Slack: a pill over the list's edge for each side with a mention
-    // scrolled out of sight. The rows under it skip their photo and dot.
+    // scrolled out of sight, or else a bold row ("More unreads"). The rows
+    // under it skip their photo and dot.
     app.areas.mention_pills.clear();
     let (up, down) = offscreen_mentions(app, &rows, app.list.offset(), h);
+    let (more_up, more_down) = offscreen_unreads(app, &rows, app.list.offset(), h);
+    let up = up.map(|n| (n, true)).or(more_up.map(|n| (n, false)));
+    let down = down.map(|n| (n, true)).or(more_down.map(|n| (n, false)));
     let under = |n: usize, offset: usize| (up.is_some() && n == offset) || (down.is_some() && n + 1 == offset + h);
 
     // Photos go over the blank cells the rows left for them.
@@ -455,6 +485,14 @@ fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
             draw_image(f, app, &ImgRef::avatar(&uid, &url), rect);
         }
     }
+    // Custom status emoji go over the two cells their row left blank.
+    let offset = app.list.offset();
+    for (n, (x, img)) in pics {
+        if n < offset || n >= offset + h || under(n, offset) || x as usize + 2 > width {
+            continue;
+        }
+        draw_image(f, app, &img, Rect::new(list_area.x + x, list_area.y + (n - offset) as u16, 2, 1));
+    }
     // Presence dots go over the cell each DM row left blank for them.
     if dot_cell(app).is_some() {
         let offset = app.list.offset();
@@ -473,11 +511,11 @@ fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
             draw_presence(f, app, p, x, list_area.y + (n - offset) as u16);
         }
     }
-    if let Some(n) = up {
-        mentions_pill(f, app, list_area, true, &rows[n]);
+    if let Some((n, mention)) = up {
+        mentions_pill(f, app, list_area, true, mention, n);
     }
-    if let Some(n) = down {
-        mentions_pill(f, app, list_area, false, &rows[n]);
+    if let Some((n, mention)) = down {
+        mentions_pill(f, app, list_area, false, mention, n);
     }
 }
 
@@ -488,21 +526,51 @@ fn offscreen_mentions(app: &App, rows: &[Row], offset: usize, height: usize) -> 
     if !app.filter.is_empty() || height < 2 {
         return (None, None);
     }
-    let mention = |n: &usize| matches!(rows[*n], Row::Conv(i) if app.unread(&app.convs[i].id).1 > 0);
+    let mention = |n: &usize| row_attention(app, &rows[*n]).1;
     let up = (0..offset.min(rows.len())).rev().find(mention);
     let down = (offset + height..rows.len()).find(mention);
     (up, down)
 }
 
+/// Whether a sidebar row is bold (unread, not muted) and whether it has a
+/// mention badge: what the edge pills look for. Rows other than
+/// conversations that can be unread (the "Threads" row) answer here too.
+fn row_attention(app: &App, row: &Row) -> (bool, bool) {
+    match row {
+        Row::Conv(i) => {
+            let c = &app.convs[*i];
+            let (unread, mentions) = app.unread(&c.id);
+            (unread && !app.muted(c), mentions > 0)
+        }
+        Row::Threads => (app.threads.unread, app.threads.mentions > 0),
+        // A collapsed section's header isn't a row to scroll to.
+        _ => (false, false),
+    }
+}
+
+/// The nearest bold rows (unread, not muted) above and below what the list
+/// shows, for "More unreads"; same rules as `offscreen_mentions`.
+fn offscreen_unreads(app: &App, rows: &[Row], offset: usize, height: usize) -> (Option<usize>, Option<usize>) {
+    if !app.filter.is_empty() || height < 2 {
+        return (None, None);
+    }
+    let bold = |n: &usize| row_attention(app, &rows[*n]).0;
+    let up = (0..offset.min(rows.len())).rev().find(bold);
+    let down = (offset + height..rows.len()).find(bold);
+    (up, down)
+}
+
 /// Slack's "↑ Unread mentions": a red pill, like the mention badge, over
-/// the list's top (or bottom) row; a click brings `row` into view.
-fn mentions_pill(f: &mut Frame, app: &mut App, area: Rect, up: bool, row: &Row) {
-    let Row::Conv(i) = row else { return };
-    let text = if up {
-        tr(" ↑ Unread mentions ", " ↑ Menções não lidas ")
-    } else {
-        tr(" ↓ Unread mentions ", " ↓ Menções não lidas ")
+/// the list's top (or bottom) row; a click brings row `n` into view. Without
+/// a `mention` it's "↑ More unreads", in the reactions' quieter gray.
+fn mentions_pill(f: &mut Frame, app: &mut App, area: Rect, up: bool, mention: bool, n: usize) {
+    let text = match (up, mention) {
+        (true, true) => tr(" ↑ Unread mentions ", " ↑ Menções não lidas "),
+        (false, true) => tr(" ↓ Unread mentions ", " ↓ Menções não lidas "),
+        (true, false) => tr(" ↑ More unreads ", " ↑ Mais não lidas "),
+        (false, false) => tr(" ↓ More unreads ", " ↓ Mais não lidas "),
     };
+    let (fg, bg) = if mention { (Color::White, Color::Red) } else { (Color::Indexed(252), Color::Indexed(238)) };
     let w = text.width() as u16 + 2;
     if area.width < w {
         return;
@@ -510,33 +578,53 @@ fn mentions_pill(f: &mut Frame, app: &mut App, area: Rect, up: bool, row: &Row) 
     let y = if up { area.y } else { area.bottom() - 1 };
     let rect = Rect::new(area.x + (area.width - w) / 2, y, w, 1);
     let pill = Line::from(vec![
-        Span::styled(blocks::CAP_L, Style::new().fg(Color::Red)),
-        Span::styled(text, Style::new().fg(Color::White).bg(Color::Red).bold()),
-        Span::styled(blocks::CAP_R, Style::new().fg(Color::Red)),
+        Span::styled(blocks::CAP_L, Style::new().fg(bg)),
+        Span::styled(text, Style::new().fg(fg).bg(bg).bold()),
+        Span::styled(blocks::CAP_R, Style::new().fg(bg)),
     ]);
     f.render_widget(Clear, rect);
     f.render_widget(Paragraph::new(pill), rect);
-    app.areas.mention_pills.push((rect, app.convs[*i].id.clone()));
+    app.areas.mention_pills.push((rect, n));
 }
 
 /// The emoji of someone's status, as Slack shows it next to their name;
-/// a status with only text gets a speech balloon.
-fn status_emoji(app: &App, uid: &str) -> Option<String> {
-    let (emoji, text) = app.users.statuses.get(uid)?;
-    match emojis::get_by_shortcode(emoji.trim_matches(':')) {
-        Some(e) => Some(e.as_str().to_string()),
-        None if emoji.is_empty() && !text.is_empty() => Some("💬".into()),
-        None => None,
+/// a status with only text gets a speech balloon. A custom emoji comes as
+/// two blank cells and the picture to draw over them.
+fn status_emoji(app: &App, uid: &str) -> Option<(String, Option<ImgRef>)> {
+    let (emoji, text) = app.users.status(uid)?;
+    let name = emoji.trim_matches(':');
+    if name.is_empty() {
+        return (!text.is_empty()).then(|| ("💬".into(), None));
+    }
+    Some(named_status_emoji(app, uid, name))
+}
+
+/// A status emoji by name: what Slack sent with the status when it is
+/// theirs, the workspace's emoji (aliases resolved), else the picture Slack
+/// sent. Without graphics a picture stays `:name:`.
+fn named_status_emoji(app: &App, uid: &str, name: &str) -> (String, Option<ImgRef>) {
+    let theirs = app.users.status(uid).is_some_and(|(e, _)| e.trim_matches(':') == name);
+    if let Some(e) = app.users.status_glyph(uid).filter(|_| theirs) {
+        return (e, None);
+    }
+    let sent = || app.users.status_image.get(uid).filter(|_| theirs).map(|url| emoji::Glyph::Image(emoji::img(name, url)));
+    match app.emoji.glyph(name).or_else(sent) {
+        Some(emoji::Glyph::Text(e)) => (e, None),
+        Some(emoji::Glyph::Image(img)) if app.picker.is_some() => ("  ".into(), Some(img)),
+        _ => (format!(":{name}:"), None),
     }
 }
 
-fn sidebar_row<'a>(app: &App, row: &Row, width: usize, photos: bool) -> ListItem<'a> {
+/// A sidebar row, and the picture of a custom status emoji with the column
+/// it goes over.
+fn sidebar_row<'a>(app: &App, row: &Row, width: usize, photos: bool) -> (ListItem<'a>, Option<(u16, ImgRef)>) {
     match row {
-        Row::Gap => ListItem::new(""),
+        Row::Gap => (ListItem::new(""), None),
+        Row::Threads => (crate::threads::sidebar_row(app, width), None),
         Row::Header { title, collapsed, unread, .. } => {
             let arrow = if *collapsed { "▸" } else { "▾" };
             let style = if *unread { Style::new().bold() } else { dim().bold() };
-            ListItem::new(Line::from(format!(" {arrow} {title}")).style(style))
+            (ListItem::new(Line::from(format!(" {arrow} {title}")).style(style)), None)
         }
         Row::Conv(i) => {
             let c = &app.convs[*i];
@@ -552,6 +640,8 @@ fn sidebar_row<'a>(app: &App, row: &Row, width: usize, photos: bool) -> ListItem
             let icon = match c.kind {
                 // Sized here, drawn below (`typing_dots`).
                 _ if typing => Span::raw(if photos { "•••" } else { "•" }),
+                // Archived (found by searching): Slack's box in place of # or the lock.
+                _ if c.archived => Span::styled(ARCHIVE, dim()),
                 Kind::Channel => Span::styled("#", dim()),
                 Kind::Private => Span::styled(LOCK, dim()),
                 // The photo is drawn over the first two cells; presence goes after a gap.
@@ -570,16 +660,21 @@ fn sidebar_row<'a>(app: &App, row: &Row, width: usize, photos: bool) -> ListItem
             let pad = if photos && !channel { " ".repeat(cells - icon.content.width().min(cells)) } else { " ".into() };
             let icon_w = icon.content.width() + pad.width();
             let badge = (mentions > 0).then(|| format!(" {mentions} "));
-            let status = if c.kind == Kind::Direct { status_emoji(app, uid).map(|e| format!(" {e}")) } else { None };
+            let (status, pic) = match status_emoji(app, uid).filter(|_| c.kind == Kind::Direct) {
+                Some((e, pic)) => (Some(format!(" {e}")), pic),
+                None => (None, None),
+            };
             let status_w = status.as_ref().map_or(0, |s| s.width());
+            let archived = app.gone_suffix(c);
+            let archived_w = archived.map_or(0, |a| a.width());
             // The badge is a pill: its text plus a rounded cap on each side.
-            let room = width.saturating_sub(3 + icon_w + status_w + badge.as_ref().map_or(0, |b| b.width() + 3));
+            let room = width.saturating_sub(3 + icon_w + status_w + archived_w + badge.as_ref().map_or(0, |b| b.width() + 3));
             let label = truncate(&app.label(c), room);
             let is_current = app.current.as_deref() == Some(c.id.as_str());
             let style = if is_current {
                 Style::new().fg(Color::Cyan).bold()
-            } else if app.users.deleted.contains(uid) {
-                // A deactivated account (found by searching): only its archives.
+            } else if app.users.deleted.contains(uid) || c.archived {
+                // A deactivated account or an archived channel (found by searching).
                 dim()
             } else if unread {
                 Style::new().fg(Color::White).bold()
@@ -623,15 +718,18 @@ fn sidebar_row<'a>(app: &App, row: &Row, width: usize, photos: bool) -> ListItem
                     }
                 }
             }
+            spans.extend(archived.map(|a| Span::styled(a, dim())));
             spans.extend(status.map(Span::raw));
+            // After the name and the space before the emoji's blank cells.
+            let pic = pic.map(|img| ((3 + icon_w + label.width() + archived_w + 1) as u16, img));
             if let Some(b) = badge {
-                let used = 3 + icon_w + label.width() + status_w;
+                let used = 3 + icon_w + label.width() + archived_w + status_w;
                 spans.push(Span::raw(" ".repeat(width.saturating_sub(used + b.width() + 2))));
                 spans.push(Span::styled(blocks::CAP_L, Style::new().fg(Color::Red)));
                 spans.push(Span::styled(b, Style::new().fg(Color::White).bg(Color::Red).bold()));
                 spans.push(Span::styled(blocks::CAP_R, Style::new().fg(Color::Red)));
             }
-            ListItem::new(Line::from(spans))
+            (ListItem::new(Line::from(spans)), pic)
         }
     }
 }
@@ -641,6 +739,7 @@ fn sidebar_row<'a>(app: &App, row: &Row, width: usize, photos: bool) -> ListItem
 fn conversation_header(f: &mut Frame, app: &mut App, area: Rect) {
     app.areas.header_star = Rect::default();
     app.areas.header_user = None;
+    app.areas.header_name = Rect::default();
     app.areas.pins.tabs.clear();
     let block = Block::new().borders(Borders::BOTTOM).border_style(dim());
     let inner = block.inner(area);
@@ -650,6 +749,7 @@ fn conversation_header(f: &mut Frame, app: &mut App, area: Rect) {
     };
     let uid = c.user.clone().unwrap_or_default();
     let icon = match c.kind {
+        _ if c.archived => Span::styled(format!("{ARCHIVE} "), dim()),
         Kind::Channel => Span::styled("# ", dim()),
         Kind::Private => Span::styled(format!("{LOCK} "), dim()),
         Kind::Direct if app.users.bots.contains(&uid) => Span::raw(""),
@@ -665,10 +765,15 @@ fn conversation_header(f: &mut Frame, app: &mut App, area: Rect) {
     } else {
         Span::styled(STAR_OFF, dim())
     };
-    let status = if c.kind == Kind::Direct { status_emoji(app, &uid).map(|e| format!(" {e}")) } else { None };
+    let (status, pic) = match status_emoji(app, &uid).filter(|_| c.kind == Kind::Direct) {
+        Some((e, pic)) => (Some(format!(" {e}")), pic),
+        None => (None, None),
+    };
     // The own DM's " (you)" is quieter than the name.
     let (label, you) = (app.label(c), app.you_suffix(c).unwrap_or_default());
     let name = label.strip_suffix(you).unwrap_or(&label);
+    // Same for an archived channel's " (archived)", a deactivated account's " (deactivated)".
+    let you = app.gone_suffix(c).unwrap_or(you);
     let line = Line::from(vec![
         Span::raw(" "),
         star,
@@ -680,15 +785,23 @@ fn conversation_header(f: &mut Frame, app: &mut App, area: Rect) {
     ]);
     let name_x = inner.x + 4 + line.spans[3].width() as u16;
     let name_w = (line.spans[4].width() + line.spans[5].width()) as u16;
+    let icon_w = line.spans[3].width() as u16;
+    let pic_x = inner.x + line.spans[..6].iter().map(|s| s.width() as u16).sum::<u16>() + 1;
     f.render_widget(Paragraph::new(line), inner);
     app.areas.header_star = Rect::new(inner.x, inner.y, 3, 1);
     let person = (c.kind == Kind::Direct && !app.users.bots.contains(&uid)).then(|| uid.clone());
     if c.kind == Kind::Direct {
         app.areas.header_user = Some((Rect::new(name_x, inner.y, name_w, 1), uid));
+    } else {
+        // The icon too: Slack's whole name button opens the details.
+        app.areas.header_name = Rect::new(name_x - icon_w, inner.y, name_w + icon_w, 1);
     }
     if let Some(uid) = person {
         let p = presence_of(app, &uid);
         draw_presence(f, app, p, inner.x + 4, inner.y);
+    }
+    if let Some(img) = pic.filter(|_| pic_x + 2 <= inner.right()) {
+        draw_image(f, app, &img, Rect::new(pic_x, inner.y, 2, 1));
     }
     crate::pins::tabs(f, app, area);
 }
@@ -730,6 +843,53 @@ pub(crate) struct Rendered {
 }
 
 impl Rendered {
+    /// Drops the first `n` lines and what sits on them, as a pane that shows
+    /// only part of what `message_lines` laid out (the Threads view's cards).
+    pub(crate) fn drop_front(&mut self, n: usize) {
+        let n = n.min(self.lines.len());
+        self.lines.drain(..n);
+        self.slots.retain(|s| s.line >= n);
+        self.slots.iter_mut().for_each(|s| s.line -= n);
+        self.links.retain(|l| l.line >= n);
+        self.links.iter_mut().for_each(|l| l.line -= n);
+        self.people.retain(|p| p.0 >= n);
+        self.people.iter_mut().for_each(|p| p.0 -= n);
+        self.hits.retain_mut(|h| match h {
+            Hit::Pill { line, .. } if *line >= n => {
+                *line -= n;
+                true
+            }
+            Hit::Message { lines, .. } if lines.end > n => {
+                *lines = lines.start.saturating_sub(n)..lines.end - n;
+                true
+            }
+            _ => false,
+        });
+        self.buttons.retain(|b| b.line >= n);
+        self.buttons.iter_mut().for_each(|b| b.line -= n);
+        self.files.retain(|h| h.line >= n);
+        self.files.iter_mut().for_each(|h| h.line -= n);
+    }
+
+    /// Each message header's time, reworded by `f` from the message's ts
+    /// ("2 minutes ago" in the Threads view).
+    pub(crate) fn retime(&mut self, f: impl Fn(&str) -> Option<String>) {
+        for h in &self.hits {
+            let Hit::Message { lines, ts } = h else { continue };
+            let (Some(new), old) = (f(ts), format!("  {}", hhmm(ts))) else { continue };
+            let header = self.lines[lines.clone()].iter_mut().flat_map(|l| l.spans.iter_mut()).find(|s| s.content == old);
+            if let Some(span) = header {
+                span.content = format!("  {new}").into();
+            }
+        }
+    }
+
+    /// Only drawn: no thread links, reaction pills nor messages to pick.
+    pub(crate) fn inert(&mut self) {
+        self.links.clear();
+        self.hits.clear();
+    }
+
     /// Puts `other` below these lines.
     /// How far up to scroll so the message `ts` starts at the top of `height` rows.
     pub fn scroll_to(&self, ts: &str, height: usize) -> Option<usize> {
@@ -1026,10 +1186,10 @@ fn paused_notice(f: &mut Frame, app: &App, name: &str, area: Rect) {
 /// What Slack shows above the first message of a conversation.
 pub(crate) struct Intro {
     title: String,
-    /// The own DM's " (you)" after the title, drawn dimmer.
+    /// The own DM's " (you)" (or " (archived)", " (deactivated)") after the title, drawn dimmer.
     you: &'static str,
-    /// The status emoji beside a DM's name.
-    status: Option<String>,
+    /// The status emoji beside a DM's name, and a custom one's picture.
+    status: Option<(String, Option<ImgRef>)>,
     text: String,
     /// The `@name` in the text, highlighted on its own.
     mention: Option<String>,
@@ -1045,7 +1205,13 @@ fn intro(app: &App, chan: &str) -> Option<Intro> {
     let tag = format!("@{}", label.replace(' ', "\u{a0}"));
     let (title, text) = match c.kind {
         Kind::Channel | Kind::Private => {
-            let icon = if c.kind == Kind::Channel { "#" } else { "🔒" };
+            let icon = if c.archived {
+                ARCHIVE
+            } else if c.kind == Kind::Channel {
+                "#"
+            } else {
+                "🔒"
+            };
             let name = &c.name;
             (
                 format!("{icon} {name}"),
@@ -1085,7 +1251,7 @@ fn intro(app: &App, chan: &str) -> Option<Intro> {
     let peer = c.user.clone().filter(|u| c.kind == Kind::Direct && !app.is_me(u));
     let status = peer.as_deref().and_then(|u| status_emoji(app, u));
     let mention = peer.as_ref().map(|_| tag);
-    let you = app.you_suffix(c).unwrap_or_default();
+    let you = app.gone_suffix(c).or(app.you_suffix(c)).unwrap_or_default();
     Some(Intro { title, you, status, text, mention, avatar, profile: peer })
 }
 
@@ -1356,8 +1522,17 @@ fn profile(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     };
 
+    // A deactivated account: Slack's dim "Deactivated account" band at the
+    // photo's foot, and nothing about someone who is no longer there.
+    let gone = app.users.deleted.contains(&uid);
+    let band = |width: u16| {
+        let text = format!("{ARCHIVE} {}", tr("Deactivated account", "Conta desativada"));
+        let text = truncate(&text, width as usize);
+        Paragraph::new(text).centered().style(Style::new().fg(Color::Gray).bg(Color::Indexed(237)))
+    };
     // The photo: a centred square as wide as the panel allows, up to half its height.
     let font = app.picker.as_ref().map(|p| p.font_size()).map(|s| (s.width, s.height));
+    let mut banded = false;
     if let (Some((fw, fh)), false) = (font, p.avatar.is_empty()) {
         let max_rows = (inner.height / 2).max(4);
         let mut cols = inner.width.saturating_sub(4);
@@ -1369,7 +1544,15 @@ fn profile(f: &mut Frame, app: &mut App, area: Rect) {
         let photo = Rect::new(inner.x + (inner.width - cols) / 2, y, cols, rows);
         draw_image(f, app, &ImgRef::profile(&uid, &p.avatar), photo);
         app.areas.profile_photo = photo;
-        y += rows + 1;
+        y += rows;
+        // Its own row under the photo: text over a terminal picture isn't
+        // reliably drawn (kitty puts the picture on top, sixel paints over it).
+        if gone && y < bottom {
+            f.render_widget(band(cols), Rect::new(photo.x, y, cols, 1));
+            banded = true;
+            y += 1;
+        }
+        y += 1;
     }
 
     let w = inner.width as usize;
@@ -1390,10 +1573,30 @@ fn profile(f: &mut Frame, app: &mut App, area: Rect) {
     if !p.title.is_empty() {
         lines.push(Line::from(truncate(&p.title, w)));
     }
+    // Without a photo the band goes under the name.
+    let band_row = (gone && !banded).then(|| {
+        lines.push(Line::from(""));
+        lines.len() as u16 - 1
+    });
     lines.push(Line::from(""));
-    let status = crate::text::shortcodes(&p.status);
+    // The status emoji as beside their name: theirs as `users` has it, or a
+    // workspace emoji's picture; a picture goes over two blank cells.
+    let lead = app.users.status(&uid).map(|(e, _)| e.clone()).filter(|e| !e.is_empty() && p.status.starts_with(e.as_str())).or_else(|| {
+        let name = p.status.strip_prefix(':')?.split(':').next()?;
+        matches!(app.emoji.glyph(name), Some(emoji::Glyph::Image(_))).then(|| format!(":{name}:"))
+    });
+    let (status, pic) = match lead {
+        Some(e) => {
+            let (shown, pic) = named_status_emoji(app, &uid, e.trim_matches(':'));
+            (format!("{shown}{}", crate::text::shortcodes(&p.status[e.len()..])), pic)
+        }
+        None => (crate::text::shortcodes(&p.status), None),
+    };
     let mut dot_row = None;
+    // The status line and where its picture goes.
+    let mut pic_at = None;
     match app.presence.get(&uid) {
+        _ if gone => {}
         Some(_) => {
             let pres = presence_of(app, &uid);
             let word = if pres.active { tr("Active", "Ativo") } else { tr("Away", "Ausente") };
@@ -1402,12 +1605,16 @@ fn profile(f: &mut Frame, app: &mut App, area: Rect) {
             let dot = Span::styled(format!("{} ", dot.content), dot.style);
             let room = w.saturating_sub(dot.width());
             dot_row = Some((lines.len() as u16, pres));
+            pic_at = Some((lines.len() as u16, (dot.width() + word.width() + 3) as u16));
             lines.push(Line::from(vec![dot, Span::raw(truncate(&rest, room))]));
         }
-        None if !status.is_empty() => lines.push(Line::from(truncate(&status, w))),
+        None if !status.is_empty() => {
+            pic_at = Some((lines.len() as u16, 0));
+            lines.push(Line::from(truncate(&status, w)));
+        }
         None => {}
     }
-    if let Some(tz) = chrono::FixedOffset::east_opt(p.tz_offset) {
+    if let Some(tz) = chrono::FixedOffset::east_opt(p.tz_offset).filter(|_| !gone) {
         let local = i18n::clock(&chrono::Utc::now().with_timezone(&tz));
         lines.push(Line::from(trf!("🕐 {local} local time", "🕐 {local} hora local")));
     }
@@ -1425,6 +1632,13 @@ fn profile(f: &mut Frame, app: &mut App, area: Rect) {
     if let Some((row, pres)) = dot_row.filter(|(row, _)| y + row < bottom) {
         draw_presence(f, app, pres, inner.x, y + row);
     }
+    if let (Some(img), Some((row, x))) = (pic, pic_at.filter(|(row, x)| y + row < bottom && *x as usize + 2 <= w)) {
+        draw_image(f, app, &img, Rect::new(inner.x + x, y + row, 2, 1));
+    }
+    if let Some(row) = band_row.filter(|row| y + row < bottom) {
+        let bw = (tr("Deactivated account", "Conta desativada").width() as u16 + 4).min(inner.width);
+        f.render_widget(band(bw), Rect::new(inner.x, y + row, bw, 1));
+    }
     y += n + 1;
 
     // Bordered buttons, as in Slack, wrapping to a new row when full.
@@ -1437,7 +1651,7 @@ fn profile(f: &mut Frame, app: &mut App, area: Rect) {
             if starred { (STAR_ON, Style::new().fg(Color::Yellow), tr(" Starred", " Favorito")) } else { (STAR_OFF, Style::new(), tr(" Star", " Favoritar")) };
         buttons.push((Line::from(vec![Span::raw(" "), Span::styled(icon, style), Span::raw(format!("{text} "))]), 0));
     }
-    if !app.is_me(&uid) && !app.users.bots.contains(&uid) {
+    if !app.is_me(&uid) && !app.users.bots.contains(&uid) && !gone {
         let line = if vip {
             Line::from(vec![Span::styled(" ✓", Style::new().fg(Color::Green)), Span::raw(" VIP ")])
         } else {
@@ -1552,7 +1766,10 @@ pub(crate) fn message_lines(
         let title_w = i.title.width() as u16;
         let title = Span::styled(i.title, Style::new().bold());
         let you = Span::styled(i.you, dim());
-        let status = Span::raw(i.status.map(|e| format!(" {e}")).unwrap_or_default());
+        let (status, pic) = i.status.unzip();
+        let mut pic = pic.flatten();
+        let status = Span::raw(status.map(|e| format!(" {e}")).unwrap_or_default());
+        let pic_x = title_w + you.width() as u16 + 1;
         match (avatar_cols, i.avatar) {
             (Some(cols), Some((uid, img))) => {
                 // Twice the message avatar, with the name beside its middle.
@@ -1561,13 +1778,22 @@ pub(crate) fn message_lines(
                 slots.push(Slot { line: lines.len(), x: 0, cols, rows, img, full: None, user: Some(uid) });
                 for r in 0..rows {
                     if r == rows / 2 - 1 {
+                        let x = cols + 2 + pic_x;
+                        if let Some(img) = pic.take().filter(|_| x as usize + 2 <= width) {
+                            slots.push(Slot { line: lines.len(), x, cols: 2, rows: 1, img, full: None, user: None });
+                        }
                         lines.push(Line::from(vec![Span::raw(" ".repeat(cols as usize + 2)), title.clone(), you.clone(), status.clone()]));
                     } else {
                         lines.push(Line::from(""));
                     }
                 }
             }
-            _ => lines.push(Line::from(vec![title, you, status])),
+            _ => {
+                if let Some(img) = pic.filter(|_| pic_x as usize + 2 <= width) {
+                    slots.push(Slot { line: lines.len(), x: pic_x, cols: 2, rows: 1, img, full: None, user: None });
+                }
+                lines.push(Line::from(vec![title, you, status]));
+            }
         }
         lines.push(Line::from(""));
         for l in wrap(&i.text, width) {
@@ -1616,10 +1842,15 @@ pub(crate) fn message_lines(
             header_line = Some(lines.len());
             let hhmm = time.map(|t| i18n::clock(&t)).unwrap_or_default();
             let bot = if m.user.is_none() { " APP" } else { "" };
+            let (status, pic) = m.user.as_deref().and_then(|u| status_emoji(app, u)).unzip();
+            let x = (gutter + author.width() + 1) as u16;
+            if let Some(img) = pic.flatten().filter(|_| x as usize + 2 <= width) {
+                slots.push(Slot { line: lines.len(), x, cols: 2, rows: 1, img, full: None, user: None });
+            }
             lines.push(Line::from(vec![
                 Span::raw(indent.clone()),
                 Span::styled(author.clone(), Style::new().bold()),
-                Span::raw(m.user.as_deref().and_then(|u| status_emoji(app, u)).map(|e| format!(" {e}")).unwrap_or_default()),
+                Span::raw(status.map(|e| format!(" {e}")).unwrap_or_default()),
                 Span::styled(bot, dim()),
                 Span::styled(format!("  {hhmm}"), dim()),
             ]));
@@ -1640,10 +1871,16 @@ pub(crate) fn message_lines(
             links.push(Link { line: lines.len(), x: gutter as u16, w: label.width() as u16, ts: ts.clone() });
             lines.push(Line::from(vec![Span::raw(indent.clone()), Span::styled(label, dim().italic())]));
         }
-        let muted = matches!(
-            m.subtype.as_deref(),
-            Some("channel_join" | "channel_leave" | "channel_topic" | "channel_purpose" | "huddle_thread")
-        );
+        // A slash command's answer, as Slack shows it: dim, for you alone.
+        let ephemeral = crate::slash::is_ephemeral(m);
+        if ephemeral {
+            lines.push(Line::from(vec![Span::raw(indent.clone()), Span::styled(tr("Only visible to you", "Visível só para você"), dim().italic())]));
+        }
+        let muted = ephemeral
+            || matches!(
+                m.subtype.as_deref(),
+                Some("channel_join" | "channel_leave" | "channel_topic" | "channel_purpose" | "huddle_thread")
+            );
         // Block Kit and mrkdwn laid out at this width, then moved past the avatar.
         let mut pieces = blocks::parse(m, names);
         blocks::drop_author(&mut pieces, &author);
@@ -1891,20 +2128,69 @@ fn typing_text(who: &[String]) -> Option<String> {
     })
 }
 
-/// Slack's bar in place of the message box of a deactivated account's DM.
-fn archived_notice(f: &mut Frame, area: Rect) {
+/// The notice's lines, `width` cells wide: one when it fits, else the
+/// archived channel's "Unarchive…" goes on a second line.
+fn read_only_lines(app: &App, why: ReadOnly, width: usize) -> Vec<Line<'static>> {
+    let lead = Span::styled(format!("{ARCHIVE}  "), dim());
+    if why == ReadOnly::Deactivated {
+        let text = tr("You are viewing the archives of a deactivated account", "Você está vendo os arquivos de uma conta desativada");
+        return vec![Line::from(vec![lead, Span::styled(text, dim().italic())])];
+    }
+    let name = app.current.as_ref().and_then(|id| app.convs.iter().find(|c| &c.id == id)).map(|c| c.name.clone()).unwrap_or_default();
+    let first = vec![
+        lead,
+        Span::styled(tr("You are viewing ", "Você está vendo "), dim()),
+        Span::styled(format!("#{name}"), Style::new().bold()),
+        Span::styled(tr(", an archived channel. ", ", um canal arquivado. "), dim()),
+    ];
+    // The word to click, like Slack's link.
+    let second = vec![
+        Span::styled(tr("Unarchive", "Desarquive"), Style::new().fg(Color::Cyan).underlined()),
+        Span::styled(tr(" it to continue the discussion.", "-o para continuar a conversa."), dim()),
+    ];
+    let w = |spans: &[Span]| spans.iter().map(|s| s.width()).sum::<usize>();
+    if w(&first) + w(&second) <= width {
+        return vec![Line::from([first, second].concat())];
+    }
+    // Lined up with the text, past the icon.
+    let indent = Span::raw(" ".repeat(first[0].width()));
+    vec![Line::from(first), Line::from([vec![indent], second].concat())]
+}
+
+/// Slack's bar in place of the message box of a read-only conversation:
+/// a deactivated account's DM or an archived channel, whose "Unarchive"
+/// is clickable (`areas.unarchive`).
+fn read_only_notice(f: &mut Frame, app: &mut App, why: ReadOnly, area: Rect) {
     let block = Block::bordered().border_type(BorderType::Rounded).border_style(dim());
     let inner = block.inner(area).inner(ratatui::layout::Margin { horizontal: 1, vertical: 0 });
     f.render_widget(block, area);
-    let text = tr("You are viewing the archives of a deactivated account", "Você está vendo os arquivos de uma conta desativada");
-    let line = Line::from(vec![Span::styled(format!("{ARCHIVE}  "), dim()), Span::styled(text, dim().italic())]);
-    f.render_widget(Paragraph::new(line), inner);
+    let lines = read_only_lines(app, why, inner.width as usize);
+    if why == ReadOnly::Archived {
+        let word = tr("Unarchive", "Desarquive");
+        // The clickable word: wherever it landed, on the first line or the second.
+        let found = lines.iter().enumerate().find_map(|(row, l)| {
+            let mut x = 0;
+            for s in &l.spans {
+                if s.content == word {
+                    return Some((row, x));
+                }
+                x += s.width();
+            }
+            None
+        });
+        if let Some((row, x)) = found {
+            let rect = Rect::new(inner.x + x as u16, inner.y + row as u16, word.width() as u16, 1);
+            app.areas.unarchive = rect.intersection(inner);
+        }
+    }
+    f.render_widget(Paragraph::new(lines), inner);
 }
 
 fn input_box(f: &mut Frame, app: &mut App, area: Rect) {
     app.areas.input = area;
-    if app.archived() {
-        return archived_notice(f, area);
+    app.areas.unarchive = Rect::default();
+    if let Some(why) = app.read_only() {
+        return read_only_notice(f, app, why, area);
     }
     let focused = app.focus == Focus::Input;
     let border = if focused { Style::new().fg(Color::Cyan) } else { dim() };
@@ -1929,7 +2215,37 @@ fn input_box(f: &mut Frame, app: &mut App, area: Rect) {
             Kind::Channel | Kind::Private => format!("#{}", c.name),
             _ => app.label(c),
         };
-        f.render_widget(Paragraph::new(trf!("Message {target}", "Mensagem para {target}")).style(dim()), inner);
+        // A DM adds the other person's status, as Slack does: "Message Ana  🌴 On vacation".
+        // A custom emoji leaves two blank cells for its picture; the balloon
+        // of a status with only text isn't needed beside the text.
+        let mut pic = None;
+        let status = match c.kind {
+            Kind::Direct => c.user.as_deref().and_then(|u| Some((u, app.users.status(u)?))).map(|(u, (emoji, text))| {
+                let shown = match status_emoji(app, u).filter(|_| !emoji.is_empty()) {
+                    Some((e, img)) => {
+                        pic = img;
+                        e
+                    }
+                    None => String::new(),
+                };
+                let text = crate::text::shortcodes(text);
+                format!("  {}", [shown.as_str(), text.as_str()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" "))
+            }).filter(|s| !s.trim().is_empty()),
+            _ => None,
+        };
+        // Your own DM is a notepad, and says so like Slack's.
+        let (placeholder, pic) = match app.you_suffix(c) {
+            Some(_) => (tr("Jot something down", "Anote alguma coisa").to_string(), None),
+            None => {
+                let message = trf!("Message {target}", "Mensagem para {target}");
+                let pic = pic.map(|img| ((message.width() + 2) as u16, img));
+                (message + status.as_deref().unwrap_or_default(), pic)
+            }
+        };
+        f.render_widget(Paragraph::new(placeholder).style(dim()), inner);
+        if let Some((x, img)) = pic.filter(|(x, _)| inner.x + x + 2 <= inner.right()) {
+            draw_image(f, app, &img, Rect::new(inner.x + x, inner.y, 2, 1));
+        }
         if focused {
             f.set_cursor_position((inner.x, inner.y));
         }
@@ -1946,6 +2262,18 @@ fn status_line(f: &mut Frame, app: &App, area: Rect) {
                 "Enter abrir · m ou botão direito menu · arraste para mover · / procurar · q sair",
             ),
             Focus::Filter => tr("type to filter · Enter open · Esc cancel", "digite para filtrar · Enter abrir · Esc cancelar"),
+            Focus::Input if app.read_only() == Some(ReadOnly::Archived) => tr(
+                "u unarchive · ↑↓ PgUp/PgDn scroll · Esc list · Ctrl+K search",
+                "u desarquivar · ↑↓ PgUp/PgDn rolar · Esc lista · Ctrl+K procurar",
+            ),
+            Focus::Input if app.threads.open => tr(
+                "↑↓ j k pick a thread · Enter open · r reply · e more replies · Esc list",
+                "↑↓ j k escolher conversa · Enter abrir · r responder · e mais respostas · Esc lista",
+            ),
+            Focus::Thread if app.thread.as_ref().is_some_and(|t| t.inline) => tr(
+                "Enter send · ↑↓ other thread (empty box) · Enter open (empty box) · Ctrl+B also send · Esc list",
+                "Enter enviar · ↑↓ outra conversa (caixa vazia) · Enter abrir (caixa vazia) · Ctrl+B também enviar · Esc lista",
+            ),
             Focus::Input => tr(
                 "↑ pick a message · Esc list · PgUp/PgDn scroll · Ctrl+K search",
                 "↑ escolher mensagem · Esc lista · PgUp/PgDn rolar · Ctrl+K procurar",
@@ -2053,7 +2381,7 @@ fn reaction_lines(
 /// One row of the autocomplete or the picker: the emoji, then `:name:`.
 /// The "copy" link beside an ID or e-mail, or the confirmation for a
 /// moment after a click.
-fn copy_hint(app: &App, what: &str) -> (&'static str, Style) {
+pub(crate) fn copy_hint(app: &App, what: &str) -> (&'static str, Style) {
     match app.copied {
         Some((w, _)) if w == what => (tr("  ✓ copied to clipboard", "  ✓ copiado"), Style::new().fg(Color::Green)),
         _ => (tr("  ⧉ copy", "  ⧉ copiar"), Style::new().fg(Color::Cyan)),
@@ -2066,9 +2394,11 @@ pub(crate) fn emoji_row(f: &mut Frame, app: &mut App, rect: Rect, name: &str, gl
         emoji::Glyph::Image(_) => "  ".into(),
     };
     let label = truncate(&format!(":{name}:"), (rect.width as usize).saturating_sub(5));
-    let style = if selected { Style::new().add_modifier(Modifier::REVERSED) } else { Style::new() };
-    let line = format!(" {shown} {label:<w$}", w = (rect.width as usize).saturating_sub(4));
-    f.render_widget(Paragraph::new(line).style(style), rect);
+    let mut line = Line::from(format!(" {shown} {label:<w$}", w = (rect.width as usize).saturating_sub(4)));
+    if selected {
+        mark_selected(&mut line);
+    }
+    f.render_widget(Paragraph::new(line), rect);
     if let emoji::Glyph::Image(img) = glyph {
         draw_image(f, app, img, Rect::new(rect.x + 1, rect.y, 2, 1));
     }

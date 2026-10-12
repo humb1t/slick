@@ -7,10 +7,10 @@ use crate::editor::{is_token, Token};
 use crate::i18n::tr;
 use crate::slack::Kind;
 use crate::text::search;
-use crate::ui::{dim, draw_image, truncate};
+use crate::ui::{dim, draw_image, mark_selected, truncate};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 use ratatui::Frame;
@@ -173,7 +173,7 @@ impl App {
         let mut found: Vec<_> = self
             .convs
             .iter()
-            .filter(|c| matches!(c.kind, Kind::Channel | Kind::Private))
+            .filter(|c| matches!(c.kind, Kind::Channel | Kind::Private) && !c.archived)
             .filter_map(|c| {
                 let (rank, _) = search(&c.name, q)?;
                 Some(((rank, recency.get(c.id.as_str()).copied().unwrap_or(usize::MAX), c.name.clone()), c))
@@ -299,7 +299,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         let pad = width.saturating_sub(line.width());
         line.spans.push(Span::raw(" ".repeat(pad)));
         if n == sel {
-            line = line.style(Style::new().add_modifier(Modifier::REVERSED));
+            mark_selected(&mut line);
         }
         f.render_widget(Paragraph::new(line), row);
         app.mention.rows.push((row, n));

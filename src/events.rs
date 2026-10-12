@@ -185,7 +185,7 @@ fn kind(k: &Kind) -> &'static str {
 }
 
 /// Mentions you by name, or the whole channel.
-fn mentions(m: &Message, me: &str) -> bool {
+pub(crate) fn mentions(m: &Message, me: &str) -> bool {
     (!me.is_empty() && m.text.contains(&format!("<@{me}>"))) || ["<!here", "<!channel", "<!everyone"].iter().any(|t| m.text.contains(t))
 }
 
@@ -255,6 +255,19 @@ impl App {
             self.on_counts(self.counts.clone());
             self.dirty = true;
         }
+    }
+
+    /// A conversation's own preference as last heard; the default follows the global one.
+    pub(crate) fn pref(&self, id: &str) -> Pref {
+        self.events.prefs.get(id).cloned().unwrap_or_default()
+    }
+
+    /// A preference changed here: the sidebar and the badges follow at once,
+    /// before Slack confirms it.
+    pub(crate) fn set_pref(&mut self, id: String, p: Pref) {
+        let mut all = self.events.prefs.clone();
+        all.insert(id, p);
+        self.on_prefs(Ok(all));
     }
 
     /// A channel muted or set to mentions only. DMs never are: they always count.
@@ -362,14 +375,14 @@ impl App {
         self.dirty = true;
     }
 
-    fn conv_json(&self, id: &str) -> Value {
+    pub(crate) fn conv_json(&self, id: &str) -> Value {
         match self.convs.iter().find(|c| c.id == id) {
             Some(c) => json!({ "id": c.id, "kind": kind(&c.kind), "name": self.label(c), "user": c.user }),
             None => json!({ "id": id, "kind": Value::Null, "name": id, "user": Value::Null }),
         }
     }
 
-    fn message_json(&self, m: &Message) -> Value {
+    pub(crate) fn message_json(&self, m: &Message) -> Value {
         let names = self.names();
         // Without the bars that mark attachments in the conversation.
         let mut text = crate::text::body(m, &names).lines().map(|l| l.trim_start_matches('▎').trim_start()).collect::<Vec<_>>().join("\n");
@@ -453,7 +466,7 @@ impl App {
     }
 
     /// Events go out once `app.started` has, and only from the first slick.
-    fn speaking(&self) -> bool {
+    pub(crate) fn speaking(&self) -> bool {
         self.events.on && self.events.last.is_some()
     }
 
@@ -613,6 +626,8 @@ impl App {
         }
         convs.sort_by(|a, b| b.0.cmp(a.0));
         let dnd = self.account.paused.map(|p| json!({ "paused": true, "until": p.until, "snooze": p.snooze }));
+        // Threads you follow with unread replies (`threads`).
+        let (threads, threads_attention) = self.threads_json();
         let me = self.me.as_ref().expect("checked above");
         let snapshot = json!({
             "v": VERSION,
@@ -623,14 +638,17 @@ impl App {
             "domain": me.domain,
             "user": me.user,
             "dnd": dnd,
-            "attention": dms + groups + channels_mentioned,
+            "attention": dms + groups + channels_mentioned + threads_attention,
             "totals": {
                 "mentions": mentions, "dms": dms, "groups": groups, "channels": channels, "channels_mentioned": channels_mentioned, "channels_quiet": channels_quiet,
                 "direct_messages": direct_messages, "channel_mentions": channel_mentions,
                 "reactions": reactions.len(),
+                "threads": threads["list"].as_array().map_or(0, Vec::len), "thread_mentions": threads["mentions"],
+                "thread_new": threads["new"],
             },
             "conversations": convs.into_iter().map(|c| c.1).collect::<Vec<_>>(),
             "reactions": reactions,
+            "threads": threads,
         });
         if self.events.last.as_ref() == Some(&snapshot) {
             return;
@@ -648,6 +666,7 @@ impl App {
                 for id in ids(&old).difference(&now) {
                     emit("conversation.read", json!({ "conversation": self.conv_json(id) }));
                 }
+                self.threads_read(&old, &snapshot);
                 if old["dnd"] != snapshot["dnd"] {
                     emit("dnd.changed", if snapshot["dnd"].is_null() { json!({ "paused": false }) } else { snapshot["dnd"].clone() });
                 }

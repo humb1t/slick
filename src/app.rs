@@ -27,6 +27,9 @@ const COPIED_FOR: Duration = Duration::from_secs(2);
 const LIVE_FALLBACK: Duration = Duration::from_secs(60);
 /// Presence polling, for when the websocket can't report it.
 const PRESENCE_EVERY: Duration = Duration::from_secs(60);
+/// Everyone's names, photos and statuses read again: the websocket of a
+/// browser session never says when someone changes them. Two pages or so.
+const USERS_EVERY: Duration = Duration::from_secs(2 * 60);
 /// How soon a change in the sidebar's DMs reaches the presence subscription.
 const WATCH_EVERY: Duration = Duration::from_secs(5);
 const COUNTS_EVERY: Duration = Duration::from_secs(15);
@@ -38,7 +41,6 @@ const DM_LIMIT: usize = 15;
 /// The key of the section slick adds last for the channels muted in Slack.
 /// Not one of Slack's: it can't be moved, nor have conversations moved in.
 pub const SILENCED: &str = "slick:silenced";
-/// Slack's "hide inactive" hides what has been quiet this long.
 pub const SIDEBAR_DEFAULT: u16 = 32;
 pub const SIDEBAR_MIN: u16 = 18;
 
@@ -103,6 +105,23 @@ pub enum Event {
     Named { id: String, res: Res<(String, bool)> },
     /// The DM opened by clicking a mention.
     Dm(Res<Conversation>),
+    /// Slash commands: the list, and one run (`slash`).
+    Slash(crate::slash::Ev),
+    /// The channel details popup: its data and the changes made from it.
+    Details(crate::details::Ev),
+    /// An archived channel brought back (`App::unarchive`).
+    Unarchived { id: String, res: Res<()> },
+    /// The threads you follow: their counts, the list, one marked read (`threads`).
+    Threads(crate::threads::Ev),
+}
+
+/// Why the open conversation has a notice instead of a message box.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReadOnly {
+    /// A DM with a deactivated account: only its archives.
+    Deactivated,
+    /// An archived channel, until someone unarchives it.
+    Archived,
 }
 
 /// The login screen: the two values copied from a browser session.
@@ -201,6 +220,8 @@ pub enum Focus {
 }
 
 pub enum Row {
+    /// "Threads", on top: the threads you follow (`threads`).
+    Threads,
     /// A blank line between sections.
     Gap,
     Header { key: String, title: String, collapsed: bool, unread: bool },
@@ -279,6 +300,8 @@ pub struct Areas {
     pub sidebar: Rect,
     pub messages: Rect,
     pub input: Rect,
+    /// "Unarchive" in an archived channel's notice, where the message box goes.
+    pub unarchive: Rect,
     /// Message images on screen, clickable to enlarge.
     pub images: Vec<(Rect, ImgRef)>,
     /// Avatars on screen, clickable to open the person's profile.
@@ -305,6 +328,8 @@ pub struct Areas {
     pub header_star: Rect,
     /// A DM's name in the header, opening the person's profile.
     pub header_user: Option<(Rect, String)>,
+    /// A channel's or group DM's name in the header, opening its details.
+    pub header_name: Rect,
     pub login_button: Rect,
     /// The column between the sidebar and the conversation, draggable.
     pub sidebar_border: Rect,
@@ -337,10 +362,14 @@ pub struct Areas {
     pub pins: crate::pins::Areas,
     /// "↓ Últimas mensagens", over the bottom of the conversation.
     pub latest: Rect,
-    /// "↑ Unread mentions" over the sidebar's edges, and the conversation each leads to.
-    pub mention_pills: Vec<(Rect, String)>,
+    /// "↑ Unread mentions" (or "↑ More unreads") over the sidebar's edges, and the sidebar row each leads to.
+    pub mention_pills: Vec<(Rect, usize)>,
     /// The account button, its menu and the status dialog.
     pub account: crate::account::Areas,
+    /// The channel details popup.
+    pub details: crate::details::Areas,
+    /// The Threads view's cards.
+    pub threads: crate::threads::Areas,
 }
 
 pub struct App {
@@ -421,6 +450,7 @@ pub struct App {
     pub pins: crate::pins::Pins,
     pub presence: HashMap<String, bool>,
     last_presence: Instant,
+    last_users: Instant,
     pub boot: Option<Boot>,
     pub sidebar_width: u16,
     /// Photos instead of presence dots next to DMs in the sidebar.
@@ -430,6 +460,8 @@ pub struct App {
     pub complete: emoji::Complete,
     /// The `@` and `#` autocomplete over the message box.
     pub mention: crate::mention::Mention,
+    /// The workspace's slash commands and the `/` autocomplete.
+    pub slash: crate::slash::Slash,
     pub react: Option<emoji::ReactPicker>,
     /// The picked message, the edit and the forward dialog.
     pub edit: crate::edit::Edit,
@@ -445,6 +477,10 @@ pub struct App {
     pub account: crate::account::Account,
     /// Pictures pasted into the message boxes, waiting to be sent.
     pub attach: crate::attach::Attach,
+    /// The channel details popup, opened from the header's name.
+    pub details: Option<crate::details::Details>,
+    /// The threads you follow, and their view in the main pane.
+    pub threads: crate::threads::Threads,
     /// Whose data the cache holds.
     owner: String,
     pub status: String,
@@ -472,7 +508,7 @@ pub struct App {
     /// What other programs are told: the snapshot and events (`events`).
     pub events: crate::events::State,
     /// Slack's websocket is up: polling only covers for it, slowly.
-    live: bool,
+    pub(crate) live: bool,
     /// The websocket reported presence since it came up: no need to poll it.
     presence_live: bool,
     last_watch: Instant,
@@ -535,6 +571,7 @@ impl App {
             pins: Default::default(),
             presence: HashMap::new(),
             last_presence: Instant::now() - PRESENCE_EVERY + Duration::from_secs(4),
+            last_users: Instant::now(),
             team_icon: None,
             team_popup: false,
             sidebar_avatars: config::sidebar_avatars().or(cache.boot.as_ref().map(|b| b.sidebar_avatars)).unwrap_or(true),
@@ -544,6 +581,7 @@ impl App {
             emoji: cache.emoji,
             complete: emoji::Complete::default(),
             mention: Default::default(),
+            slash: crate::slash::Slash::new(cache.commands),
             react: None,
             edit: Default::default(),
             selection: None,
@@ -554,6 +592,8 @@ impl App {
             compose_hover: false,
             account: Default::default(),
             attach: Default::default(),
+            details: None,
+            threads: Default::default(),
             owner: cache.owner,
             status: tr("connecting…", "conectando…").into(),
             update: None,
@@ -596,6 +636,8 @@ impl App {
             .iter()
             .filter_map(|id| {
                 let msgs = self.messages.get(id)?;
+                // Answers only you saw were for this session.
+                let msgs: Vec<Message> = msgs.iter().filter(|m| !crate::slash::is_ephemeral(m)).cloned().collect();
                 Some((id.clone(), msgs[msgs.len().saturating_sub(50)..].to_vec()))
             })
             .collect();
@@ -611,6 +653,7 @@ impl App {
             messages,
             boot: self.boot.clone(),
             emoji: self.emoji.clone(),
+            commands: self.slash.commands.clone(),
         }
     }
 
@@ -633,10 +676,11 @@ impl App {
         self.spawn(|s| Event::Sections(s.sections()));
         self.spawn(|s| Event::Stars(s.stars()));
         self.spawn(|s| Event::Vips(s.vips()));
-        self.spawn(|s| Event::Counts(s.counts()));
+        self.fetch_counts();
         self.spawn(|s| Event::Boot(s.boot()));
         self.spawn(|s| Event::TeamIcon(s.team_icon()));
         self.spawn(|s| Event::Emoji(emoji::Ev::List(emoji::fetch(s))));
+        self.spawn(|s| Event::Slash(crate::slash::Ev::List(crate::slash::fetch(s))));
         self.refresh_account(true);
         self.refresh_prefs();
         self.spawn(|s| Event::Edit(crate::edit::Ev::Saved(s.saved())));
@@ -664,16 +708,57 @@ impl App {
         self.me.as_ref().is_some_and(|m| m.user_id == uid)
     }
 
-    /// The open conversation is a DM with a deactivated account: like
-    /// Slack, only its archives, with no message box.
-    pub(crate) fn archived(&self) -> bool {
-        let Some(c) = self.current.as_ref().and_then(|id| self.convs.iter().find(|c| &c.id == id)) else { return false };
-        c.kind == Kind::Direct && c.user.as_ref().is_some_and(|u| self.users.deleted.contains(u))
+    /// Whether the open conversation takes no new messages, and why: like
+    /// Slack, a deactivated account's DM or an archived channel shows its
+    /// history with a notice where the message box goes.
+    pub(crate) fn read_only(&self) -> Option<ReadOnly> {
+        let c = self.current.as_ref().and_then(|id| self.convs.iter().find(|c| &c.id == id))?;
+        if c.kind == Kind::Direct && c.user.as_ref().is_some_and(|u| self.users.deleted.contains(u)) {
+            Some(ReadOnly::Deactivated)
+        } else if c.archived {
+            Some(ReadOnly::Archived)
+        } else {
+            None
+        }
+    }
+
+    /// Unarchives a channel; on success it is a channel like any other again
+    /// (sidebar, message box), on failure Slack's error goes to the status line.
+    pub fn unarchive(&mut self, id: String) {
+        self.status = tr("unarchiving…", "desarquivando…").into();
+        self.spawn(move |s| {
+            let res = s.unarchive(&id);
+            Event::Unarchived { id, res }
+        });
+    }
+
+    fn unarchived(&mut self, id: String, res: Res<()>) {
+        match res {
+            Ok(()) => {
+                let Some(c) = self.convs.iter_mut().find(|c| c.id == id) else { return };
+                c.archived = false;
+                let name = c.name.clone();
+                self.brief(trf!("#{name} unarchived", "#{name} desarquivado"), 4);
+            }
+            Err(e) => self.status = e,
+        }
     }
 
     /// " (you)" closing the label of the user's own DM; drawn dimmer than the name.
     pub(crate) fn you_suffix(&self, c: &Conversation) -> Option<&'static str> {
         (c.kind == Kind::Direct && c.user.as_deref().is_some_and(|u| self.is_me(u))).then(|| tr(" (you)", " (você)"))
+    }
+
+    /// " (archived)" after an archived channel, " (deactivated)" after a
+    /// deactivated account's DM, as in Slack's lists; drawn dimmer than the name.
+    pub(crate) fn gone_suffix(&self, c: &Conversation) -> Option<&'static str> {
+        if c.archived {
+            Some(tr(" (archived)", " (arquivado)"))
+        } else if c.kind == Kind::Direct && c.user.as_ref().is_some_and(|u| self.users.deleted.contains(u)) {
+            Some(tr(" (deactivated)", " (desativada)"))
+        } else {
+            None
+        }
     }
 
     pub fn label(&self, c: &Conversation) -> String {
@@ -739,25 +824,28 @@ impl App {
                 dms += 1;
             }
         }
+        // Replies in threads you follow that mention you, as Slack's badge counts them.
+        mentions += self.threads.mentions;
         (mentions, dms)
     }
 
     pub fn rows(&self) -> Vec<Row> {
         if !self.filter.is_empty() {
             // Every conversation we are in, also those hidden from the sidebar;
-            // best match first, then the most recent activity.
-            let mut hits: Vec<(u8, std::cmp::Reverse<String>, usize)> = self
+            // best match first, then the most recent activity. Archived
+            // channels after all the rest, as Slack ranks them.
+            let mut hits: Vec<(bool, u8, std::cmp::Reverse<String>, usize)> = self
                 .convs
                 .iter()
                 .enumerate()
                 .filter_map(|(i, c)| {
                     let (rank, _) = crate::text::search(&self.label(c), &self.filter)?;
                     let latest = self.counts.get(&c.id).map(|c| c.latest.clone()).unwrap_or_default();
-                    Some((rank, std::cmp::Reverse(latest), i))
+                    Some((c.archived, rank, std::cmp::Reverse(latest), i))
                 })
                 .collect();
             hits.sort();
-            return hits.into_iter().map(|(_, _, i)| Row::Conv(i)).collect();
+            return hits.into_iter().map(|(_, _, _, i)| Row::Conv(i)).collect();
         }
 
         let dm_user = |i: usize| self.convs[i].user.as_deref().unwrap_or("");
@@ -765,7 +853,8 @@ impl App {
             .convs
             .iter()
             .enumerate()
-            .filter(|(_, c)| !c.user.as_ref().is_some_and(|u| self.users.deleted.contains(u)))
+            // Deactivated accounts' DMs and archived channels: only the search finds them.
+            .filter(|(_, c)| !c.archived && !c.user.as_ref().is_some_and(|u| self.users.deleted.contains(u)))
             .map(|(i, c)| (c.id.as_str(), i))
             .collect();
         let mut placed = HashSet::new();
@@ -880,8 +969,8 @@ impl App {
         let silenced_section =
             Section { id: SILENCED.into(), kind: SILENCED.into(), name: String::new(), emoji: String::new(), ids: Vec::new() };
         order.push(&silenced_section);
-
-        let mut rows = Vec::new();
+        // Like Slack: Threads first, above every section.
+        let mut rows = vec![Row::Threads];
         for s in order {
             let all: &[usize] = match s.kind.as_str() {
                 "direct_messages" => &dms,
@@ -891,7 +980,8 @@ impl App {
                 _ => explicit.get(&s.id).map(Vec::as_slice).unwrap_or(&[]),
             };
             let is_silenced = s.kind == SILENCED;
-            let members: Vec<usize> = all.iter().copied().filter(|i| is_silenced || !muted(i)).collect();
+            let members: Vec<usize> =
+                all.iter().copied().filter(|i| is_silenced || !muted(i)).collect();
             if members.is_empty() {
                 continue;
             }
@@ -935,6 +1025,7 @@ impl App {
         let key = |r: &Row| match r {
             Row::Conv(i) => Some(self.convs[*i].id.clone()),
             Row::Header { key, .. } => Some(format!("section:{key}")),
+            Row::Threads => Some("threads".into()),
             Row::Gap => None,
         };
         // Same index as last draw but another row there: the list reordered
@@ -981,6 +1072,10 @@ impl App {
                 self.toggle_section(key);
                 self.list.select(Some(row));
             }
+            Some(Row::Threads) => {
+                self.open_threads();
+                self.list.select(Some(row));
+            }
             _ => {}
         }
     }
@@ -1010,6 +1105,7 @@ impl App {
         self.scroll = 0;
         self.stay = None;
         self.thread = None;
+        self.threads.open = false;
         self.pins.tab = crate::pins::Tab::Messages;
         self.focus = Focus::Input;
         self.filter.clear();
@@ -1018,6 +1114,8 @@ impl App {
         // A DM tells when the other person paused their notifications.
         if let Some(uid) = self.convs.iter().find(|c| c.id == id && c.kind == Kind::Direct).and_then(|c| c.user.clone()) {
             if !self.is_me(&uid) && !self.users.deleted.contains(&uid) {
+                // And their status as it is now, in case the websocket missed it.
+                self.refresh_user(uid.clone());
                 self.refresh_user_dnd(uid);
             }
         }
@@ -1599,6 +1697,16 @@ impl App {
             self.refresh_presence();
             self.refresh_dnd();
         }
+        if self.last_users.elapsed() >= USERS_EVERY {
+            self.last_users = Instant::now();
+            // Quietly: a failure here waits for the next round.
+            let (slack, tx) = (self.slack.clone(), self.tx.clone());
+            std::thread::spawn(move || {
+                if let Ok(users) = slack.users() {
+                    let _ = tx.send(Event::Users(Ok(users)));
+                }
+            });
+        }
         // A DM that joined or left the sidebar joins or leaves the subscription.
         if self.live && self.last_watch.elapsed() >= WATCH_EVERY && !self.convs.is_empty() {
             self.last_watch = Instant::now();
@@ -1609,9 +1717,10 @@ impl App {
         if self.counts_at.is_some_and(|t| t <= Instant::now()) || self.last_counts.elapsed() >= counts_every {
             self.counts_at = None;
             self.last_counts = Instant::now();
-            self.spawn(|s| Event::Counts(s.counts()));
+            self.fetch_counts();
         }
         self.poll_thread();
+        self.poll_threads();
         if self.copied.is_some_and(|(_, at)| at.elapsed() >= COPIED_FOR) {
             self.copied = None;
             self.dirty = true;
@@ -1680,9 +1789,11 @@ impl App {
                     self.recents.clear();
                     self.users = Users::default();
                     self.emoji = emoji::Emoji::default();
+                    self.slash.commands.clear();
                     // The conversation reopened from the cache was the other account's.
                     self.current = None;
                     self.thread = None;
+                    self.threads = Default::default();
                     self.pins = Default::default();
                     self.focus = Focus::Sidebar;
                 }
@@ -1734,6 +1845,10 @@ impl App {
             }
             Event::Named { res: Err(_), .. } => {}
             Event::Dm(res) => self.dm_opened(res),
+            Event::Slash(e) => self.on_slash(e),
+            Event::Details(e) => self.on_details(e),
+            Event::Unarchived { id, res } => self.unarchived(id, res),
+            Event::Threads(e) => self.on_threads(e),
             Event::Live(ev) => self.on_live(ev),
             // Sections and counts are session-token only; without them the
             // sidebar falls back to favourites, DMs and channels.
@@ -1840,8 +1955,20 @@ impl App {
         who.into_iter().map(|(u, _)| self.users.names.get(u).cloned().unwrap_or_else(|| u.clone())).collect()
     }
 
+    /// `client.counts`: the conversations' and, from the same answer, the threads'.
+    fn fetch_counts(&self) {
+        let tx = self.tx.clone();
+        self.spawn(move |s| match s.all_counts() {
+            Ok((convs, threads)) => {
+                let _ = tx.send(Event::Threads(crate::threads::Ev::Counts(threads)));
+                Event::Counts(Ok(convs))
+            }
+            Err(e) => Event::Counts(Err(e)),
+        });
+    }
+
     /// Fetches the counts in a moment, sooner than the next poll.
-    fn counts_soon(&mut self) {
+    pub(crate) fn counts_soon(&mut self) {
         let at = Instant::now() + Duration::from_millis(250);
         self.counts_at = Some(self.counts_at.map_or(at, |t| t.min(at)));
     }
@@ -1879,6 +2006,7 @@ impl App {
                 }
             }
             Ev::Message { chan, thread, user } => {
+                self.thread_message(&chan, thread.as_deref());
                 // The message they were typing arrived.
                 if let (Some(u), Some(t)) = (user, self.typing.get_mut(&chan)) {
                     t.remove(&u);
@@ -1895,14 +2023,19 @@ impl App {
                 }
             }
             Ev::Counts => self.counts_soon(),
+            Ev::Threads => {
+                self.counts_soon();
+                self.threads_soon();
+            }
             Ev::Dnd => self.refresh_dnd(),
             Ev::Prefs => self.refresh_prefs(),
             Ev::Convs => self.spawn(|s| Event::Convs(s.conversations())),
-            Ev::User { id, deleted } => {
-                if deleted {
-                    self.users.deleted.insert(id);
-                } else {
-                    self.users.deleted.remove(&id);
+            Ev::Ephemeral { chan, msg } => self.on_ephemeral(chan, msg),
+            Ev::User(user) => self.on_user(&user),
+            Ev::UserStale(uid) => self.refresh_user(uid),
+            Ev::Archived { chan, archived } => {
+                if let Some(c) = self.convs.iter_mut().find(|c| c.id == chan) {
+                    c.archived = archived;
                 }
             }
         }
@@ -1916,6 +2049,8 @@ impl App {
         }
         self.focused = focused;
         self.dirty = true;
+        // The thread open in the panel too.
+        self.read_open_thread();
         let Some(chan) = self.current.clone().filter(|_| focused) else { return };
         if let Some(c) = self.counts.get_mut(&chan).filter(|c| c.unread || c.mentions > 0) {
             c.unread = false;
@@ -1940,13 +2075,14 @@ impl App {
                 self.viewer = None;
                 self.dialog = None;
                 self.open(conv.clone());
-                let Some(ts) = ts else { return };
+                // A thread alone (`--thread <root>`) opens it at its root.
+                let Some(ts) = ts.or_else(|| thread.clone()) else { return };
                 self.flash = Some((ts.clone(), Instant::now()));
-                match thread.filter(|t| *t != ts) {
+                match thread {
                     Some(parent) => {
                         self.open_thread(parent.clone());
                         if let Some(t) = self.thread.as_mut() {
-                            t.jump = Some(ts);
+                            t.jump = (ts != parent).then_some(ts);
                         }
                         self.show_message(conv, parent);
                     }
@@ -2038,9 +2174,19 @@ impl App {
         let start = if page.len() >= HISTORY_LIMIT { page.first().map(|m| m.ts.clone()) } else { None };
         let end = page.last().map(|m| m.ts.clone());
         let mut merged: Vec<Message> = old.iter().filter(|m| start.as_ref().is_some_and(|s| m.ts < *s)).cloned().collect();
+        // Answers only you see are never in a page: they stay where they were.
+        let ephemeral: Vec<Message> = old
+            .iter()
+            .filter(|m| crate::slash::is_ephemeral(m) && start.as_ref().is_none_or(|s| m.ts >= *s) && end.as_ref().is_none_or(|e| m.ts <= *e))
+            .cloned()
+            .collect();
         merged.extend(page);
         // A send can land before the poll that missed it.
         merged.extend(old.into_iter().filter(|m| end.as_ref().is_some_and(|e| m.ts > *e)));
+        if !ephemeral.is_empty() {
+            merged.extend(ephemeral);
+            merged.sort_by(|a, b| a.ts.cmp(&b.ts));
+        }
         let grew = merged.last().map(|m| &m.ts) != last.as_ref();
         self.messages.insert(chan.to_string(), merged);
         if grew && self.focused && self.current.as_deref() == Some(chan) {
@@ -2218,6 +2364,7 @@ impl App {
         self.loading.clear();
         self.polling = false;
         (self.boot, self.team_icon, self.current, self.profile, self.thread, self.viewer) = (None, None, None, None, None, None);
+        self.threads = Default::default();
         (self.menu, self.react, self.dialog) = (None, None, None);
         self.account = Default::default();
         self.editor = Editor::default();
@@ -2294,9 +2441,12 @@ impl App {
         if self.account.profile.is_some() {
             return self.profile_paste(s);
         }
+        if self.details.is_some() {
+            return self.details_paste(s);
+        }
         match self.focus {
-            // No message box in a deactivated account's archives.
-            Focus::Input if self.archived() => {}
+            // No message box in a read-only conversation.
+            Focus::Input if self.read_only().is_some() => {}
             // A pasted picture arrives empty: the terminal can't carry it.
             Focus::Input | Focus::Thread if s.is_empty() => self.paste_clipboard(self.focus == Focus::Thread),
             Focus::Input => self.editor.insert(s),
@@ -2341,6 +2491,13 @@ impl App {
         if self.account.settings.is_some() {
             return self.settings_key(k);
         }
+        if self.details.is_some() {
+            return self.details_key(k);
+        }
+        // The conversation's details, or a DM's profile, as a click on its name.
+        if k.modifiers.contains(KeyModifiers::ALT) && k.code == KeyCode::Char('i') {
+            return self.open_details();
+        }
         if ctrl && k.code == KeyCode::Char('n') {
             self.account.menu = None;
             return self.open_compose_menu();
@@ -2384,7 +2541,7 @@ impl App {
         if k.code == KeyCode::Esc && self.selection.take().is_some_and(|s| s.moved) {
             return;
         }
-        if self.emoji_key(k) || self.mention_key(k) {
+        if self.emoji_key(k) || self.mention_key(k) || self.slash_key(k) {
             return;
         }
         if self.edit_key(k) {
@@ -2397,7 +2554,7 @@ impl App {
         if self.thread.is_some() && k.code == KeyCode::Esc && self.focus != Focus::Thread {
             return self.close_thread();
         }
-        if self.pins_key(k) {
+        if self.threads_key(k, ctrl) || self.pins_key(k) {
             return;
         }
         match (k.code, ctrl) {
@@ -2509,10 +2666,16 @@ impl App {
     }
 
     fn on_input_key(&mut self, k: KeyEvent, ctrl: bool) {
-        // A deactivated account's archives: reading only, nothing to type in.
-        if self.archived() {
+        // A deactivated account's archives or an archived channel: reading
+        // only, nothing to type in; `u` unarchives the channel.
+        if let Some(why) = self.read_only() {
             match k.code {
                 KeyCode::Esc => self.focus = Focus::Sidebar,
+                KeyCode::Char('u') if why == ReadOnly::Archived && !ctrl => {
+                    if let Some(id) = self.current.clone() {
+                        self.unarchive(id);
+                    }
+                }
                 KeyCode::End => self.to_present(),
                 KeyCode::Up => self.scroll_by(1),
                 KeyCode::Down => self.scroll_down(1),
@@ -2573,9 +2736,19 @@ impl App {
             }
             return;
         }
+        if self.details.is_some() {
+            return self.details_mouse(m);
+        }
         let covered = self.menu.is_some() || self.viewer.is_some() || self.react.is_some() || self.dialog.is_some() || self.account.profile.is_some() || self.account.about || self.account.settings.is_some();
         if m.kind == MouseEventKind::Down(MouseButton::Left) && !covered && self.areas.latest.contains(at) {
             self.to_present();
+            self.dirty = true;
+            return;
+        }
+        if m.kind == MouseEventKind::Down(MouseButton::Left) && !covered && self.areas.unarchive.contains(at) {
+            if let Some(id) = self.current.clone().filter(|_| self.read_only() == Some(ReadOnly::Archived)) {
+                self.unarchive(id);
+            }
             self.dirty = true;
             return;
         }
@@ -2637,7 +2810,7 @@ impl App {
             }
             return;
         }
-        if self.emoji_mouse(m) || self.mention_mouse(m) {
+        if self.emoji_mouse(m) || self.mention_mouse(m) || self.slash_mouse(m) {
             return;
         }
         // Dragging the border resizes the sidebar.
@@ -2659,15 +2832,13 @@ impl App {
             }
             _ => {}
         }
-        // "↑ Unread mentions": scrolls to that conversation and selects it, without opening it.
+        // "↑ Unread mentions" / "↑ More unreads": scrolls to that row and selects it, without opening it.
         if m.kind == MouseEventKind::Down(MouseButton::Left) {
-            if let Some((_, id)) = self.areas.mention_pills.iter().find(|(r, _)| r.contains(at)) {
-                let rows = self.rows();
-                let pos = rows.iter().position(|r| matches!(r, Row::Conv(i) if &self.convs[*i].id == id));
-                if pos.is_some() {
+            if let Some(&(_, n)) = self.areas.mention_pills.iter().find(|(r, _)| r.contains(at)) {
+                if n < self.rows().len() {
                     self.sidebar_wheel = false;
                     self.focus = Focus::Sidebar;
-                    self.list.select(pos);
+                    self.list.select(Some(n));
                 }
                 self.dirty = true;
                 return;
@@ -2820,8 +2991,13 @@ impl App {
                 self.open_profile(uid);
                 return;
             }
+            if self.areas.header_name.contains(at) {
+                self.open_details();
+                self.dirty = true;
+                return;
+            }
         }
-        if self.pins_mouse(m, at) || self.thread_mouse(m, at) {
+        if self.pins_mouse(m, at) || self.thread_mouse(m, at) || self.threads_mouse(m, at) {
             self.dirty = true;
             return;
         }
@@ -2851,11 +3027,11 @@ impl App {
     }
 
     fn send(&mut self) {
-        let Some(chan) = self.current.clone().filter(|_| !self.archived()) else { return };
+        let Some(chan) = self.current.clone().filter(|_| self.read_only().is_none()) else { return };
         if self.send_files(false) {
             return;
         }
-        if self.editor.is_empty() {
+        if self.editor.is_empty() || self.run_slash(false) {
             return;
         }
         let text = self.editor.take().trim().to_string();

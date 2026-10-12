@@ -52,9 +52,92 @@ pub struct Users {
     /// id → 72px profile picture.
     #[serde(default)]
     pub avatars: HashMap<String, String>,
-    /// id → (emoji shortcode, text) of a status that has not expired.
+    /// id → (emoji shortcode, text) of a status that had not expired when read;
+    /// `status()` leaves out the ones that expired since.
     #[serde(default)]
     pub statuses: HashMap<String, (String, String)>,
+    /// id → when that status clears itself (unix seconds), for those that do.
+    #[serde(default)]
+    pub status_ends: HashMap<String, i64>,
+    /// id → the status emoji as Slack draws it, when Slack's name for it
+    /// isn't the usual one (`knife_fork_plate` is 🍽).
+    #[serde(default)]
+    pub status_unicode: HashMap<String, String>,
+    /// id → the picture Slack sent with a custom status emoji, for names the
+    /// workspace's list doesn't have (aliases, another org's emoji).
+    #[serde(default)]
+    pub status_image: HashMap<String, String>,
+}
+
+impl Users {
+    /// Someone's status, unless it has expired meanwhile.
+    pub fn status(&self, uid: &str) -> Option<&(String, String)> {
+        let s = self.statuses.get(uid)?;
+        self.status_ends.get(uid).is_none_or(|end| *end > unix_now()).then_some(s)
+    }
+
+    /// Someone's status emoji, drawn: by its name, or by the code points
+    /// Slack sent along with it.
+    pub fn status_glyph(&self, uid: &str) -> Option<String> {
+        let (emoji, _) = self.status(uid)?;
+        crate::emoji::standard(emoji.trim_matches(':')).or_else(|| self.status_unicode.get(uid).cloned())
+    }
+
+    /// Takes in what a user object says (from `users.list`, `users.info` or
+    /// the websocket's `user_change`): name, photo, status, whether it's
+    /// deactivated. A field it doesn't carry stays as it was.
+    pub fn apply(&mut self, u: &Value) {
+        let Some(id) = u["id"].as_str().filter(|s| !s.is_empty()).map(String::from) else { return };
+        let p = &u["profile"];
+        if let Some(name) = [&p["display_name"], &p["real_name"], &u["name"]].iter().filter_map(|v| v.as_str()).find(|s| !s.is_empty()) {
+            self.names.insert(id.clone(), name.to_string());
+        }
+        if let Some(handle) = u["name"].as_str().filter(|s| !s.is_empty()) {
+            self.handles.insert(handle.to_string(), id.clone());
+        }
+        if let Some(real) = p["real_name"].as_str().filter(|r| !r.is_empty()) {
+            self.real.insert(id.clone(), real.to_string());
+        }
+        if u["is_bot"].as_bool() == Some(true) || id == "USLACKBOT" {
+            self.bots.insert(id.clone());
+        }
+        match u["deleted"].as_bool() {
+            Some(true) => self.deleted.insert(id.clone()),
+            Some(false) => self.deleted.remove(&id),
+            None => false,
+        };
+        if let Some(img) = p["image_72"].as_str() {
+            self.avatars.insert(id.clone(), img.to_string());
+        }
+        // A profile without the status fields says nothing about it.
+        if p["status_emoji"].is_string() || p["status_text"].is_string() {
+            let (emoji, text) = (str_of(&p["status_emoji"]), str_of(&p["status_text"]));
+            let end = p["status_expiration"].as_i64().unwrap_or(0);
+            if (!emoji.is_empty() || !text.is_empty()) && (end == 0 || end > unix_now()) {
+                self.statuses.insert(id.clone(), (emoji, text));
+            } else {
+                self.statuses.remove(&id);
+            }
+            let info = &p["status_emoji_display_info"][0];
+            match info["unicode"].as_str().and_then(crate::text::emoji) {
+                Some(u) => self.status_unicode.insert(id.clone(), u),
+                None => self.status_unicode.remove(&id),
+            };
+            match info["display_url"].as_str().filter(|u| u.starts_with("http") && info["unicode"].is_null()) {
+                Some(url) => self.status_image.insert(id.clone(), url.to_string()),
+                None => self.status_image.remove(&id),
+            };
+            if end > 0 {
+                self.status_ends.insert(id, end);
+            } else {
+                self.status_ends.remove(&id);
+            }
+        }
+    }
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -75,6 +158,9 @@ pub struct Conversation {
     /// Shared with another organization: Slack lists it under "Slack Connect".
     #[serde(default)]
     pub ext_shared: bool,
+    /// An archived channel: out of the sidebar, found by searching, read-only.
+    #[serde(default)]
+    pub archived: bool,
 }
 
 /// A sidebar section as the user arranged it in Slack.
@@ -216,10 +302,44 @@ impl Slack {
     }
 
     /// The real-time websocket's address, and the session cookie it also wants.
+    /// A browser session connects the way the official client does
+    /// (`client.getWebSocketURL` plus its flannel parameters): only that
+    /// socket hears when someone else's status or profile changes
+    /// (`user_invalidated`). `rtm.connect` hands out a legacy bot socket
+    /// that never does; it stays as the fallback, and for other tokens.
     pub fn rtm_url(&self) -> Res<(String, Option<String>)> {
+        let creds = self.creds();
+        if creds.cookie.is_some() {
+            if let Ok(url) = self.client_ws_url(&creds.token) {
+                return Ok((url, creds.cookie));
+            }
+        }
         let v = self.call("rtm.connect", &[])?;
         let url = v["url"].as_str().filter(|u| !u.is_empty()).ok_or("rtm.connect: no url")?;
-        Ok((url.to_string(), self.creds().cookie))
+        Ok((url.to_string(), creds.cookie))
+    }
+
+    /// The official client's socket address: the gateway from
+    /// `client.getWebSocketURL`, and the token and flags it adds itself.
+    fn client_ws_url(&self, token: &str) -> Res<String> {
+        let v = self.call("client.getWebSocketURL", &[])?;
+        let base = v["primary_websocket_url"].as_str().filter(|u| u.starts_with("wss://")).ok_or("client.getWebSocketURL: no url")?;
+        let start_args = "?agent=client&org_wide_aware=true&eac_cache_ts=true&cache_ts=0&name_tagging=true&only_self_subteams=true&connect_only=true&ms_latest=true";
+        let mut q = vec![
+            ("token", token),
+            ("sync_desync", "1"),
+            ("slack_client", "desktop"),
+            ("start_args", start_args),
+            ("no_query_on_subscribe", "1"),
+            ("flannel", "3"),
+            ("lazy_channels", "1"),
+        ];
+        if let Some(g) = v["routing_context"].as_str() {
+            q.push(("gateway_server", g));
+        }
+        q.push(("batch_presence_aware", "1"));
+        let q: Vec<String> = q.iter().map(|(k, v)| format!("{k}={}", form_encode(v))).collect();
+        Ok(format!("{}/?{}", base.trim_end_matches('/'), q.join("&")))
     }
 
     pub fn set_creds(&self, creds: Creds) {
@@ -318,9 +438,11 @@ impl Slack {
             .find(|s| !s.is_empty())
             .unwrap_or("?")
             .to_string();
+        // Slack may still return a status for a while after it expired.
+        let end = p["status_expiration"].as_i64().unwrap_or(0);
         let status = [str_of(&p["status_emoji"]), str_of(&p["status_text"])]
             .into_iter()
-            .filter(|s| !s.is_empty())
+            .filter(|s| !s.is_empty() && (end == 0 || end > unix_now()))
             .collect::<Vec<_>>()
             .join(" ");
         Ok(Profile {
@@ -381,46 +503,30 @@ impl Slack {
     pub fn users(&self) -> Res<Users> {
         let list = self.paginate("users.list", &[("limit", "200")], "members")?;
         let mut users = Users::default();
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
         for u in &list {
-            let p = &u["profile"];
-            let name = [&p["display_name"], &p["real_name"], &u["name"]]
-                .iter()
-                .filter_map(|v| v.as_str())
-                .find(|s| !s.is_empty())
-                .unwrap_or("?")
-                .to_string();
-            let id = str_of(&u["id"]);
-            if u["is_bot"].as_bool() == Some(true) || id == "USLACKBOT" {
-                users.bots.insert(id.clone());
+            users.apply(u);
+            // Someone without any name still gets a row.
+            if let Some(id) = u["id"].as_str().filter(|id| !users.names.contains_key(*id)) {
+                users.names.insert(id.to_string(), "?".into());
             }
-            if u["deleted"].as_bool() == Some(true) {
-                users.deleted.insert(id.clone());
-            }
-            if let Some(img) = p["image_72"].as_str() {
-                users.avatars.insert(id.clone(), img.to_string());
-            }
-            let (emoji, text) = (str_of(&p["status_emoji"]), str_of(&p["status_text"]));
-            let expires = p["status_expiration"].as_i64().unwrap_or(0);
-            if (!emoji.is_empty() || !text.is_empty()) && (expires == 0 || expires > now) {
-                users.statuses.insert(id.clone(), (emoji, text));
-            }
-            if let Some(real) = p["real_name"].as_str().filter(|r| !r.is_empty()) {
-                users.real.insert(id.clone(), real.to_string());
-            }
-            users.handles.insert(str_of(&u["name"]), id.clone());
-            users.names.insert(id, name);
         }
         Ok(users)
     }
 
-    /// Only the conversations the user is in.
+    /// One person's user object as it is now, for `Users::apply`.
+    pub fn user(&self, uid: &str) -> Res<Value> {
+        let v = self.call("users.info", &[("user", uid)])?;
+        Ok(v["user"].clone())
+    }
+
+    /// Only the conversations the user is in, archived channels included:
+    /// Slack keeps their members, so the same call lists them, a page or so more.
     pub fn conversations(&self) -> Res<Vec<Conversation>> {
         let list = self.paginate(
             "users.conversations",
             &[
                 ("types", "public_channel,private_channel,mpim,im"),
-                ("exclude_archived", "true"),
+                ("exclude_archived", "false"),
                 ("limit", "200"),
             ],
             "channels",
@@ -451,6 +557,11 @@ impl Slack {
     pub fn create_channel(&self, name: &str, private: bool) -> Res<Conversation> {
         let v = self.call("conversations.create", &[("name", name), ("is_private", if private { "true" } else { "false" })])?;
         Ok(parse_conversation(&v["channel"]))
+    }
+
+    /// Brings an archived channel back; it takes messages again.
+    pub fn unarchive(&self, chan: &str) -> Res<()> {
+        self.call("conversations.unarchive", &[("channel", chan)]).map(|_| ())
     }
 
     /// The channel's description, as Slack calls it in the UI.
@@ -545,7 +656,14 @@ impl Slack {
     /// Unread state and last activity for every conversation, in one call.
     /// Undocumented, like `sections`.
     pub fn counts(&self) -> Res<HashMap<String, Count>> {
+        self.all_counts().map(|c| c.0)
+    }
+
+    /// `counts`, and the threads you follow: whether any has unread replies,
+    /// and how many of those mention you.
+    pub fn all_counts(&self) -> Res<(HashMap<String, Count>, (bool, u64))> {
         let v = self.call("client.counts", &[])?;
+        let threads = (v["threads"]["has_unreads"].as_bool().unwrap_or(false), v["threads"]["mention_count"].as_u64().unwrap_or(0));
         let mut out = HashMap::new();
         for key in ["channels", "ims", "mpims"] {
             for c in v[key].as_array().into_iter().flatten() {
@@ -560,7 +678,7 @@ impl Slack {
                 );
             }
         }
-        Ok(out)
+        Ok((out, threads))
     }
 
     /// Messages in chronological order. `oldest` fetches what came after it,
@@ -685,6 +803,7 @@ fn parse_conversation(c: &Value) -> Conversation {
         name: str_of(&c["name"]),
         user: c["user"].as_str().map(String::from),
         ext_shared: c["is_ext_shared"].as_bool() == Some(true),
+        archived: c["is_archived"].as_bool() == Some(true),
     }
 }
 
@@ -792,4 +911,14 @@ pub(crate) fn slack_ref(s: &str) -> Option<usize> {
         _ => false,
     };
     ok.then_some(end + 2)
+}
+
+/// `s` as a URL query value: everything but the unreserved characters escaped.
+fn form_encode(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }

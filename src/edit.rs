@@ -525,8 +525,8 @@ impl App {
             self.status = tr("you can only edit your own messages", "só dá para editar as suas mensagens").into();
             return;
         }
-        // A deactivated account's archives have no box to edit in.
-        if !it.thread && self.archived() {
+        // A deactivated account's archives and archived channels have no box to edit in.
+        if !it.thread && self.read_only().is_some() {
             self.status = tr("this conversation is read-only", "esta conversa é só para leitura").into();
             return;
         }
@@ -724,9 +724,11 @@ impl App {
     fn targets(&self, query: &str) -> Vec<usize> {
         let q = query.to_lowercase();
         if q.is_empty() {
-            return self.recents.iter().filter_map(|id| self.convs.iter().position(|c| c.id == *id)).take(ROWS).collect();
+            return self.recents.iter().filter_map(|id| self.convs.iter().position(|c| c.id == *id && !c.archived)).take(ROWS).collect();
         }
+        // Archived channels take no messages.
         let mut hits: Vec<(bool, usize)> = (0..self.convs.len())
+            .filter(|&i| !self.convs[i].archived)
             .filter_map(|i| {
                 let l = self.label(&self.convs[i]).to_lowercase();
                 l.contains(&q).then(|| (!l.starts_with(&q), i))
