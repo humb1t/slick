@@ -3,6 +3,7 @@
 
 use crate::app::ImgRef;
 use crate::cache;
+use crate::i18n::tr;
 use crate::slack::{File, Res, Slack};
 use crate::ui::truncate;
 use ratatui::style::{Color, Style};
@@ -43,7 +44,7 @@ impl Job {
     pub fn image(r: &ImgRef) -> Self {
         let ext = r.key.rsplit_once('.').map(|(_, e)| e).filter(|e| e.len() <= 5);
         let name = match ext {
-            Some(e) if !r.name.contains('.') => format!("{}.{e}", if r.name.is_empty() { "imagem" } else { &r.name }),
+            Some(e) if !r.name.contains('.') => format!("{}.{e}", if r.name.is_empty() { tr("image", "imagem") } else { &r.name }),
             _ => r.name.clone(),
         };
         // `Slack::download` stops at 20 MB: a copy that size may be cut short.
@@ -105,7 +106,7 @@ fn safe_name(name: &str) -> String {
     let bad = |c: char| c == '/' || c.is_control() || (cfg!(windows) && "\\:*?\"<>|".contains(c));
     let n: String = name.chars().map(|c| if bad(c) { '_' } else { c }).collect();
     let n = n.trim();
-    if n.is_empty() || n == "." || n == ".." { "arquivo".into() } else { n.to_string() }
+    if n.is_empty() || n == "." || n == ".." { tr("file", "arquivo").into() } else { n.to_string() }
 }
 
 /// `a.pdf`, else `a (1).pdf`, `a (2).pdf`…: the first name neither saved nor
@@ -173,7 +174,7 @@ pub fn cached(s: &Slack, job: &Job) -> Res<PathBuf> {
     }
 }
 
-/// `1,2 MB`, the way Slack writes sizes in Portuguese.
+/// `1.2 MB`, or `1,2 MB` the way Slack writes sizes in Portuguese.
 pub fn size_label(n: u64) -> String {
     let units = ["KB", "MB", "GB", "TB"];
     if n < 1024 {
@@ -188,7 +189,8 @@ pub fn size_label(n: u64) -> String {
     if u == 0 || v >= 100.0 {
         format!("{} {}", v.round(), units[u])
     } else {
-        format!("{v:.1} {}", units[u]).replace('.', ",")
+        let s = format!("{v:.1} {}", units[u]);
+        if crate::i18n::is_pt() { s.replace('.', ",") } else { s }
     }
 }
 
@@ -255,13 +257,13 @@ pub fn card(f: &File, state: Option<&State>, indent: &str, width: usize, line: u
         x += label.width();
     };
     match (state, Job::file(f)) {
-        (Some(State::Saving), _) => action(&mut spans, "   ", "baixando…", dim.italic(), None),
+        (Some(State::Saving), _) => action(&mut spans, "   ", tr("downloading…", "baixando…"), dim.italic(), None),
         (Some(State::Saved(p)), _) => {
-            action(&mut spans, "   ", "✓ salvo", Style::new().fg(Color::Green), None);
-            action(&mut spans, "  ", "Abrir", link, Some(Click::Open(p.clone())));
-            action(&mut spans, " · ", "Mostrar na pasta", link, Some(Click::Reveal(p.clone())));
+            action(&mut spans, "   ", tr("✓ saved", "✓ salvo"), Style::new().fg(Color::Green), None);
+            action(&mut spans, "  ", tr("Open", "Abrir"), link, Some(Click::Open(p.clone())));
+            action(&mut spans, " · ", tr("Show in folder", "Mostrar na pasta"), link, Some(Click::Reveal(p.clone())));
         }
-        (None, Some(job)) => action(&mut spans, "   ", "⤓ Baixar", link, Some(Click::Save(job))),
+        (None, Some(job)) => action(&mut spans, "   ", tr("⤓ Download", "⤓ Baixar"), link, Some(Click::Save(job))),
         (None, None) => {}
     }
     (vec![name, Line::from(spans)], hits)

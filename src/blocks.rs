@@ -3,6 +3,7 @@
 //! can be clicked. `text::body` stays the flat version for everything else.
 
 use crate::app::ImgRef;
+use crate::i18n::tr;
 use crate::slack::Message;
 use crate::text::{self, Names};
 use ratatui::style::{Color, Modifier, Style};
@@ -149,7 +150,7 @@ pub struct Out {
 
 pub fn parse(m: &Message, n: &Names) -> Vec<Piece> {
     if m.subtype.as_deref() == Some("huddle_thread") {
-        return vec![Piece::Text(vec![Para::plain(vec![Seg::new("📞 iniciou um huddle", Style::new())])], None)];
+        return vec![Piece::Text(vec![Para::plain(vec![Seg::new(tr("📞 started a huddle", "📞 iniciou um huddle"), Style::new())])], None)];
     }
     let mut out = m.blocks.as_array().map(|b| blocks(b, n, &m.ts)).unwrap_or_default();
     if out.is_empty() {
@@ -245,7 +246,7 @@ fn blocks(bs: &[Value], n: &Names, ts: &str) -> Vec<Piece> {
             "image" => {
                 if let Some(url) = image_url(b) {
                     let title = plain(&b["title"], n);
-                    let name = if title.is_empty() { b["alt_text"].as_str().unwrap_or("imagem").to_string() } else { title.clone() };
+                    let name = if title.is_empty() { b["alt_text"].as_str().unwrap_or(tr("image", "imagem")).to_string() } else { title.clone() };
                     let size = |k: &str| b[k].as_u64().unwrap_or(0) as u32;
                     out.push(Piece::Image { img: block_img(&url, &name), w: size("image_width"), h: size("image_height"), title });
                 }
@@ -255,7 +256,7 @@ fn blocks(bs: &[Value], n: &Names, ts: &str) -> Vec<Piece> {
                 let seg = Seg { text: format!("▶ {}", plain(&b["title"], n)), style: link_style(), url, emoji: None };
                 out.push(Piece::Text(vec![Para::plain(vec![seg])], None));
             }
-            "file" => out.push(Piece::Text(vec![Para::plain(vec![Seg::new("📎 arquivo", dim())])], None)),
+            "file" => out.push(Piece::Text(vec![Para::plain(vec![Seg::new(tr("📎 file", "📎 arquivo"), dim())])], None)),
             _ => {}
         }
     }
@@ -307,7 +308,7 @@ fn block_img(url: &str, name: &str) -> ImgRef {
 
 fn accessory(e: &Value, n: &Names, block_id: &str, ts: &str) -> Option<Accessory> {
     if e["type"] == "image" {
-        let alt = e["alt_text"].as_str().filter(|s| !s.is_empty()).unwrap_or("imagem");
+        let alt = e["alt_text"].as_str().filter(|s| !s.is_empty()).unwrap_or(tr("image", "imagem"));
         return image_url(e).map(|u| Accessory::Image(block_img(&u, alt)));
     }
     control(e, n, block_id, ts).map(Accessory::Button)
@@ -327,9 +328,9 @@ fn control(e: &Value, n: &Names, block_id: &str, ts: &str) -> Option<Button> {
             (or(plain(&e["text"], n), "…"), look)
         }
         "overflow" => ("⋯".into(), Look::Menu),
-        "datepicker" => (or(str_of(&e["initial_date"]), &placeholder("Escolher data")), Look::Menu),
-        "timepicker" => (or(str_of(&e["initial_time"]), &placeholder("Escolher hora")), Look::Menu),
-        t if t.ends_with("_select") => (or(plain(&e["initial_option"]["text"], n), &placeholder("Escolher")), Look::Menu),
+        "datepicker" => (or(str_of(&e["initial_date"]), &placeholder(tr("Pick a date", "Escolher data"))), Look::Menu),
+        "timepicker" => (or(str_of(&e["initial_time"]), &placeholder(tr("Pick a time", "Escolher hora"))), Look::Menu),
+        t if t.ends_with("_select") => (or(plain(&e["initial_option"]["text"], n), &placeholder(tr("Select", "Escolher"))), Look::Menu),
         _ => return None,
     };
     let action_id = e["action_id"].as_str().or(e["name"].as_str()).unwrap_or("").to_string();
@@ -392,7 +393,7 @@ fn attachment(a: &Value, n: &Names, ts: &str) -> Vec<Piece> {
     }
     if let Some(u) = get("image_url") {
         let size = |k: &str| a[k].as_u64().unwrap_or(0) as u32;
-        inner.push(Piece::Image { img: block_img(u, get("title").unwrap_or("imagem")), w: size("image_width"), h: size("image_height"), title: String::new() });
+        inner.push(Piece::Image { img: block_img(u, get("title").unwrap_or(tr("image", "imagem"))), w: size("image_width"), h: size("image_height"), title: String::new() });
     }
     let callback = a["callback_id"].as_str().unwrap_or("");
     let bs: Vec<_> = a["actions"].as_array().into_iter().flatten().filter_map(|e| control(e, n, callback, ts)).collect();
@@ -659,7 +660,7 @@ fn rich_inline(e: &Value, base: Style, n: &Names, out: &mut Vec<Seg>) {
         },
         "user" => name("@", n.users, s("user_id")),
         "channel" => name("#", n.chans, s("channel_id")),
-        "usergroup" => Seg::new("@grupo", style.patch(mention())),
+        "usergroup" => Seg::new(tr("@group", "@grupo"), style.patch(mention())),
         "broadcast" => Seg::new(format!("@{}", s("range")), style.patch(mention())),
         "emoji" => match (text::emoji(s("unicode")), n.emoji.get(s("name"))) {
             (Some(u), _) => Seg::new(u, style),

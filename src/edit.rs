@@ -4,6 +4,7 @@
 
 use crate::app::{Action, App, Event, Focus, Menu};
 use crate::editor::Editor;
+use crate::i18n::tr;
 use crate::slack::{escape, parse_message, Edited, Kind, Message, Res, Slack};
 use crate::text::{self, Names};
 use crate::ui::{dim, truncate};
@@ -195,7 +196,7 @@ fn slack_text(typed: &str, refs: &[(String, String)]) -> String {
     out
 }
 
-/// The ts right before `ts`, for "marcar como não lida".
+/// The ts right before `ts`, for "mark unread".
 fn before(ts: &str) -> String {
     let (secs, frac) = ts.split_once('.').unwrap_or((ts, "0"));
     let (secs, frac) = (secs.parse::<i64>().unwrap_or(0), frac.parse::<i64>().unwrap_or(0));
@@ -208,7 +209,7 @@ fn entry(icon: &str, label: &str, key: &str) -> String {
     format!("{icon}  {label}\t{key}")
 }
 
-/// Reminder times as Slack offers them; "amanhã" and "próxima semana" at 9h.
+/// Reminder times as Slack offers them; "tomorrow" and "next week" at 9am.
 fn remind_times() -> Vec<(&'static str, i64)> {
     let now = Local::now();
     let at9 = |days: i64| {
@@ -218,11 +219,11 @@ fn remind_times() -> Vec<(&'static str, i64)> {
     let monday = 7 - now.weekday().num_days_from_monday() as i64;
     let t = now.timestamp();
     vec![
-        ("Em 20 minutos", t + 20 * 60),
-        ("Em 1 hora", t + 3600),
-        ("Em 3 horas", t + 3 * 3600),
-        ("Amanhã", at9(1)),
-        ("Na próxima semana", at9(monday)),
+        (tr("In 20 minutes", "Em 20 minutos"), t + 20 * 60),
+        (tr("In 1 hour", "Em 1 hora"), t + 3600),
+        (tr("In 3 hours", "Em 3 horas"), t + 3 * 3600),
+        (tr("Tomorrow", "Amanhã"), at9(1)),
+        (tr("Next week", "Na próxima semana"), at9(monday)),
     ]
 }
 
@@ -415,40 +416,40 @@ impl App {
         let saved = self.edit.saved.contains(&(chan.clone(), ts.clone()));
         let pinned = m.pinned_to.contains(&chan);
 
-        let mut items = vec![(entry(SMILE, "Adicionar reação…", "R"), it(Act::React))];
+        let mut items = vec![(entry(SMILE, tr("Add reaction…", "Adicionar reação…"), "R"), it(Act::React))];
         if !thread {
-            items.push((entry(COMMENTS, "Responder na conversa", "T"), it(Act::Thread)));
+            items.push((entry(COMMENTS, tr("Reply in thread", "Responder na conversa"), "T"), it(Act::Thread)));
         }
-        items.push((entry(SHARE, "Encaminhar mensagem…", "F"), it(Act::Forward)));
+        items.push((entry(SHARE, tr("Forward message…", "Encaminhar mensagem…"), "F"), it(Act::Forward)));
         items.push(if saved {
-            (entry(BOOKMARK_ON, "Remover dos itens salvos", "A"), it(Act::Save(false)))
+            (entry(BOOKMARK_ON, tr("Remove from saved items", "Remover dos itens salvos"), "A"), it(Act::Save(false)))
         } else {
-            (entry(BOOKMARK, "Salvar para depois", "A"), it(Act::Save(true)))
+            (entry(BOOKMARK, tr("Save for later", "Salvar para depois"), "A"), it(Act::Save(true)))
         });
         if mine {
-            items.extend([sep(), (entry(PENCIL, "Editar mensagem", "E"), it(Act::Edit))]);
+            items.extend([sep(), (entry(PENCIL, tr("Edit message", "Editar mensagem"), "E"), it(Act::Edit))]);
         }
         items.push(sep());
         if !thread {
-            items.push((entry(ENVELOPE, "Marcar como não lida", "U"), it(Act::Unread)));
+            items.push((entry(ENVELOPE, tr("Mark unread", "Marcar como não lida"), "U"), it(Act::Unread)));
         }
-        items.push((entry(CLOCK, "Lembrar-me", "›"), it(Act::Remind)));
+        items.push((entry(CLOCK, tr("Remind me", "Lembrar-me"), "›"), it(Act::Remind)));
         if let Some(parent) = &m.thread_ts {
             let on = msgs.iter().chain(self.messages.get(&chan).into_iter().flatten()).find(|p| p.ts == *parent).is_some_and(|p| p.subscribed);
             items.push(if on {
-                (entry(BELL_OFF, "Desativar notificações de respostas", ""), it(Act::Subscribe(false)))
+                (entry(BELL_OFF, tr("Turn off notifications for replies", "Desativar notificações de respostas"), ""), it(Act::Subscribe(false)))
             } else {
-                (entry(BELL, "Ativar notificações de respostas", ""), it(Act::Subscribe(true)))
+                (entry(BELL, tr("Get notified about new replies", "Ativar notificações de respostas"), ""), it(Act::Subscribe(true)))
             });
         }
         items.extend([
             sep(),
-            (entry(PIN, if pinned { "Desafixar da conversa" } else { "Fixar na conversa" }, ""), it(Act::Pin(!pinned))),
-            (entry(LINK, "Copiar link", "L"), it(Act::CopyLink)),
-            (entry(COPY, "Copiar mensagem", "Ctrl+C"), it(Act::CopyText)),
+            (entry(PIN, if pinned { tr("Unpin from conversation", "Desafixar da conversa") } else { tr("Pin to conversation", "Fixar na conversa") }, ""), it(Act::Pin(!pinned))),
+            (entry(LINK, tr("Copy link", "Copiar link"), "L"), it(Act::CopyLink)),
+            (entry(COPY, tr("Copy message", "Copiar mensagem"), "Ctrl+C"), it(Act::CopyText)),
         ]);
         if mine {
-            items.extend([sep(), (entry(TRASH, "Excluir mensagem…", "Del"), it(Act::Delete))]);
+            items.extend([sep(), (entry(TRASH, tr("Delete message…", "Excluir mensagem…"), "Del"), it(Act::Delete))]);
         }
         self.edit.selected = Some(Sel { thread, ts });
         self.focus = if thread { Focus::Thread } else { Focus::Input };
@@ -503,7 +504,7 @@ impl App {
                 let text = self.permalink(&it.chan, &m);
                 self.spawn(move |s| {
                     let res = s.call("reminders.add", &[("text", &text), ("time", &when.to_string())]).map(|_| ());
-                    Event::Edit(Ev::Done { ok: "lembrete criado".into(), res })
+                    Event::Edit(Ev::Done { ok: tr("reminder created", "lembrete criado").into(), res })
                 });
             }
             Act::Subscribe(on) => {
@@ -514,22 +515,22 @@ impl App {
             Act::CopyLink => {
                 let url = self.permalink(&it.chan, &m);
                 self.copy(&url);
-                self.status = "link copiado".into();
+                self.status = tr("link copied", "link copiado").into();
             }
             Act::CopyText => {
                 let names = Names { users: &self.users.names, chans: &self.chans, emoji: &self.emoji.custom };
                 let (text, _) = typed(&m.text, &names);
                 self.copy(&text);
-                self.status = "mensagem copiada".into();
+                self.status = tr("message copied", "mensagem copiada").into();
             }
             Act::Delete => {
                 if !self.is_mine(&m) {
-                    self.status = "só dá para excluir as suas mensagens".into();
+                    self.status = tr("you can only delete your own messages", "só dá para excluir as suas mensagens").into();
                     return true;
                 }
                 let items = vec![
-                    (entry(TRASH, "Excluir? Enter confirma", "Enter"), item(Act::DeleteNow)),
-                    (entry(" ", "Cancelar", "Esc"), item(Act::Cancel)),
+                    (entry(TRASH, tr("Delete? Enter confirms", "Excluir? Enter confirma"), "Enter"), item(Act::DeleteNow)),
+                    (entry(" ", tr("Cancel", "Cancelar"), "Esc"), item(Act::Cancel)),
                 ];
                 self.submenu(&it, items);
                 return false;
@@ -541,7 +542,7 @@ impl App {
 
     fn start_edit(&mut self, it: Item, m: &Message) {
         if !self.is_mine(m) {
-            self.status = "só dá para editar as suas mensagens".into();
+            self.status = tr("you can only edit your own messages", "só dá para editar as suas mensagens").into();
             return;
         }
         self.cancel_edit();
@@ -636,7 +637,7 @@ impl App {
         } else {
             self.edit.saved.remove(&key);
         }
-        self.status = if on { "salva para depois" } else { "removida dos itens salvos" }.into();
+        self.status = if on { tr("saved for later", "salva para depois") } else { tr("removed from saved items", "removida dos itens salvos") }.into();
         self.spawn(move |s| {
             let method = if on { "saved.add" } else { "saved.delete" };
             let res = s.call(method, &[("item_type", "message"), ("item_id", &chan), ("ts", &ts)]).map(|_| ());
@@ -675,7 +676,7 @@ impl App {
                     });
                 }
             },
-            Ev::Deleted { res: Ok(()), .. } => self.status = "mensagem excluída".into(),
+            Ev::Deleted { res: Ok(()), .. } => self.status = tr("message deleted", "mensagem excluída").into(),
             Ev::Deleted { chan, old, res: Err(e) } => {
                 self.error = Some(e);
                 if let Some(t) = self.thread.as_mut().filter(|t| t.chan == chan && old.thread_ts.as_ref() == Some(&t.ts)) {
@@ -688,8 +689,8 @@ impl App {
                 }
             }
             Ev::Pinned { res: Ok(()), on, chan, .. } => {
-                self.status = if on { "fixada na conversa" } else { "desafixada" }.into();
-                // The "Fixados" tab counts what Slack lists.
+                self.status = if on { tr("pinned to the conversation", "fixada na conversa") } else { tr("unpinned", "desafixada") }.into();
+                // The "Pins" tab counts what Slack lists.
                 self.refresh_pins(&chan);
             }
             Ev::Pinned { chan, ts, on, res: Err(e) } => {
@@ -711,14 +712,19 @@ impl App {
                 }
             }
             Ev::Subscribed { res: Ok(()), on, .. } => {
-                self.status = if on { "notificações de respostas ativadas" } else { "notificações de respostas desativadas" }.into()
+                self.status = if on {
+                    tr("reply notifications on", "notificações de respostas ativadas")
+                } else {
+                    tr("reply notifications off", "notificações de respostas desativadas")
+                }
+                .into()
             }
             Ev::Subscribed { chan, ts, on, res: Err(e) } => {
                 self.error = Some(e);
                 self.each_copy(&chan, &ts, |m| m.subscribed = !on);
             }
             Ev::Unread(Ok(())) => {
-                self.status = "marcada como não lida".into();
+                self.status = tr("marked unread", "marcada como não lida").into();
                 self.spawn(|s| Event::Counts(s.counts()));
             }
             Ev::Done { ok, res: Ok(()) } => self.status = ok,
@@ -764,7 +770,7 @@ impl App {
         };
         self.spawn(move |s| {
             let res = s.post(&to, &url).map(|_| ());
-            Event::Edit(Ev::Done { ok: format!("encaminhada para {name}"), res })
+            Event::Edit(Ev::Done { ok: trf!("forwarded to {name}", "encaminhada para {name}"), res })
         });
     }
 
@@ -834,12 +840,12 @@ pub fn reveal(scroll: usize, total: usize, height: usize, lines: Range<usize>) -
     }
 }
 
-/// "Editando mensagem" on the border of the box doing an edit.
+/// "Editing message" on the border of the box doing an edit.
 pub fn title(app: &App, thread: bool) -> Option<Line<'static>> {
     app.edit.editing.as_ref().filter(|e| e.thread == thread)?;
     Some(Line::from(vec![
-        Span::styled(" Editando mensagem ", Style::new().fg(Color::Yellow).bold()),
-        Span::styled("Esc cancela · Enter salva ", dim()),
+        Span::styled(tr(" Editing message ", " Editando mensagem "), Style::new().fg(Color::Yellow).bold()),
+        Span::styled(tr("Esc cancels · Enter saves ", "Esc cancela · Enter salva "), dim()),
     ]))
 }
 
@@ -847,23 +853,23 @@ pub fn title(app: &App, thread: bool) -> Option<Line<'static>> {
 pub fn hint(app: &App) -> Option<String> {
     let thread = app.focused_pane()?;
     if app.edit.editing.as_ref().is_some_and(|e| e.thread == thread) {
-        return Some("Enter salvar · Esc cancelar · Shift+Enter nova linha".into());
+        return Some(tr("Enter save · Esc cancel · Shift+Enter new line", "Enter salvar · Esc cancelar · Shift+Enter nova linha").into());
     }
     let sel = app.edit.selected.as_ref().filter(|s| s.thread == thread)?;
     let mine = app.pane(thread)?.1.iter().find(|m| m.ts == sel.ts).is_some_and(|m| app.is_mine(m));
     let mut keys = Vec::new();
     if mine {
-        keys.push("E editar");
+        keys.push(tr("E edit", "E editar"));
     }
-    keys.push("R reagir");
+    keys.push(tr("R react", "R reagir"));
     if !thread {
-        keys.extend(["T responder", "U não lida"]);
+        keys.extend([tr("T reply", "T responder"), tr("U unread", "U não lida")]);
     }
-    keys.extend(["F encaminhar", "A salvar", "L link"]);
+    keys.extend([tr("F forward", "F encaminhar"), tr("A save", "A salvar"), "L link"]);
     if mine {
-        keys.push("Del excluir");
+        keys.push(tr("Del delete", "Del excluir"));
     }
-    keys.extend(["M menu", "Esc cancelar"]);
+    keys.extend(["M menu", tr("Esc cancel", "Esc cancelar")]);
     Some(keys.join(" · "))
 }
 
@@ -878,7 +884,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let (w, h) = (56.min(area.width), (ROWS as u16 + 6).min(area.height));
     let rect = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 3, w, h);
     f.render_widget(Clear, rect);
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(dim()).title(Line::from(" Encaminhar mensagem ").bold());
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(dim()).title(Line::from(tr(" Forward message ", " Encaminhar mensagem ")).bold());
     let inner = block.inner(rect);
     f.render_widget(block, rect);
     app.edit.dialog = rect;
@@ -886,9 +892,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         return;
     }
     let width = inner.width as usize;
-    let to = Line::from(vec![Span::styled(" Para: ", dim()), Span::raw(truncate(&query, width.saturating_sub(8)))]);
+    let label = tr(" To: ", " Para: ");
+    let to = Line::from(vec![Span::styled(label, dim()), Span::raw(truncate(&query, width.saturating_sub(8)))]);
     f.render_widget(Paragraph::new(to), Rect::new(inner.x, inner.y, inner.width, 1));
-    f.set_cursor_position((inner.x + 7 + query.chars().count().min(width.saturating_sub(8)) as u16, inner.y));
+    f.set_cursor_position((inner.x + label.chars().count() as u16 + query.chars().count().min(width.saturating_sub(8)) as u16, inner.y));
     for (n, &i) in targets.iter().enumerate() {
         let y = inner.y + 2 + n as u16;
         if y >= inner.bottom().saturating_sub(1) {
@@ -901,8 +908,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         app.edit.rows.push((row, n));
     }
     if targets.is_empty() {
-        f.render_widget(Paragraph::new(" nenhuma conversa").style(dim()), Rect::new(inner.x, inner.y + 2, inner.width, 1));
+        f.render_widget(Paragraph::new(tr(" no conversations", " nenhuma conversa")).style(dim()), Rect::new(inner.x, inner.y + 2, inner.width, 1));
     }
     let foot = Rect::new(inner.x, inner.bottom() - 1, inner.width, 1);
-    f.render_widget(Paragraph::new(" Enter envia o link · Esc cancela").style(dim()), foot);
+    f.render_widget(Paragraph::new(tr(" Enter sends the link · Esc cancels", " Enter envia o link · Esc cancela")).style(dim()), foot);
 }

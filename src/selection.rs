@@ -1,5 +1,6 @@
 //! Messages picked by dragging the mouse over a pane, copied as Slack copies
-//! them: `Nome  [21h29]` over each header's text, `[21h30]texto` below it.
+//! them: `Name  [9:29 PM]` over each header's text, `[9:30 PM]text` below it
+//! (`[21h29]` in Portuguese).
 
 use crate::app::App;
 use crate::slack::Message;
@@ -118,6 +119,10 @@ impl App {
         let n = b - a + 1;
         let text = out.trim_end().to_string();
         self.copy(&text);
-        self.status = if n == 1 { "mensagem copiada".into() } else { format!("{n} mensagens copiadas") };
+        self.status = if n == 1 {
+            crate::i18n::tr("message copied", "mensagem copiada").into()
+        } else {
+            trf!("{n} messages copied", "{n} mensagens copiadas")
+        };
     }
 }

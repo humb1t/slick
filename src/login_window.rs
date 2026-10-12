@@ -121,11 +121,11 @@ pub fn run() -> ! {
     let event_loop = EventLoopBuilder::<String>::with_user_event().build();
     let proxy = event_loop.create_proxy();
     let window = WindowBuilder::new()
-        .with_title("Entrar no slick")
+        .with_title(crate::i18n::tr("Sign in to slick", "Entrar no slick"))
         .with_window_icon(Icon::from_rgba(ICON.to_vec(), 64, 64).ok())
         .with_inner_size(tao::dpi::LogicalSize::new(520.0, 760.0))
         .build(&event_loop)
-        .expect("janela");
+        .expect("window");
 
     let ws = workspace();
     let mut context = WebContext::new(Some(data_dir()));

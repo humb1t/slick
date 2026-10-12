@@ -1,3 +1,5 @@
+#[macro_use]
+mod i18n;
 mod account;
 mod app;
 mod blocks;
@@ -77,13 +79,24 @@ fn parse_osc4(text: &str, i: u8) -> Option<[u8; 3]> {
     Some(rgb)
 }
 
-const USAGE: &str = "\
+fn usage() -> &'static str {
+    i18n::tr(
+        "\
+usage:
+  slick                    open slick
+  slick login [workspace]  sign in to Slack through the sign-in window
+  slick update             look for and install a new version
+  slick --version          show the version
+",
+        "\
 uso:
   slick                    abre o slick
   slick login [workspace]  entra no Slack pela janela de login
   slick update             procura e instala a versão nova
   slick --version          mostra a versão
-";
+",
+    )
+}
 
 /// "slick 0.1.0 (abc1234)", the commit when built from git.
 fn version() -> String {
@@ -95,12 +108,13 @@ fn version() -> String {
 }
 
 fn main() {
+    i18n::init();
     match std::env::args().nth(1).as_deref() {
         Some(login_window::ARG) => login_window::run(),
         Some("-V" | "--version") => return println!("{}", version()),
-        Some("-h" | "--help") => return print!("{USAGE}"),
+        Some("-h" | "--help") => return print!("{}", usage()),
         Some(a) if a.starts_with('-') => {
-            eprint!("slick: opção desconhecida {a}\n{USAGE}");
+            eprint!("{}{}", trf!("slick: unknown option {a}\n", "slick: opção desconhecida {a}\n"), usage());
             std::process::exit(2);
         }
         _ => {}
@@ -117,7 +131,7 @@ fn main() {
     {
         use std::io::IsTerminal;
         if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-            eprintln!("slick: precisa de um terminal");
+            eprintln!("{}", i18n::tr("slick: needs a terminal", "slick: precisa de um terminal"));
             std::process::exit(1);
         }
     }
@@ -192,23 +206,24 @@ fn main() {
     ratatui::restore();
     cache::save(app.to_cache());
     if app.restart {
-        eprintln!("não reiniciou: {}", update::restart());
+        eprintln!("{}", trf!("didn't restart: {}", "não reiniciou: {}", update::restart()));
     }
 }
 
 /// `slick login`: the sign-in window, then the session saved to the config.
 fn login_cli() -> i32 {
     let workspace = std::env::args().nth(2).and_then(|w| config::workspace_name(&w)).or_else(config::workspace);
-    eprintln!("Abrindo a janela de login do Slack…");
+    eprintln!("{}", i18n::tr("Opening the Slack sign-in window…", "Abrindo a janela de login do Slack…"));
     let checked = login::window(workspace.as_deref()).and_then(|creds| slack::Slack::new(creds.clone()).auth().map(|me| (me, creds)));
     match checked {
         Ok((me, creds)) => match config::save(&creds, &me.domain) {
             Ok(()) => {
-                eprintln!("Entrou: {} · {}", me.team, me.user);
+                eprintln!("{}", trf!("Signed in: {} · {}", "Entrou: {} · {}", me.team, me.user));
                 0
             }
             Err(e) => {
-                eprintln!("Entrou, mas não salvou {}: {e}", config::path().display());
+                let p = config::path();
+                eprintln!("{}", trf!("Signed in, but didn't save {}: {e}", "Entrou, mas não salvou {}: {e}", p.display()));
                 1
             }
         },

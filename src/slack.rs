@@ -1,5 +1,6 @@
 //! Slack Web API: a blocking client plus the few shapes the app needs.
 
+use crate::i18n::tr;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -237,7 +238,7 @@ impl Slack {
                     if v["ok"].as_bool() == Some(true) {
                         return Ok(v);
                     }
-                    return Err(format!("{method}: {}", v["error"].as_str().unwrap_or("erro desconhecido")));
+                    return Err(format!("{method}: {}", v["error"].as_str().unwrap_or(tr("unknown error", "erro desconhecido"))));
                 }
                 Err(ureq::Error::Status(429, resp)) => {
                     let secs = resp
@@ -291,7 +292,7 @@ impl Slack {
         ["image_132", "image_88", "image_68"]
             .iter()
             .find_map(|k| icon[*k].as_str().map(String::from))
-            .ok_or_else(|| "sem ícone".to_string())
+            .ok_or_else(|| tr("no icon", "sem ícone").to_string())
     }
 
     pub fn profile(&self, uid: &str) -> Res<Profile> {
@@ -339,7 +340,7 @@ impl Slack {
             "png" => "image/png",
             "jpg" | "jpeg" => "image/jpeg",
             "gif" => "image/gif",
-            _ => return Err("a foto precisa ser JPG, PNG ou GIF".into()),
+            _ => return Err(tr("the photo must be a JPG, PNG or GIF", "a foto precisa ser JPG, PNG ou GIF").into()),
         };
         let file = path.file_name().map(|n| n.to_string_lossy().replace('"', "")).unwrap_or_else(|| "photo".into());
         let boundary = format!("slick{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
@@ -360,7 +361,7 @@ impl Slack {
         let v: Value = resp.into_json().map_err(|e| e.to_string())?;
         match v["ok"].as_bool() {
             Some(true) => Ok(()),
-            _ => Err(format!("users.setPhoto: {}", v["error"].as_str().unwrap_or("erro desconhecido"))),
+            _ => Err(format!("users.setPhoto: {}", v["error"].as_str().unwrap_or(tr("unknown error", "erro desconhecido")))),
         }
     }
 
@@ -639,7 +640,7 @@ impl Slack {
         let resp = req.call().map_err(|e| e.to_string())?;
         // A session Slack no longer accepts gets its sign-in page, not the file.
         if !html_ok && resp.content_type() == "text/html" {
-            return Err("o Slack não entregou o arquivo (sessão expirada?)".into());
+            return Err(tr("Slack didn't hand over the file (session expired?)", "o Slack não entregou o arquivo (sessão expirada?)").into());
         }
         std::io::copy(&mut resp.into_reader(), out).map_err(|e| e.to_string())
     }
@@ -713,7 +714,7 @@ fn parse_file(f: &Value) -> File {
         .unwrap_or((f["original_w"].as_u64(), f["original_h"].as_u64()));
     File {
         id: str_of(&f["id"]),
-        name: f["name"].as_str().or(f["title"].as_str()).unwrap_or("arquivo").to_string(),
+        name: f["name"].as_str().or(f["title"].as_str()).unwrap_or(tr("file", "arquivo")).to_string(),
         thumb,
         full: f["url_private"].as_str().map(String::from),
         w: w.unwrap_or(0) as u32,

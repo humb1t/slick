@@ -2,6 +2,7 @@
 //! or more people, or a new channel, each in a dialog over everything else.
 
 use crate::app::{Action, App, Event, ImgRef, Menu};
+use crate::i18n::tr;
 use crate::slack::{Conversation, Count, Kind, Res};
 use crate::ui::{dim, draw_image, truncate};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -93,17 +94,22 @@ pub fn normalize(name: &str) -> String {
 fn friendly(e: &str) -> String {
     let code = e.rsplit(": ").next().unwrap_or(e);
     let text = match code {
-        "name_taken" => "Já existe um canal com esse nome.",
-        "invalid_name" | "invalid_name_specials" | "invalid_name_punctuation" => {
-            "Use só letras minúsculas, números, hífens e sublinhados."
+        "name_taken" => tr("A channel with that name already exists.", "Já existe um canal com esse nome."),
+        "invalid_name" | "invalid_name_specials" | "invalid_name_punctuation" => tr(
+            "Use only lowercase letters, numbers, hyphens and underscores.",
+            "Use só letras minúsculas, números, hífens e sublinhados.",
+        ),
+        "invalid_name_maxlength" => tr("The name can have at most 80 characters.", "O nome pode ter no máximo 80 caracteres."),
+        "invalid_name_required" => tr("Give the channel a name.", "Dê um nome ao canal."),
+        "restricted_action" | "missing_scope" | "not_allowed_token_type" => {
+            tr("The workspace doesn't let you do that.", "O workspace não deixa você fazer isso.")
         }
-        "invalid_name_maxlength" => "O nome pode ter no máximo 80 caracteres.",
-        "invalid_name_required" => "Dê um nome ao canal.",
-        "restricted_action" | "missing_scope" | "not_allowed_token_type" => "O workspace não deixa você fazer isso.",
-        "user_not_found" | "user_disabled" => "Uma das pessoas não existe mais ou foi desativada.",
-        "too_many_users" => "Uma conversa em grupo tem no máximo 8 outras pessoas.",
-        "not_enough_users" => "Escolha pelo menos uma pessoa.",
-        "cannot_dm_bot" => "Não dá para abrir conversa com esse app.",
+        "user_not_found" | "user_disabled" => {
+            tr("One of the people no longer exists or was deactivated.", "Uma das pessoas não existe mais ou foi desativada.")
+        }
+        "too_many_users" => tr("A group conversation has at most 8 other people.", "Uma conversa em grupo tem no máximo 8 outras pessoas."),
+        "not_enough_users" => tr("Pick at least one person.", "Escolha pelo menos uma pessoa."),
+        "cannot_dm_bot" => tr("You can't open a conversation with this app.", "Não dá para abrir conversa com esse app."),
         _ => return e.to_string(),
     };
     text.to_string()
@@ -158,7 +164,10 @@ impl App {
     /// The small menu under the button.
     pub fn open_compose_menu(&mut self) {
         let b = self.areas.compose.button;
-        let items = vec![("Nova mensagem".to_string(), Action::NewMessage), ("Criar canal".to_string(), Action::NewChannel)];
+        let items = vec![
+            (tr("New message", "Nova mensagem").to_string(), Action::NewMessage),
+            (tr("Create channel", "Criar canal").to_string(), Action::NewChannel),
+        ];
         self.menu = Some(Menu { x: b.right().saturating_sub(17), y: b.bottom(), items, sel: 0, parent: None });
         self.dirty = true;
     }
@@ -287,7 +296,7 @@ impl App {
     fn submit_message(&mut self) {
         let Some(Dialog::Message(m)) = self.dialog.as_mut() else { return };
         if m.to.is_empty() {
-            m.error = Some("Escolha pelo menos uma pessoa.".into());
+            m.error = Some(tr("Pick at least one person.", "Escolha pelo menos uma pessoa.").into());
             return;
         }
         m.busy = true;
@@ -300,7 +309,7 @@ impl App {
         let Some(Dialog::Channel(c)) = self.dialog.as_mut() else { return };
         let name = normalize(&c.name);
         if name.is_empty() {
-            c.error = Some("Dê um nome ao canal.".into());
+            c.error = Some(tr("Give the channel a name.", "Dê um nome ao canal.").into());
             c.field = 0;
             return;
         }
@@ -347,7 +356,7 @@ impl App {
             self.resort();
         }
         if let Some(w) = warning {
-            self.error = Some(format!("canal criado, mas a descrição não foi salva: {w}"));
+            self.error = Some(trf!("channel created, but the description wasn't saved: {w}", "canal criado, mas a descrição não foi salva: {w}"));
         }
         if self.dialog.take().is_some() {
             self.open(id);
@@ -427,7 +436,7 @@ fn name_of(app: &App, uid: &str) -> String {
 
 fn pick(m: &mut NewMessage, id: &str) {
     if m.to.len() >= MAX_PEOPLE {
-        m.error = Some(format!("No máximo {MAX_PEOPLE} pessoas numa conversa."));
+        m.error = Some(trf!("At most {MAX_PEOPLE} people in a conversation.", "No máximo {MAX_PEOPLE} pessoas numa conversa."));
         return;
     }
     m.to.push(id.to_string());
@@ -487,7 +496,7 @@ fn draw_message(f: &mut Frame, app: &mut App) {
     let (query, to, busy, error) = (d.query.clone(), d.to.clone(), d.busy, d.error.clone());
     let sel = d.sel.min(picks.len().saturating_sub(1));
     let area = f.area();
-    let inner = frame(f, app, "Nova mensagem", 64.min(area.width.saturating_sub(4)), 22.min(area.height.saturating_sub(2)));
+    let inner = frame(f, app, tr("New message", "Nova mensagem"), 64.min(area.width.saturating_sub(4)), 22.min(area.height.saturating_sub(2)));
     if inner.width < 24 || inner.height < 8 {
         return;
     }
@@ -496,7 +505,7 @@ fn draw_message(f: &mut Frame, app: &mut App) {
     let width = inner.width as usize;
     const LEAD: usize = 6;
     let mut lines = Vec::new();
-    let mut spans = vec![Span::styled("Para: ", dim())];
+    let mut spans = vec![Span::styled(tr("To: ", "Para: "), dim())];
     let (mut x, mut row) = (LEAD, 0u16);
     for (i, uid) in to.iter().enumerate() {
         let label = format!(" {} × ", truncate(&name_of(app, uid), width.saturating_sub(LEAD + 4)));
@@ -517,7 +526,7 @@ fn draw_message(f: &mut Frame, app: &mut App) {
     }
     let cursor = (inner.x + (x + shown.width()) as u16, inner.y + row);
     if query.is_empty() && to.is_empty() {
-        spans.push(Span::styled("digite um nome", dim()));
+        spans.push(Span::styled(tr("type a name", "digite um nome"), dim()));
     } else {
         spans.push(Span::raw(shown));
     }
@@ -534,7 +543,7 @@ fn draw_message(f: &mut Frame, app: &mut App) {
     let list_h = inner.bottom().saturating_sub(top + 3) as usize;
     let photos = app.sidebar_avatars && app.picker.is_some();
     if picks.is_empty() {
-        let text = if app.users.names.is_empty() { "carregando pessoas…" } else { "Ninguém encontrado" };
+        let text = if app.users.names.is_empty() { tr("loading people…", "carregando pessoas…") } else { tr("No one found", "Ninguém encontrado") };
         f.render_widget(Paragraph::new(format!(" {text}")).style(dim()), Rect::new(inner.x, top, inner.width, 1));
     }
     let handles: HashMap<String, String> = app.handles().into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
@@ -569,8 +578,12 @@ fn draw_message(f: &mut Frame, app: &mut App) {
         }
     }
 
-    let hint = if to.is_empty() { "Enter adiciona · Esc fecha" } else { "Enter adiciona · Ctrl+Enter abre · Esc fecha" };
-    let button = if busy { " Abrindo… " } else { " Abrir conversa " };
+    let hint = if to.is_empty() {
+        tr("Enter adds · Esc closes", "Enter adiciona · Esc fecha")
+    } else {
+        tr("Enter adds · Ctrl+Enter opens · Esc closes", "Enter adiciona · Ctrl+Enter abre · Esc fecha")
+    };
+    let button = if busy { tr(" Opening… ", " Abrindo… ") } else { tr(" Open conversation ", " Abrir conversa ") };
     footer(f, app, inner, error.as_deref(), hint, button, !to.is_empty() && !busy);
 }
 
@@ -578,7 +591,7 @@ fn draw_channel(f: &mut Frame, app: &mut App) {
     let Some(Dialog::Channel(c)) = &app.dialog else { return };
     let (name, purpose, private, field, busy, error) = (c.name.clone(), c.purpose.clone(), c.private, c.field, c.busy, c.error.clone());
     let area = f.area();
-    let inner = frame(f, app, "Criar canal", 60.min(area.width.saturating_sub(4)), 15.min(area.height.saturating_sub(2)));
+    let inner = frame(f, app, tr("Create channel", "Criar canal"), 60.min(area.width.saturating_sub(4)), 15.min(area.height.saturating_sub(2)));
     if inner.width < 30 || inner.height < 11 {
         return;
     }
@@ -598,16 +611,20 @@ fn draw_channel(f: &mut Frame, app: &mut App) {
         Span::styled(truncate(&format!("{sign}{normalized}"), room), Style::new().fg(Color::Cyan))
     };
     let (toggle, toggle_style) = if private { (TOGGLE_ON, Style::new().fg(Color::Green)) } else { (TOGGLE_OFF, dim()) };
-    let about = if private { "só quem for convidado vê o canal" } else { "qualquer pessoa do workspace pode entrar" };
+    let about = if private {
+        tr("only people who are invited can see the channel", "só quem for convidado vê o canal")
+    } else {
+        tr("anyone in the workspace can join", "qualquer pessoa do workspace pode entrar")
+    };
     let pad = Span::raw(" ".repeat(LABEL_W + 2));
     let lines = vec![
         Line::from(""),
-        Line::from(vec![marker(0), label("Nome"), value(&name, "ex.: projeto-novo")]),
+        Line::from(vec![marker(0), label(tr("Name", "Nome")), value(&name, tr("e.g. new-project", "ex.: projeto-novo"))]),
         Line::from(vec![pad.clone(), preview]),
         Line::from(""),
-        Line::from(vec![marker(1), label("Privado"), Span::styled(toggle, toggle_style), Span::raw(" "), Span::styled(truncate(about, room.saturating_sub(2)), dim())]),
+        Line::from(vec![marker(1), label(tr("Private", "Privado")), Span::styled(toggle, toggle_style), Span::raw(" "), Span::styled(truncate(about, room.saturating_sub(2)), dim())]),
         Line::from(""),
-        Line::from(vec![marker(2), label("Descrição"), value(&purpose, "(opcional)")]),
+        Line::from(vec![marker(2), label(tr("Description", "Descrição")), value(&purpose, tr("(optional)", "(opcional)"))]),
     ];
     f.render_widget(Paragraph::new(lines), Rect::new(inner.x, inner.y, inner.width, 7));
     for (f_idx, dy) in [(0, 1), (1, 4), (2, 6)] {
@@ -622,7 +639,7 @@ fn draw_channel(f: &mut Frame, app: &mut App) {
         f.set_cursor_position((inner.x + (LABEL_W + 2 + tail(s, room).width()) as u16, inner.y + dy));
     }
 
-    let hint = "Tab campos · Espaço alterna · Enter cria · Esc fecha";
-    let button = if busy { " Criando… " } else { " Criar " };
+    let hint = tr("Tab fields · Space toggles · Enter creates · Esc closes", "Tab campos · Espaço alterna · Enter cria · Esc fecha");
+    let button = if busy { tr(" Creating… ", " Criando… ") } else { tr(" Create ", " Criar ") };
     footer(f, app, inner, error.as_deref(), hint, button, !normalized.is_empty() && !busy);
 }

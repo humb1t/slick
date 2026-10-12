@@ -5,6 +5,7 @@ use crate::editor::Editor;
 use crate::emoji;
 use crate::config;
 use crate::files;
+use crate::i18n::tr;
 use crate::slack::{AuthInfo, Boot, Conversation, Count, Creds, File, Kind, Message, Res, Profile, Section, Slack, Users, HISTORY_LIMIT};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use image::DynamicImage;
@@ -264,9 +265,9 @@ pub struct Areas {
     pub profile_star: Rect,
     pub profile_vip: Rect,
     pub profile_id: Rect,
-    /// The e-mail address, click to copy.
+    /// The email address, click to copy.
     pub profile_email: Rect,
-    /// "Editar", on your own profile.
+    /// "Edit", on your own profile.
     pub profile_edit: Rect,
     /// The workspace name (shows the address) and the address itself.
     pub team_name: Rect,
@@ -481,7 +482,7 @@ impl App {
             compose_hover: false,
             account: Default::default(),
             owner: cache.owner,
-            status: "conectando…".into(),
+            status: tr("connecting…", "conectando…").into(),
             update: None,
             restart: false,
             error: None,
@@ -570,7 +571,7 @@ impl App {
                 let uid = c.user.as_deref().unwrap_or("");
                 let name = self.users.names.get(uid).map(String::as_str).unwrap_or(uid);
                 if self.is_me(uid) {
-                    format!("{name} (você)")
+                    trf!("{name} (you)", "{name} (você)")
                 } else {
                     name.to_string()
                 }
@@ -775,9 +776,9 @@ impl App {
                 continue;
             }
             let title = match s.kind.as_str() {
-                "stars" => "Favoritos".to_string(),
-                "direct_messages" => "Mensagens diretas".to_string(),
-                "channels" => "Canais".to_string(),
+                "stars" => tr("Starred", "Favoritos").to_string(),
+                "direct_messages" => tr("Direct messages", "Mensagens diretas").to_string(),
+                "channels" => tr("Channels", "Canais").to_string(),
                 "recent_apps" => "Apps".to_string(),
                 _ => s.name.clone(),
             };
@@ -1055,9 +1056,9 @@ impl App {
     /// Sections a conversation can be moved to, in sidebar order.
     fn section_choices(&self) -> Vec<(String, String)> {
         let names = |s: &Section| match s.kind.as_str() {
-            "stars" => Some("Favoritos".to_string()),
-            "direct_messages" => Some("Mensagens diretas".to_string()),
-            "channels" => Some("Canais".to_string()),
+            "stars" => Some(tr("Starred", "Favoritos").to_string()),
+            "direct_messages" => Some(tr("Direct messages", "Mensagens diretas").to_string()),
+            "channels" => Some(tr("Channels", "Canais").to_string()),
             "standard" => Some(s.name.clone()),
             _ => None,
         };
@@ -1206,43 +1207,51 @@ impl App {
             let _ = write!(out, "\x1b]52;c;{}\x07", base64(text.as_bytes()));
             let _ = out.flush();
         }
-        self.status = "copiado".into();
+        self.status = tr("copied", "copiado").into();
     }
 
     /// The right-click menu for a sidebar row, at a screen position.
     fn open_menu(&mut self, row: usize, x: u16, y: u16) {
         let rows = self.rows();
-        let photos = if self.sidebar_avatars { "Ocultar fotos na lista" } else { "Mostrar fotos na lista" };
+        let photos = if self.sidebar_avatars {
+            tr("Hide photos in the list", "Ocultar fotos na lista")
+        } else {
+            tr("Show photos in the list", "Mostrar fotos na lista")
+        };
         let items: Vec<(String, Action)> = match rows.get(row) {
             Some(Row::Conv(i)) => {
                 let c = &self.convs[*i];
                 let id = c.id.clone();
                 let starred = self.stars.contains(&id);
                 let mut items = vec![
-                    ("Marcar como lida".to_string(), Action::MarkRead(id.clone())),
-                    (if starred { "Remover dos favoritos" } else { "Adicionar aos favoritos" }.to_string(), Action::Star(id.clone(), !starred)),
+                    (tr("Mark as read", "Marcar como lida").to_string(), Action::MarkRead(id.clone())),
+                    (
+                        if starred { tr("Remove from starred", "Remover dos favoritos") } else { tr("Star conversation", "Adicionar aos favoritos") }
+                            .to_string(),
+                        Action::Star(id.clone(), !starred),
+                    ),
                 ];
                 if !self.sections.is_empty() {
-                    items.push(("Mover conversa  ›".to_string(), Action::MoveMenu(id.clone())));
+                    items.push((tr("Move conversation  ›", "Mover conversa  ›").to_string(), Action::MoveMenu(id.clone())));
                 }
                 items.extend([
                     ("".to_string(), Action::Separator),
-                    ("Copiar nome".to_string(), Action::CopyName(self.label(c))),
-                    ("Copiar link".to_string(), Action::CopyLink(self.conv_url(&id))),
-                    ("Abrir no navegador".to_string(), Action::Browser(self.conv_url(&id))),
+                    (tr("Copy name", "Copiar nome").to_string(), Action::CopyName(self.label(c))),
+                    (tr("Copy link", "Copiar link").to_string(), Action::CopyLink(self.conv_url(&id))),
+                    (tr("Open in browser", "Abrir no navegador").to_string(), Action::Browser(self.conv_url(&id))),
                     ("".to_string(), Action::Separator),
                     (photos.to_string(), Action::ToggleAvatars),
                 ]);
                 if matches!(c.kind, Kind::Direct | Kind::Group) {
                     items.push(("".to_string(), Action::Separator));
-                    items.push(("Fechar conversa".to_string(), Action::Close(id)));
+                    items.push((tr("Close conversation", "Fechar conversa").to_string(), Action::Close(id)));
                 }
                 items
             }
             Some(Row::Header { key, collapsed, .. }) => vec![
-                ("Mover seção para cima".to_string(), Action::SectionUp(key.clone())),
-                ("Mover seção para baixo".to_string(), Action::SectionDown(key.clone())),
-                ((if *collapsed { "Expandir" } else { "Recolher" }).to_string(), Action::Collapse(key.clone())),
+                (tr("Move section up", "Mover seção para cima").to_string(), Action::SectionUp(key.clone())),
+                (tr("Move section down", "Mover seção para baixo").to_string(), Action::SectionDown(key.clone())),
+                ((if *collapsed { tr("Expand", "Expandir") } else { tr("Collapse", "Recolher") }).to_string(), Action::Collapse(key.clone())),
                 ("".to_string(), Action::Separator),
                 (photos.to_string(), Action::ToggleAvatars),
             ],
@@ -1365,7 +1374,7 @@ impl App {
             return;
         }
         self.downloads.insert(job.key.clone(), files::State::Saving);
-        self.status = format!("baixando {}…", job.name);
+        self.status = trf!("downloading {}…", "baixando {}…", job.name);
         self.spawn(move |s| Event::Downloaded { res: files::save(s, &job), key: job.key });
     }
 
@@ -1373,19 +1382,19 @@ impl App {
         match click {
             files::Click::Save(job) => self.save_file(job),
             files::Click::OpenWith(job) => {
-                self.status = format!("abrindo {}…", job.name);
+                self.status = trf!("opening {}…", "abrindo {}…", job.name);
                 self.spawn(move |s| Event::Opened(files::cached(s, &job)));
             }
             files::Click::Menu(job, saved) => {
                 let mut items = Vec::new();
                 if let Some(p) = &saved {
-                    items.push(("Abrir".to_string(), Action::File(files::Click::Open(p.clone()))));
-                    items.push(("Mostrar na pasta".to_string(), Action::File(files::Click::Reveal(p.clone()))));
+                    items.push((tr("Open", "Abrir").to_string(), Action::File(files::Click::Open(p.clone()))));
+                    items.push((tr("Show in folder", "Mostrar na pasta").to_string(), Action::File(files::Click::Reveal(p.clone()))));
                 } else if let Some(job) = &job {
-                    items.push(("Abrir no sistema".to_string(), Action::File(files::Click::OpenWith(job.clone()))));
+                    items.push((tr("Open with system app", "Abrir no sistema").to_string(), Action::File(files::Click::OpenWith(job.clone()))));
                 }
                 if let Some(job) = job {
-                    items.push(("Baixar".to_string(), Action::File(files::Click::Save(job))));
+                    items.push((tr("Download", "Baixar").to_string(), Action::File(files::Click::Save(job))));
                 }
                 if !items.is_empty() {
                     self.menu = Some(Menu::new(x, y, items));
@@ -1439,12 +1448,12 @@ impl App {
             Event::Auth(Err(e)) | Event::Users(Err(e)) | Event::Convs(Err(e)) | Event::Stars(Err(e))
                 if is_auth_error(&e) =>
             {
-                return self.open_login(Some("A sessão expirou. Entre de novo.".into()));
+                return self.open_login(Some(tr("The session expired. Sign in again.", "A sessão expirou. Entre de novo.").into()));
             }
             Event::History { res: Err(e), .. } | Event::Sent { res: Err(e), .. } if is_auth_error(&e) => {
                 self.loading.clear();
                 self.polling = false;
-                return self.open_login(Some("A sessão expirou. Entre de novo.".into()));
+                return self.open_login(Some(tr("The session expired. Sign in again.", "A sessão expirou. Entre de novo.").into()));
             }
             ev => ev,
         };
@@ -1555,14 +1564,14 @@ impl App {
                     self.status = String::new();
                     self.open_url(&path.to_string_lossy());
                 }
-                Err(e) => self.error = Some(format!("abrir arquivo: {e}")),
+                Err(e) => self.error = Some(trf!("open file: {e}", "abrir arquivo: {e}")),
             },
             Event::Account(e) => self.on_account(e),
             Event::Update(note) => self.on_update(note),
             Event::Edit(e) => self.on_edit(e),
             Event::Downloaded { key, res } => match res {
                 Ok(path) => {
-                    self.status = format!("✓ salvo em {}", files::pretty(&path));
+                    self.status = trf!("✓ saved to {}", "✓ salvo em {}", files::pretty(&path));
                     self.downloads.insert(key, files::State::Saved(path));
                 }
                 Err(e) => {
@@ -1588,7 +1597,7 @@ impl App {
             self.pins.jump = Some(ts);
             return;
         }
-        self.status = "carregando a mensagem…".into();
+        self.status = tr("loading the message…", "carregando a mensagem…").into();
         self.spawn(move |s| {
             let res = s.around(&chan, &ts);
             Event::Around { chan, ts, res }
@@ -1744,11 +1753,14 @@ impl App {
         } else {
             match config::workspace_name(&l.workspace) {
                 Some(w) => Some(w),
-                None => return l.message = Some("Endereço do workspace inválido (ex.: minhaempresa).".into()),
+                None => {
+                    let msg = tr("Invalid workspace address (e.g. mycompany).", "Endereço do workspace inválido (ex.: minhaempresa).");
+                    return l.message = Some(msg.into());
+                }
             }
         };
         l.checking = true;
-        l.message = Some("Entre na janela de login que abriu…".into());
+        l.message = Some(tr("Sign in through the window that opened…", "Entre na janela de login que abriu…").into());
         let tx = self.tx.clone();
         std::thread::spawn(move || {
             let res = crate::login::window(workspace.as_deref()).and_then(|creds| Slack::new(creds.clone()).auth().map(|me| (me, creds)));
@@ -1761,16 +1773,16 @@ impl App {
         let token = l.token.trim().to_string();
         let cookie = l.cookie.trim().to_string();
         if !token.starts_with("xox") {
-            l.message = Some("O token começa com xoxc- (ou xoxp-).".into());
+            l.message = Some(tr("The token starts with xoxc- (or xoxp-).", "O token começa com xoxc- (ou xoxp-).").into());
             return;
         }
         if token.starts_with("xoxc-") && cookie.is_empty() {
-            l.message = Some("Token xoxc- precisa do cookie d (xoxd-…).".into());
+            l.message = Some(tr("An xoxc- token needs the d cookie (xoxd-…).", "Token xoxc- precisa do cookie d (xoxd-…).").into());
             l.field = 1;
             return;
         }
         l.checking = true;
-        l.message = Some("Verificando…".into());
+        l.message = Some(tr("Checking…", "Verificando…").into());
         let creds = Creds { token, cookie: (!cookie.is_empty()).then_some(cookie) };
         std::thread::spawn({
             let tx = self.tx.clone();
@@ -1785,7 +1797,7 @@ impl App {
         match res {
             Ok((me, creds)) => {
                 if let Err(e) = config::save(&creds, &me.domain) {
-                    self.error = Some(format!("não salvou o config: {e}"));
+                    self.error = Some(trf!("didn't save the config: {e}", "não salvou o config: {e}"));
                 }
                 self.slack.set_creds(creds);
                 self.login = None;
@@ -1800,17 +1812,21 @@ impl App {
             Err(e) => {
                 if let Some(l) = self.login.as_mut() {
                     l.checking = false;
-                    l.message = Some(if is_auth_error(&e) { "O Slack recusou: confira o token e o cookie.".into() } else { e });
+                    l.message = Some(if is_auth_error(&e) {
+                        tr("Slack refused: check the token and the cookie.", "O Slack recusou: confira o token e o cookie.").into()
+                    } else {
+                        e
+                    });
                 }
             }
         }
     }
 
-    /// "Sair": the session is forgotten with everything of the account,
+    /// "Sign out": the session is forgotten with everything of the account,
     /// as when another account signs in, and the login screen opens.
     pub(crate) fn logout(&mut self) {
         if let Err(e) = config::logout() {
-            self.error = Some(format!("não salvou o config: {e}"));
+            self.error = Some(trf!("didn't save the config: {e}", "não salvou o config: {e}"));
         }
         self.slack.set_creds(Creds::default());
         self.me = None;
@@ -1835,7 +1851,7 @@ impl App {
         self.filter.clear();
         self.focus = Focus::Sidebar;
         self.list.select(None);
-        self.open_login(Some("Você saiu do slick.".into()));
+        self.open_login(Some(tr("You signed out of slick.", "Você saiu do slick.").into()));
     }
 
     /// Pasted text lands in the field it looks like, whatever is focused.
@@ -2299,7 +2315,7 @@ impl App {
                 } else if button == MouseButton::Left && self.areas.team_id.contains(at) {
                     let id = self.me.as_ref().map(|m| m.team_id.clone()).unwrap_or_default();
                     self.copy(&id);
-                    self.status = format!("ID {id} copiado");
+                    self.status = trf!("ID {id} copied", "ID {id} copiado");
                 } else if !self.areas.team_popup.contains(at) {
                     self.team_popup = false;
                 }
@@ -2329,13 +2345,13 @@ impl App {
             }
             if self.areas.profile_id.contains(at) {
                 self.copy(&uid);
-                self.status = format!("ID {uid} copiado");
+                self.status = trf!("ID {uid} copied", "ID {uid} copiado");
                 self.dirty = true;
                 return;
             }
             if let Some(p) = data.as_ref().filter(|p| !p.email.is_empty() && self.areas.profile_email.contains(at)) {
                 self.copy(&p.email);
-                self.status = "E-mail copiado".into();
+                self.status = tr("Email copied", "E-mail copiado").into();
                 self.dirty = true;
                 return;
             }

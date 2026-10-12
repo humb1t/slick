@@ -6,6 +6,7 @@ use crate::app::{Action, App, Focus, Img, ImgRef, Row};
 use crate::emoji;
 use crate::blocks;
 use crate::files;
+use crate::i18n::{self, tr};
 use crate::slack::{File, Kind, Message};
 use crate::text::Names;
 use chrono::{Datelike, Local, TimeZone};
@@ -30,10 +31,6 @@ const STAR_ON: &str = "\u{f005}";
 const STAR_OFF: &str = "\u{f006}";
 pub(crate) const PROFILE: u16 = 44;
 pub(crate) const MAX_INPUT_ROWS: usize = 8;
-const WEEKDAYS: [&str; 7] = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"];
-const MONTHS: [&str; 12] = [
-    "janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
-];
 
 pub(crate) fn dim() -> Style {
     Style::new().fg(Color::DarkGray)
@@ -96,7 +93,7 @@ fn masked(s: &str) -> String {
     }
     let head: String = s.chars().take(10).collect();
     let tail: String = s.chars().skip(n - 4).collect();
-    format!("{head}…{tail}  ({n} caracteres)")
+    trf!("{head}…{tail}  ({n} characters)", "{head}…{tail}  ({n} caracteres)")
 }
 
 /// slick's own four colors, the bars of the mark: left, top, bottom, right.
@@ -257,7 +254,7 @@ fn login(f: &mut Frame, app: &mut App) {
     let workspace = l.workspace.trim();
     let typing = !manual && !l.checking;
     let address = if workspace.is_empty() {
-        Span::styled("seu-workspace", dim())
+        Span::styled(tr("your-workspace", "seu-workspace"), dim())
     } else {
         Span::styled(workspace.to_string(), Style::new().bold())
     };
@@ -269,13 +266,13 @@ fn login(f: &mut Frame, app: &mut App) {
     ]));
     lines.push(Line::from(""));
 
-    let label = if l.checking { "  Aguardando o login…  " } else { "  Entrar no slick  " };
+    let label = if l.checking { tr("  Waiting for sign-in…  ", "  Aguardando o login…  ") } else { tr("  Sign in to slick  ", "  Entrar no slick  ") };
     let button_row = lines.len();
     lines.push(Line::from(Span::styled(label, Style::new().fg(Color::White).bg(SLACK_AUBERGINE).bold())));
     let hint = if workspace.is_empty() {
-        "Enter ou clique · abre o login do Slack numa janela".to_string()
+        tr("Enter or click · opens Slack's sign-in in a window", "Enter ou clique · abre o login do Slack numa janela").to_string()
     } else {
-        "Enter ou clique · entrar com e-mail e senha".to_string()
+        tr("Enter or click · sign in with email and password", "Enter ou clique · entrar com e-mail e senha").to_string()
     };
     lines.push(Line::from(Span::styled(hint, dim())));
     lines.push(Line::from(""));
@@ -316,8 +313,8 @@ fn login(f: &mut Frame, app: &mut App) {
         draw_mark(f, app, rect);
     }
 
-    let back = if app.me.is_some() || !app.convs.is_empty() { "Esc volta · " } else { "" };
-    f.render_widget(Paragraph::new(format!("{back}Ctrl+C sai")).style(dim()).centered(), footer);
+    let back = if app.me.is_some() || !app.convs.is_empty() { tr("Esc back · ", "Esc volta · ") } else { "" };
+    f.render_widget(Paragraph::new(format!("{back}{}", tr("Ctrl+C quits", "Ctrl+C sai"))).style(dim()).centered(), footer);
 }
 
 // ---- sidebar -----------------------------------------------------------
@@ -365,7 +362,7 @@ fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
     let search_line = if filtering || !app.filter.is_empty() {
         Line::from(vec![Span::raw(" 🔍 "), Span::raw(app.filter.clone()), Span::raw("▏")])
     } else {
-        Line::from(" 🔍 Encontrar uma conversa  ^K").style(dim())
+        Line::from(tr(" 🔍 Find a conversation  ^K", " 🔍 Encontrar uma conversa  ^K")).style(dim())
     };
     f.render_widget(Paragraph::new(search_line), search);
     app.areas.search = search;
@@ -674,12 +671,30 @@ fn messages(f: &mut Frame, app: &mut App, area: Rect) {
     let Some(chan) = app.current.clone() else {
         let help = vec![
             Line::from(""),
-            Line::from("  ↑↓ j k    navegar             Enter / clique  abrir ou recolher pasta"),
-            Line::from("  Ctrl+K /  procurar conversa   Shift+J/K       mover pasta (vale no Slack todo)"),
-            Line::from("  PgUp PgDn rolar (ou a roda)   Shift+Enter     nova linha"),
-            Line::from("  Tab       lista ↔ mensagem    clique na imagem  ampliar"),
-            Line::from("  Ctrl+R    recarregar          q / Ctrl+C      sair"),
-            Line::from("  Ctrl+P    sua conta e status  Ctrl+N          nova mensagem ou canal"),
+            Line::from(tr(
+                "  ↑↓ j k    navigate            Enter / click   open or collapse a section",
+                "  ↑↓ j k    navegar             Enter / clique  abrir ou recolher pasta",
+            )),
+            Line::from(tr(
+                "  Ctrl+K /  find a conversation Shift+J/K       move a section (all over Slack)",
+                "  Ctrl+K /  procurar conversa   Shift+J/K       mover pasta (vale no Slack todo)",
+            )),
+            Line::from(tr(
+                "  PgUp PgDn scroll (or wheel)   Shift+Enter     new line",
+                "  PgUp PgDn rolar (ou a roda)   Shift+Enter     nova linha",
+            )),
+            Line::from(tr(
+                "  Tab       list ↔ message      click an image  enlarge",
+                "  Tab       lista ↔ mensagem    clique na imagem  ampliar",
+            )),
+            Line::from(tr(
+                "  Ctrl+R    reload              q / Ctrl+C      quit",
+                "  Ctrl+R    recarregar          q / Ctrl+C      sair",
+            )),
+            Line::from(tr(
+                "  Ctrl+P    account and status  Ctrl+N          new message or channel",
+                "  Ctrl+P    sua conta e status  Ctrl+N          nova mensagem ou canal",
+            )),
         ];
         f.render_widget(Paragraph::new(help).style(dim()), inner);
         return;
@@ -688,7 +703,7 @@ fn messages(f: &mut Frame, app: &mut App, area: Rect) {
         return crate::pins::draw(f, app, inner, &chan);
     }
     let Some(msgs) = app.messages.get(&chan) else {
-        f.render_widget(Paragraph::new("carregando…").style(dim()), inner);
+        f.render_widget(Paragraph::new(tr("loading…", "carregando…")).style(dim()), inner);
         return;
     };
 
@@ -714,10 +729,10 @@ fn messages(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
-/// Slack's "↓ Últimas mensagens": a pill over the bottom of the conversation.
+/// Slack's "↓ Latest messages": a pill over the bottom of the conversation.
 fn latest_button(f: &mut Frame, app: &mut App, area: Rect) {
     let blue = Color::Rgb(0x12, 0x64, 0xA3);
-    let text = " ↓ Últimas mensagens ";
+    let text = tr(" ↓ Latest messages ", " ↓ Últimas mensagens ");
     let w = text.width() as u16 + 2;
     if area.height < 2 || area.width < w {
         return;
@@ -884,12 +899,14 @@ fn paused_peer(app: &App) -> Option<String> {
     (app.account.others_paused.get(uid) == Some(&true)).then(|| app.label(c))
 }
 
-/// Slack's quiet line over the message box: "Fulano pausou as próprias notificações."
+/// Slack's quiet line over the message box: "Jane has paused their notifications."
 fn paused_notice(f: &mut Frame, app: &App, name: &str, area: Rect) {
     // Lined up with the messages' text: their margin plus the avatar's gutter.
     let font = app.picker.as_ref().map(|p| p.font_size()).map(|s| (s.width, s.height));
     let gutter = font.map_or(2, |(fw, fh)| ((2.0 * fh as f64 / fw as f64).round() as usize).clamp(3, 6) + 1);
-    let line = Line::from(Span::styled(format!("{}{name} pausou as próprias notificações.", " ".repeat(1 + gutter)), dim().italic()));
+    let pad = " ".repeat(1 + gutter);
+    let text = trf!("{pad}{name} has paused their notifications.", "{pad}{name} pausou as próprias notificações.");
+    let line = Line::from(Span::styled(text, dim().italic()));
     f.render_widget(Paragraph::new(line), Rect { y: area.bottom().saturating_sub(1), height: 1, ..area }.intersection(area));
 }
 
@@ -902,7 +919,7 @@ pub(crate) struct Intro {
     /// The `@name` in the text, highlighted on its own.
     mention: Option<String>,
     avatar: Option<(String, ImgRef)>,
-    /// A DM's "Ver perfil" button opens this user.
+    /// A DM's "View profile" button opens this user.
     profile: Option<String>,
 }
 
@@ -912,25 +929,35 @@ fn intro(app: &App, chan: &str) -> Option<Intro> {
     // No-break spaces keep the mention on one line and in one highlight.
     let tag = format!("@{}", label.replace(' ', "\u{a0}"));
     let (title, text) = match c.kind {
-        Kind::Channel => (format!("# {}", c.name), format!("Este é o início do canal #{}.", c.name)),
-        Kind::Private => (format!("🔒 {}", c.name), format!("Este é o início do canal #{}.", c.name)),
+        Kind::Channel | Kind::Private => {
+            let icon = if c.kind == Kind::Channel { "#" } else { "🔒" };
+            let name = &c.name;
+            (
+                format!("{icon} {name}"),
+                trf!("This is the very beginning of the #{name} channel.", "Este é o início do canal #{name}."),
+            )
+        }
         Kind::Direct if c.user.as_deref().is_some_and(|u| app.is_me(u)) => (
             label,
-            "Este é o seu espaço. Rascunhe mensagens, anote tarefas ou guarde links e arquivos à mão.".into(),
+            tr(
+                "This is your space. Draft messages, list your to-dos or keep links and files handy.",
+                "Este é o seu espaço. Rascunhe mensagens, anote tarefas ou guarde links e arquivos à mão.",
+            )
+            .into(),
         ),
         Kind::Direct => {
-            let text = format!(
-                "Esta conversa é apenas entre você e {}. Clique no perfil para descobrir mais sobre essa pessoa.",
-                tag
+            let text = trf!(
+                "This conversation is just between you and {tag}. Check out their profile to learn more about them.",
+                "Esta conversa é apenas entre você e {tag}. Clique no perfil para descobrir mais sobre essa pessoa."
             );
             (label, text)
         }
         Kind::Group => {
             let people = match label.rsplit_once(", ") {
-                Some((rest, last)) => format!("{rest} e {last}"),
+                Some((rest, last)) => trf!("{rest} and {last}", "{rest} e {last}"),
                 None => label.clone(),
             };
-            (label, format!("Esta conversa é apenas entre você, {people}."))
+            (label, trf!("This conversation is just between you, {people}.", "Esta conversa é apenas entre você, {people}."))
         }
     };
     let avatar = match c.kind {
@@ -984,7 +1011,7 @@ pub(crate) fn draw_image(f: &mut Frame, app: &mut App, r: &ImgRef, rect: Rect) {
             }
             f.render_widget(Image::new(&app.protocols[&key]), rect);
         }
-        Some(Img::Failed) if !r.name.is_empty() => f.render_widget(label(" (não carregou)"), rect),
+        Some(Img::Failed) if !r.name.is_empty() => f.render_widget(label(tr(" (didn't load)", " (não carregou)")), rect),
         Some(Img::Loading) if !r.name.is_empty() => f.render_widget(label("…"), rect),
         Some(_) => {}
         None => {
@@ -1067,13 +1094,13 @@ fn viewer(f: &mut Frame, app: &mut App) {
         }
         _ => (max_w.min(60), max_h.min(20)),
     };
-    let link = if r.link.is_some() { " ↗ Ver no navegador " } else { "" };
+    let link = if r.link.is_some() { tr(" ↗ Open in browser ", " ↗ Ver no navegador ") } else { "" };
     let save = match app.downloads.get(&r.key) {
-        Some(files::State::Saving) => " baixando… ",
-        Some(files::State::Saved(_)) => " ✓ Mostrar na pasta ",
-        None => " ⤓ Baixar (d) ",
+        Some(files::State::Saving) => tr(" downloading… ", " baixando… "),
+        Some(files::State::Saved(_)) => tr(" ✓ Show in folder ", " ✓ Mostrar na pasta "),
+        None => tr(" ⤓ Download (d) ", " ⤓ Baixar (d) "),
     };
-    let hint = " o abrir no visualizador · Esc fechar ";
+    let hint = tr(" o open in viewer · Esc close ", " o abrir no visualizador · Esc fechar ");
     let inner_w = cols.max((link.width() + save.width() + hint.width()) as u16).min(max_w);
     let rect = Rect::new(area.x + (area.width - inner_w - 2) / 2, area.y + (area.height - rows - 3) / 2, inner_w + 2, rows + 3);
     f.render_widget(Clear, rect);
@@ -1113,7 +1140,7 @@ fn team_popup(f: &mut Frame, app: &mut App) {
     let url = app.team_url().unwrap_or_default();
     let shown = url.trim_start_matches("https://").to_string();
     let id = format!("ID {}", me.team_id);
-    let copy = "  ⧉ copiar";
+    let copy = tr("  ⧉ copy", "  ⧉ copiar");
     let lines = vec![
         Line::from(me.team.clone()).bold(),
         Line::from(vec![Span::styled(shown.clone(), Style::new().fg(Color::Cyan).italic().underlined()), Span::styled("  ↗", dim())]),
@@ -1200,7 +1227,7 @@ fn profile(f: &mut Frame, app: &mut App, area: Rect) {
 
     let close = Rect::new(inner.x + inner.width - 1, inner.y, 1, 1);
     app.areas.profile_close = close;
-    f.render_widget(Paragraph::new(Line::from(" Perfil").bold()), Rect::new(inner.x, inner.y, inner.width - 2, 1));
+    f.render_widget(Paragraph::new(Line::from(tr(" Profile", " Perfil")).bold()), Rect::new(inner.x, inner.y, inner.width - 2, 1));
     f.render_widget(Paragraph::new("✕").style(dim()), close);
     f.render_widget(
         Block::new().borders(Borders::BOTTOM).border_style(dim()),
@@ -1209,7 +1236,7 @@ fn profile(f: &mut Frame, app: &mut App, area: Rect) {
     let mut y = inner.y + 3;
     let bottom = inner.y + inner.height;
     let Some(p) = data else {
-        f.render_widget(Paragraph::new("carregando…").style(dim()), Rect::new(inner.x, y, inner.width, 1));
+        f.render_widget(Paragraph::new(tr("loading…", "carregando…")).style(dim()), Rect::new(inner.x, y, inner.width, 1));
         return;
     };
 
@@ -1230,9 +1257,9 @@ fn profile(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let w = inner.width as usize;
-    // Your own profile gets "Editar" on the right of the name, as in Slack.
+    // Your own profile gets "Edit" on the right of the name, as in Slack.
     let mine = app.is_me(&uid) && w >= 16;
-    let edit = "Editar";
+    let edit = tr("Edit", "Editar");
     let mut lines = if mine {
         let name = truncate(&p.name, w - edit.width() - 2);
         let gap = " ".repeat(w - name.width() - edit.width());
@@ -1253,7 +1280,7 @@ fn profile(f: &mut Frame, app: &mut App, area: Rect) {
     match app.presence.get(&uid) {
         Some(_) => {
             let pres = presence_of(app, &uid);
-            let word = if pres.active { "Ativo" } else { "Ausente" };
+            let word = if pres.active { tr("Active", "Ativo") } else { tr("Away", "Ausente") };
             let rest = if status.is_empty() { word.to_string() } else { format!("{word} · {status}") };
             let dot = presence_span(app, pres);
             let dot = Span::styled(format!("{} ", dot.content), dot.style);
@@ -1265,20 +1292,18 @@ fn profile(f: &mut Frame, app: &mut App, area: Rect) {
         None => {}
     }
     if let Some(tz) = chrono::FixedOffset::east_opt(p.tz_offset) {
-        let local = chrono::Utc::now().with_timezone(&tz).format("%Hh%M");
-        lines.push(Line::from(format!("🕐 {local} hora local")));
+        let local = i18n::clock(&chrono::Utc::now().with_timezone(&tz));
+        lines.push(Line::from(trf!("🕐 {local} local time", "🕐 {local} hora local")));
     }
-    // The member ID, click to copy (as in Slack's "Copiar ID do membro").
+    // The member ID, click to copy (as in Slack's "Copy member ID").
     lines.push(Line::from(""));
     let id_row = lines.len() as u16;
     let id_text = format!("ID {uid}");
-    lines.push(Line::from(vec![
-        Span::styled(id_text.clone(), dim()),
-        Span::styled("  ⧉ copiar", Style::new().fg(Color::Cyan)),
-    ]));
+    let copy = tr("  ⧉ copy", "  ⧉ copiar");
+    lines.push(Line::from(vec![Span::styled(id_text.clone(), dim()), Span::styled(copy, Style::new().fg(Color::Cyan))]));
     let n = lines.len() as u16;
     if y + id_row < bottom {
-        app.areas.profile_id = Rect::new(inner.x, y + id_row, (id_text.width() + 10) as u16, 1).intersection(inner);
+        app.areas.profile_id = Rect::new(inner.x, y + id_row, (id_text.width() + copy.width()) as u16, 1).intersection(inner);
     }
     f.render_widget(Paragraph::new(lines), Rect::new(inner.x, y, inner.width, n.min(bottom.saturating_sub(y))));
     if let Some((row, pres)) = dot_row.filter(|(row, _)| y + row < bottom) {
@@ -1293,7 +1318,7 @@ fn profile(f: &mut Frame, app: &mut App, area: Rect) {
     let mut buttons: Vec<(Line, u8)> = Vec::new();
     if dm.is_some() {
         let (icon, style, text) =
-            if starred { (STAR_ON, Style::new().fg(Color::Yellow), " Favorito") } else { (STAR_OFF, Style::new(), " Favoritar") };
+            if starred { (STAR_ON, Style::new().fg(Color::Yellow), tr(" Starred", " Favorito")) } else { (STAR_OFF, Style::new(), tr(" Star", " Favoritar")) };
         buttons.push((Line::from(vec![Span::raw(" "), Span::styled(icon, style), Span::raw(format!("{text} "))]), 0));
     }
     if !app.is_me(&uid) && !app.users.bots.contains(&uid) {
@@ -1304,7 +1329,7 @@ fn profile(f: &mut Frame, app: &mut App, area: Rect) {
         };
         buttons.push((line, 1));
     }
-    buttons.push((Line::from(" Abrir no navegador "), 2));
+    buttons.push((Line::from(tr(" Open in browser ", " Abrir no navegador ")), 2));
     let mut x = inner.x;
     let mut row_used = false;
     for (line, kind) in buttons {
@@ -1331,14 +1356,14 @@ fn profile(f: &mut Frame, app: &mut App, area: Rect) {
     let mut contact = Vec::new();
     let mut email_at = None;
     if !p.email.is_empty() {
-        contact.push(Line::from("Endereço de e-mail").style(dim()));
+        contact.push(Line::from(tr("Email address", "Endereço de e-mail")).style(dim()));
         // Click to copy; its row is known once the header lines are in.
         let email = truncate(&p.email, w);
         email_at = Some((contact.len() as u16, email.width() as u16));
         contact.push(Line::from(Span::styled(email, Style::new().fg(Color::Blue).underlined())));
     }
     if !p.phone.is_empty() {
-        contact.push(Line::from("Telefone").style(dim()));
+        contact.push(Line::from(tr("Phone", "Telefone")).style(dim()));
         contact.push(Line::from(truncate(&p.phone, w)));
     }
     if !contact.is_empty() && y + 3 <= bottom {
@@ -1347,7 +1372,7 @@ fn profile(f: &mut Frame, app: &mut App, area: Rect) {
             Rect::new(area.x + 1, y, area.width - 1, 1),
         );
         contact.insert(0, Line::from(""));
-        contact.insert(1, Line::from("Informações de contato").bold());
+        contact.insert(1, Line::from(tr("Contact information", "Informações de contato")).bold());
         contact.insert(2, Line::from(""));
         if let Some((row, ew)) = email_at.filter(|(row, _)| y + 3 + row < bottom) {
             app.areas.profile_email = Rect::new(inner.x, y + 3 + row, ew, 1).intersection(inner);
@@ -1360,19 +1385,16 @@ fn day_label(t: chrono::DateTime<Local>) -> String {
     let today = Local::now().date_naive();
     let d = t.date_naive();
     if d == today {
-        return "Hoje".into();
+        return tr("Today", "Hoje").into();
     }
     if today.pred_opt() == Some(d) {
-        return "Ontem".into();
+        return tr("Yesterday", "Ontem").into();
     }
-    let mut s = format!(
-        "{}, {} de {}",
-        WEEKDAYS[t.weekday().num_days_from_monday() as usize],
-        t.day(),
-        MONTHS[t.month0() as usize]
-    );
+    // "Monday, September 28th", "segunda-feira, 28 de setembro".
+    let (wd, mo) = (i18n::weekday(&t), i18n::month(&t));
+    let mut s = if i18n::is_pt() { format!("{wd}, {} de {mo}", t.day()) } else { format!("{wd}, {mo} {}", i18n::ordinal(t.day())) };
     if t.year() != today.year() {
-        s.push_str(&format!(" de {}", t.year()));
+        s.push_str(&trf!(", {}", " de {}", t.year()));
     }
     let mut c = s.chars();
     c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or(s)
@@ -1431,7 +1453,7 @@ pub(crate) fn message_lines(
         // A rounded button, like Block Kit's, that opens the profile.
         if let Some(uid) = i.profile {
             let (fg, bg) = (Color::White, Color::DarkGray);
-            let label = " Ver perfil ";
+            let label = tr(" View profile ", " Ver perfil ");
             lines.push(Line::from(""));
             people.push((lines.len(), 0, label.width() as u16 + 2, uid));
             lines.push(Line::from(vec![
@@ -1469,7 +1491,7 @@ pub(crate) fn message_lines(
                 lines.push(Line::from(vec![Span::raw(indent.clone()), Span::styled(crate::pins::label(app, chan, &m.ts), dim())]));
             }
             header_line = Some(lines.len());
-            let hhmm = time.map(|t| t.format("%Hh%M").to_string()).unwrap_or_default();
+            let hhmm = time.map(|t| i18n::clock(&t)).unwrap_or_default();
             let bot = if m.user.is_none() { " APP" } else { "" };
             lines.push(Line::from(vec![
                 Span::raw(indent.clone()),
@@ -1491,7 +1513,7 @@ pub(crate) fn message_lines(
 
         // A reply also sent to the channel: the way into its thread.
         if let (Some("thread_broadcast"), Some(ts)) = (m.subtype.as_deref(), &m.thread_ts) {
-            let label = "respondeu a uma conversa";
+            let label = tr("replied to a thread", "respondeu a uma conversa");
             links.push(Link { line: lines.len(), x: gutter as u16, w: label.width() as u16, ts: ts.clone() });
             lines.push(Line::from(vec![Span::raw(indent.clone()), Span::styled(label, dim().italic())]));
         }
@@ -1552,9 +1574,9 @@ pub(crate) fn message_lines(
                     x += cols + 1;
                 }
             }
-            let s = if m.reply_count == 1 { "resposta" } else { "respostas" };
-            let count = format!("{} {s}", m.reply_count);
-            let last = m.latest_reply.as_deref().and_then(when).map(|w| format!(" · última resposta {w}")).unwrap_or_default();
+            let n = m.reply_count;
+            let count = if n == 1 { trf!("{n} reply", "{n} resposta") } else { trf!("{n} replies", "{n} respostas") };
+            let last = m.latest_reply.as_deref().and_then(when).map(|w| trf!(" · last reply {w}", " · última resposta {w}")).unwrap_or_default();
             let w = x - gutter as u16 + (count.width() + last.width()) as u16;
             links.push(Link { line: lines.len(), x: gutter as u16, w, ts: m.ts.clone() });
             spans.push(Span::styled(count, Style::new().fg(Color::Blue).bold()));
@@ -1596,14 +1618,14 @@ pub(crate) fn grouped(app: &App, prev: Option<&Message>, m: &Message) -> bool {
     !pinned && key(p) == key(m) && day(p) == day(m) && secs(&m.ts) - secs(&p.ts) < 300
 }
 
-/// A message's time as its header shows it, "21h29".
+/// A message's time as its header shows it, "9:29 PM" or "21h29".
 pub(crate) fn hhmm(ts: &str) -> String {
-    Local.timestamp_opt(secs(ts), 0).single().map(|t| t.format("%Hh%M").to_string()).unwrap_or_default()
+    Local.timestamp_opt(secs(ts), 0).single().map(|t| i18n::clock(&t)).unwrap_or_default()
 }
 
-/// Slack's "(editado)": after the text when it fits, else on a line of its own.
+/// Slack's "(edited)": after the text when it fits, else on a line of its own.
 fn edited_mark(lines: &mut Vec<Line<'static>>, top: usize, width: usize, indent: &str) {
-    let mark = Span::styled("(editado)", dim());
+    let mark = Span::styled(tr("(edited)", "(editado)"), dim());
     let fits = lines.len() > top && lines.last().is_some_and(|l| l.width() + 10 <= width);
     match lines.last_mut() {
         Some(last) if fits => last.spans.extend([Span::raw(" "), mark]),
@@ -1611,17 +1633,19 @@ fn edited_mark(lines: &mut Vec<Line<'static>>, top: usize, width: usize, indent:
     }
 }
 
-/// When something happened, the way Slack words it: "hoje às 14h03",
-/// "ontem às 9h10", "em 3 de outubro".
+/// When something happened, the way Slack words it: "today at 2:03 PM",
+/// "yesterday at 9:10 AM", "on October 3rd" ("hoje às 14h03", "em 3 de outubro").
 fn when(ts: &str) -> Option<String> {
     let t = Local.timestamp_opt(ts.split('.').next()?.parse().ok()?, 0).single()?;
     let today = Local::now().date_naive();
-    let hhmm = t.format("%Hh%M");
+    let hhmm = i18n::clock(&t);
+    let (day, month, year) = (t.day(), i18n::month(&t), t.year());
+    let nth = i18n::ordinal(day);
     Some(match t.date_naive() {
-        d if d == today => format!("hoje às {hhmm}"),
-        d if today.pred_opt() == Some(d) => format!("ontem às {hhmm}"),
-        d if d.year() == today.year() => format!("em {} de {}", t.day(), MONTHS[t.month0() as usize]),
-        _ => format!("em {} de {} de {}", t.day(), MONTHS[t.month0() as usize], t.year()),
+        d if d == today => trf!("today at {hhmm}", "hoje às {hhmm}"),
+        d if today.pred_opt() == Some(d) => trf!("yesterday at {hhmm}", "ontem às {hhmm}"),
+        d if d.year() == today.year() => trf!("on {month} {nth}", "em {day} de {month}"),
+        _ => trf!("on {month} {nth}, {year}", "em {day} de {month} de {year}"),
     })
 }
 
@@ -1734,7 +1758,7 @@ fn input_box(f: &mut Frame, app: &mut App, area: Rect) {
             Kind::Channel | Kind::Private => format!("#{}", c.name),
             _ => app.label(c),
         };
-        f.render_widget(Paragraph::new(format!("Mensagem para {target}")).style(dim()), inner);
+        f.render_widget(Paragraph::new(trf!("Message {target}", "Mensagem para {target}")).style(dim()), inner);
         if focused {
             f.set_cursor_position((inner.x, inner.y));
         }
@@ -1754,10 +1778,19 @@ fn input_box(f: &mut Frame, app: &mut App, area: Rect) {
 fn status_line(f: &mut Frame, app: &App, area: Rect) {
     let hints = crate::edit::hint(app).unwrap_or_else(|| {
         match app.focus {
-            Focus::Sidebar => "Enter abrir · m ou botão direito menu · arraste para mover · / procurar · q sair",
-            Focus::Filter => "digite para filtrar · Enter abrir · Esc cancelar",
-            Focus::Input => "↑ escolher mensagem · Esc lista · PgUp/PgDn rolar · Ctrl+K procurar",
-            Focus::Thread => "↑ escolher mensagem · Esc sair da conversa · Ctrl+B também enviar no canal",
+            Focus::Sidebar => tr(
+                "Enter open · m or right-click menu · drag to move · / search · q quit",
+                "Enter abrir · m ou botão direito menu · arraste para mover · / procurar · q sair",
+            ),
+            Focus::Filter => tr("type to filter · Enter open · Esc cancel", "digite para filtrar · Enter abrir · Esc cancelar"),
+            Focus::Input => tr(
+                "↑ pick a message · Esc list · PgUp/PgDn scroll · Ctrl+K search",
+                "↑ escolher mensagem · Esc lista · PgUp/PgDn rolar · Ctrl+K procurar",
+            ),
+            Focus::Thread => tr(
+                "↑ pick a message · Esc leave the thread · Ctrl+B also send to channel",
+                "↑ escolher mensagem · Esc sair da conversa · Ctrl+B também enviar no canal",
+            ),
         }
         .to_string()
     });
@@ -1891,19 +1924,19 @@ fn react_picker(f: &mut Frame, app: &mut App) {
     let (w, h) = (34.min(area.width), (hits.len().max(1) as u16 + 4).min(area.height));
     let rect = Rect::new(x.min(area.right().saturating_sub(w)), y.min(area.bottom().saturating_sub(h)), w, h);
     f.render_widget(Clear, rect);
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(dim()).title(Line::from(" Reagir ").bold());
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(dim()).title(Line::from(tr(" React ", " Reagir ")).bold());
     let inner = block.inner(rect);
     f.render_widget(block, rect);
     app.areas.picker = rect;
     let search = if query.is_empty() {
-        Line::from(vec![Span::raw(" 🔍 "), Span::styled("Procurar emoji", dim())])
+        Line::from(vec![Span::raw(" 🔍 "), Span::styled(tr("Search emoji", "Procurar emoji"), dim())])
     } else {
         Line::from(vec![Span::raw(" 🔍 "), Span::raw(query), Span::raw("▏")])
     };
     f.render_widget(Paragraph::new(search), Rect::new(inner.x, inner.y, inner.width, 1));
     f.render_widget(Paragraph::new("─".repeat(inner.width as usize)).style(dim()), Rect::new(inner.x, inner.y + 1, inner.width, 1));
     if hits.is_empty() {
-        f.render_widget(Paragraph::new(" nenhum emoji").style(dim()), Rect::new(inner.x, inner.y + 2, inner.width, 1));
+        f.render_widget(Paragraph::new(tr(" no emoji", " nenhum emoji")).style(dim()), Rect::new(inner.x, inner.y + 2, inner.width, 1));
     }
     for (n, (name, glyph)) in hits.iter().enumerate() {
         let row = Rect::new(inner.x, inner.y + 2 + n as u16, inner.width, 1);

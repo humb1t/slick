@@ -16,8 +16,7 @@ screen (from a local cache) and refreshes in the background.
 > supported by Slack Technologies or Salesforce. "Slack" is a trademark of
 > Slack Technologies, LLC. slick talks to Slack using your own session, the
 > same way the web client does; use it at your own risk and within your
-> workspace's policies and Slack's terms. The interface is currently in
-> Brazilian Portuguese.
+> workspace's policies and Slack's terms.
 
 ## Features
 
@@ -185,6 +184,10 @@ on Windows), `key = value` per line:
 | `sidebar_width`, `sidebar_avatars` | the sidebar's width and whether it shows photos, saved from the app |
 | `auto_update` | `false` turns off the update check |
 | `tray` | `false` hides the system tray icon (Linux; lit with unread DMs and mentions, a click focuses the window on Hyprland) |
+| `language` | `en-US` (default) or `pt-BR`; also switchable from the account menu (Language), which saves it here |
+
+The `SLICK_LANG` environment variable (`en-US`, `pt-BR`) takes priority over
+`language` in the config.
 
 The cache lives in `~/.cache/slick/` (`%LOCALAPPDATA%\slick` on Windows):
 conversations, users, recent messages and images; images unseen for a week are
@@ -203,7 +206,7 @@ click it:
   archive for your system, checks its SHA-256 and replaces `slick` in place (on
   Windows the running `slick.exe` steps aside as `slick.old.exe`, deleted at the
   next start). The button
-  reads "atualizando…" meanwhile, then "↻ reiniciar": click it (or press
+  reads "updating…" meanwhile, then "↻ restart": click it (or press
   `Ctrl+O`) to restart into the new version. On failure the button comes back
   and the error shows in the status line.
 - If the binary belongs to something else (`~/.cargo/bin`, `/usr`, `/nix`,
@@ -214,8 +217,10 @@ Development builds (`target/`) never check, unless `SLICK_UPDATE_DEV=1` is
 set: then the button shows (with a made-up version when there is no release)
 and a click only says it is a development build.
 
-`slick update` checks and installs right away, printing what it does.
-Set `auto_update = false` in the config to turn the check off.
+`slick update` checks and installs right away, printing what it does, and
+"Check for updates" in the account menu checks right away from the app (also
+with `auto_update = false`). Set `auto_update = false` in the config to turn the
+automatic check off.
 
 ## License
 

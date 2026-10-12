@@ -2,6 +2,7 @@
 
 use crate::app::{App, Event, Focus, POLL_EVERY};
 use crate::editor::Editor;
+use crate::i18n::tr;
 use crate::slack::{escape, parse_message, Kind, Message, Res, Slack};
 use crate::text::Names;
 use crate::ui::{dim, flash, message_lines, place, select, shade, truncate, MAX_INPUT_ROWS, PROFILE};
@@ -318,7 +319,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     let room = (header.width as usize).saturating_sub(16);
     let title = Line::from(vec![
         Span::raw(" "),
-        Span::styled("Conversa", Style::new().bold()),
+        Span::styled(tr("Thread", "Conversa"), Style::new().bold()),
         Span::styled(format!("  {}", truncate(&label, room)), dim()),
     ]);
     f.render_widget(Paragraph::new(title), Rect::new(header.x, header.y, header.width.saturating_sub(4), 1));
@@ -341,7 +342,10 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     let font = app.picker.as_ref().map(|p| p.font_size()).map(|s| (s.width, s.height));
     let mut r = message_lines(&list[..list.len().min(1)], None, &names, app, width, font);
     if replies > 0 {
-        let count = format!("{replies} {} ", if replies == 1 { "resposta" } else { "respostas" });
+        let count = match replies {
+            1 => trf!("{replies} reply ", "{replies} resposta "),
+            _ => trf!("{replies} replies ", "{replies} respostas "),
+        };
         r.lines.push(Line::from(""));
         r.lines.push(Line::from(vec![
             Span::styled(count.clone(), dim()),
@@ -352,7 +356,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
         r.append(message_lines(&list[1.min(list.len())..], None, &names, app, width, font));
     } else {
         r.lines.push(Line::from(""));
-        r.lines.push(Line::from("carregando…").style(dim()));
+        r.lines.push(Line::from(tr("loading…", "carregando…")).style(dim()));
     }
     // Opened from "Fixados": shows the reply picked there.
     let jump = if loaded { app.thread.as_mut().and_then(|t| t.jump.take()) } else { None };
@@ -383,7 +387,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     let text_area = block.inner(boxed).inner(Margin { horizontal: 1, vertical: 0 });
     f.render_widget(block, boxed);
     if empty {
-        f.render_widget(Paragraph::new("Responder…").style(dim()), text_area);
+        f.render_widget(Paragraph::new(tr("Reply…", "Responder…")).style(dim()), text_area);
         if focused {
             f.set_cursor_position((text_area.x, text_area.y));
         }
@@ -400,7 +404,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
 
     // "Também enviar para #canal", a checkbox to click or Ctrl+B.
     let (icon, style) = if broadcast { (BOX_ON, Style::new().fg(Color::Cyan)) } else { (BOX_OFF, dim()) };
-    let text = truncate(&format!(" Também enviar para {label}"), (toggle.width as usize).saturating_sub(9));
+    let text = truncate(&trf!(" Also send to {label}", " Também enviar para {label}"), (toggle.width as usize).saturating_sub(9));
     let line = Line::from(vec![Span::raw("  "), Span::styled(icon, style), Span::raw(text), Span::styled("  ^B", dim())]);
     app.areas.thread_broadcast = Rect::new(toggle.x, toggle.y, line.width() as u16, 1).intersection(toggle);
     f.render_widget(Paragraph::new(line), toggle);

@@ -1,6 +1,7 @@
-//! Pinned messages: the conversation's "Fixados" tab, as in Slack.
+//! Pinned messages: the conversation's "Pins" tab, as in Slack.
 
 use crate::app::{App, Event, Focus};
+use crate::i18n::tr;
 use crate::slack::{parse_message, Message, Res, Slack};
 use crate::text::Names;
 use crate::ui::{dim, message_lines, place};
@@ -67,13 +68,13 @@ impl Slack {
     }
 }
 
-/// "📌 Fixada por Fulano", over a pinned message.
+/// "📌 Pinned by Jane", over a pinned message.
 pub(crate) fn label(app: &App, chan: &str, ts: &str) -> String {
     let by = app.pins.by_chan.get(chan).and_then(|l| l.iter().find(|p| p.msg.ts == ts)).and_then(|p| p.by.as_deref());
     match by {
-        Some(u) if app.is_me(u) => "📌 Fixada por você".into(),
-        Some(u) => format!("📌 Fixada por {}", app.users.names.get(u).map_or(u, String::as_str)),
-        None => "📌 Fixada".into(),
+        Some(u) if app.is_me(u) => tr("📌 Pinned by you", "📌 Fixada por você").into(),
+        Some(u) => trf!("📌 Pinned by {}", "📌 Fixada por {}", app.users.names.get(u).map_or(u, String::as_str)),
+        None => tr("📌 Pinned", "📌 Fixada").into(),
     }
 }
 
@@ -227,9 +228,9 @@ pub fn tabs(f: &mut Frame, app: &mut App, area: Rect) {
     let (row, border) = (area.bottom().saturating_sub(2), area.bottom().saturating_sub(1));
     let mut x = area.x + 1;
     // "Fixados" only shows once the conversation is known to have pins.
-    let mut tabs = vec![(Tab::Messages, "Mensagens".to_string())];
+    let mut tabs = vec![(Tab::Messages, tr("Messages", "Mensagens").to_string())];
     if n > 0 {
-        tabs.push((Tab::Pinned, format!("Fixados {n}")));
+        tabs.push((Tab::Pinned, trf!("Pins {n}", "Fixados {n}")));
     }
     for (tab, name) in tabs {
         let w = name.width() as u16 + 2;
@@ -249,11 +250,11 @@ pub fn tabs(f: &mut Frame, app: &mut App, area: Rect) {
 pub fn draw(f: &mut Frame, app: &mut App, inner: Rect, chan: &str) {
     let r = {
         let Some(pins) = app.pins.by_chan.get(chan) else {
-            return f.render_widget(Paragraph::new("carregando…").style(dim()), inner);
+            return f.render_widget(Paragraph::new(tr("loading…", "carregando…")).style(dim()), inner);
         };
         if pins.is_empty() {
             let middle = Rect::new(inner.x, inner.y + inner.height / 2, inner.width, 1.min(inner.height));
-            let empty = Paragraph::new("Nenhuma mensagem fixada nesta conversa.").style(dim()).alignment(Alignment::Center);
+            let empty = Paragraph::new(tr("No pinned messages in this conversation.", "Nenhuma mensagem fixada nesta conversa.")).style(dim()).alignment(Alignment::Center);
             return f.render_widget(empty, middle);
         }
         let names = Names { users: &app.users.names, chans: &app.chans, emoji: &app.emoji.custom };

@@ -117,6 +117,11 @@ pub fn tray() -> bool {
     value("tray").is_none_or(|v| v != "false")
 }
 
+/// The interface language: `language = "pt-BR"` or `"en-US"`.
+pub fn language() -> Option<crate::i18n::Lang> {
+    crate::i18n::Lang::parse(&value("language")?)
+}
+
 pub fn sidebar_avatars() -> Option<bool> {
     value("sidebar_avatars")?.parse().ok()
 }

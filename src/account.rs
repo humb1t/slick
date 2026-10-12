@@ -1,6 +1,6 @@
 //! The account button at the bottom of the sidebar and its menu, as in
 //! Slack: your status, away or active, pausing notifications, your profile,
-//! Slack's settings pages and signing out.
+//! Slack's settings pages, the interface language and signing out.
 
 use crate::app::{App, Event};
 use crate::blocks::{CAP_L, CAP_R};
@@ -8,6 +8,7 @@ use crate::compose::tail;
 use crate::editor::Editor;
 use crate::emoji::{self, Glyph};
 use crate::files;
+use crate::i18n::{self, tr, Lang};
 use crate::slack::{Profile, Res, Slack};
 use crate::update::{Note, State};
 use crate::icons::Presence;
@@ -28,21 +29,28 @@ const MENU_W: u16 = 46;
 /// Slack cuts a status at this many characters.
 const STATUS_MAX: usize = 100;
 
-/// Slack's suggestions: emoji, text and when it clears (an index into `CLEAR`).
-const PRESETS: [(&str, &str, usize); 5] = [
-    ("date", "Em reunião", 2),
-    ("bus", "Em trânsito", 1),
-    ("face_with_thermometer", "Doente", 4),
-    ("palm_tree", "De férias", 0),
-    ("house_with_garden", "Trabalhando remotamente", 4),
+/// Slack's suggestions: emoji, text in English and Portuguese, and when it
+/// clears (an index into `CLEAR_EN`).
+const PRESETS: [(&str, &str, &str, usize); 5] = [
+    ("date", "In a meeting", "Em reunião", 2),
+    ("bus", "Commuting", "Em trânsito", 1),
+    ("face_with_thermometer", "Out sick", "Doente", 4),
+    ("palm_tree", "Vacationing", "De férias", 0),
+    ("house_with_garden", "Working remotely", "Trabalhando remotamente", 4),
 ];
-const CLEAR: [&str; 6] = ["Não limpar", "30 minutos", "1 hora", "4 horas", "Hoje", "Esta semana"];
-/// The status dialog's stops: emoji, text, the presets, "Limpar após".
+const CLEAR_EN: [&str; 6] = ["Don't clear", "30 minutes", "1 hour", "4 hours", "Today", "This week"];
+const CLEAR_PT: [&str; 6] = ["Não limpar", "30 minutos", "1 hora", "4 horas", "Hoje", "Esta semana"];
+
+fn clear_label(i: usize) -> &'static str {
+    if i18n::is_pt() { CLEAR_PT[i] } else { CLEAR_EN[i] }
+}
+
+/// The status dialog's stops: emoji, text, the presets, "Clear after".
 const FIELDS: usize = 3 + PRESETS.len();
 const AFTER: usize = FIELDS - 1;
 /// The profile dialog's last stop: the photo button, then its path.
 const PHOTO: usize = 3;
-/// Where slick's code lives, shown in "Sobre o slick".
+/// Where slick's code lives, shown in "About slick".
 const REPO: &str = "github.com/leonavas/slick";
 const SITE: &str = "slick.leonavas.com";
 
@@ -67,6 +75,8 @@ enum Item {
     Preferences,
     Settings,
     Downloads,
+    Language,
+    CheckUpdate,
     About,
     Logout,
     // The notifications submenu.
@@ -74,9 +84,11 @@ enum Item {
     /// Minutes; 0 is "until tomorrow".
     Pause(i64),
     NotifyPrefs,
+    // The language submenu.
+    Lang(Lang),
 }
 
-const MAIN: [Item; 11] = [
+const MAIN: [Item; 13] = [
     Item::Status,
     Item::Away,
     Item::Notifications,
@@ -85,14 +97,21 @@ const MAIN: [Item; 11] = [
     Item::Preferences,
     Item::Settings,
     Item::Downloads,
+    Item::Language,
     Item::Sep,
+    Item::CheckUpdate,
     Item::About,
     Item::Logout,
 ];
 
 impl Item {
     fn in_sub(self) -> bool {
-        matches!(self, Item::Resume | Item::Pause(_) | Item::NotifyPrefs)
+        matches!(self, Item::Resume | Item::Pause(_) | Item::NotifyPrefs | Item::Lang(_))
+    }
+
+    /// Opens a submenu beside the menu.
+    fn has_sub(self) -> bool {
+        matches!(self, Item::Notifications | Item::Language)
     }
 }
 
@@ -105,9 +124,9 @@ pub struct Paused {
 
 pub struct Popup {
     sel: Item,
-    /// The notifications submenu, open, with its selected row.
+    /// The submenu of `sel` (notifications or language), open, with its selected row.
     sub: Option<Item>,
-    /// "Sair" was chosen once; choosing it again signs out.
+    /// "Sign out" was chosen once; choosing it again signs out.
     confirm: bool,
 }
 
@@ -135,21 +154,21 @@ pub struct Account {
     pub paused: Option<Paused>,
     /// Whether the other person of a DM paused their notifications.
     pub others_paused: std::collections::HashMap<String, bool>,
-    /// Slack's desktop notification level, in words.
+    /// Slack's desktop notification level: everything, mentions, vips or nothing.
     pub level: Option<String>,
     pub menu: Option<Popup>,
     pub dialog: Option<StatusDialog>,
-    /// "Editar seu perfil".
+    /// "Edit your profile".
     pub profile: Option<ProfileDialog>,
-    /// "Sobre o slick", open.
+    /// "About slick", open.
     pub about: bool,
 }
 
 pub struct ProfileDialog {
     uid: String,
-    /// Nome completo, nome exibido, cargo and the photo's path.
+    /// Full name, display name, title and the photo's path.
     fields: [Editor; 4],
-    /// The path field shows once "Fazer upload de foto" is chosen.
+    /// The path field shows once "Upload photo" is chosen.
     photo: bool,
     field: usize,
     /// Only shown: Slack sets it elsewhere.
@@ -199,7 +218,7 @@ pub struct Areas {
     fields: Vec<(Rect, usize, usize)>,
     photo: Rect,
     about: Rect,
-    /// The site's and the repository's links in "Sobre o slick".
+    /// The site's and the repository's links in "About slick".
     about_site: Rect,
     about_link: Rect,
     /// The update button by your name.
@@ -250,21 +269,31 @@ fn resume(s: &Slack, snooze: bool) -> Res<Option<Paused>> {
     dnd(s)
 }
 
-/// The desktop level in Slack's words. `global_desktop` says everything,
-/// mentions or nothing; with VIPs, "nothing" still lets theirs through.
+/// The desktop level. `global_desktop` says everything, mentions or nothing;
+/// with VIPs, "nothing" still lets theirs through.
 fn level(s: &Slack) -> Res<String> {
     let v = s.call("users.prefs.get", &[])?;
     let prefs = &v["prefs"];
     let all: Value = serde_json::from_str(prefs["all_notifications_prefs"].as_str().unwrap_or("{}")).unwrap_or_default();
     let vips = !prefs["vip_users"].as_str().unwrap_or("").is_empty();
-    let text = match all["global"]["global_desktop"].as_str().unwrap_or("") {
-        "everything" => "Todas as novas mensagens",
-        "mentions" | "mentions_dms" => "Menções e mensagens diretas",
-        "nothing" if vips => "Somente VIPs",
-        "nothing" => "Nada",
-        other => return Err(format!("nível de notificação desconhecido: {other}")),
+    let key = match all["global"]["global_desktop"].as_str().unwrap_or("") {
+        "everything" => "everything",
+        "mentions" | "mentions_dms" => "mentions",
+        "nothing" if vips => "vips",
+        "nothing" => "nothing",
+        other => return Err(trf!("unknown notification level: {other}", "nível de notificação desconhecido: {other}")),
     };
-    Ok(text.to_string())
+    Ok(key.to_string())
+}
+
+/// The level in Slack's words.
+fn level_label(key: &str) -> &'static str {
+    match key {
+        "everything" => tr("All new messages", "Todas as novas mensagens"),
+        "mentions" => tr("Mentions and direct messages", "Menções e mensagens diretas"),
+        "vips" => tr("Only VIPs", "Somente VIPs"),
+        _ => tr("Nothing", "Nada"),
+    }
 }
 
 fn set_status(s: &Slack, emoji: &str, text: &str, expiration: i64) -> Res<()> {
@@ -341,7 +370,7 @@ fn end_of_day(days: u64) -> i64 {
     day.and_hms_opt(23, 59, 59).and_then(|t| Local.from_local_datetime(&t).single()).map_or(0, |t| t.timestamp())
 }
 
-/// When a status chosen with "Limpar após" goes away; 0 never.
+/// When a status chosen with "Clear after" goes away; 0 never.
 fn expiration(clear: usize) -> i64 {
     let now = Local::now();
     match clear {
@@ -354,22 +383,26 @@ fn expiration(clear: usize) -> i64 {
     }
 }
 
-/// Minutes until 9h tomorrow, Slack's "até amanhã".
+/// Minutes until 9am tomorrow, Slack's "until tomorrow".
 fn until_tomorrow() -> i64 {
     let now = Local::now();
     let at = (now.date_naive() + Days::new(1)).and_hms_opt(9, 0, 0).and_then(|t| Local.from_local_datetime(&t).single());
     at.map_or(12 * 60, |t| (t.timestamp() - now.timestamp()) / 60)
 }
 
-/// "até 14h30", "até amanhã, 8h00", "até 17/10, 8h00".
+/// "until 2:30 PM", "until tomorrow, 8:00 AM", "until Oct 17, 8:00 AM";
+/// "até 14h30", "até amanhã, 08h00", "até 17/10, 08h00".
 fn until(ts: i64) -> String {
     let Some(t) = Local.timestamp_opt(ts, 0).single() else { return String::new() };
     let today = Local::now().date_naive();
-    let hhmm = t.format("%Hh%M");
+    let hhmm = i18n::clock(&t);
     match t.date_naive() {
-        d if d == today => format!("até {hhmm}"),
-        d if today.succ_opt() == Some(d) => format!("até amanhã, {hhmm}"),
-        _ => format!("até {}, {hhmm}", t.format("%d/%m")),
+        d if d == today => trf!("until {hhmm}", "até {hhmm}"),
+        d if today.succ_opt() == Some(d) => trf!("until tomorrow, {hhmm}", "até amanhã, {hhmm}"),
+        _ => {
+            let (month, day, dm) = (&i18n::month(&t)[..3], t.day(), t.format("%d/%m"));
+            trf!("until {month} {day}, {hhmm}", "até {dm}, {hhmm}")
+        }
     }
 }
 
@@ -387,30 +420,51 @@ fn step(items: &[Item], cur: Item, delta: isize) -> Item {
     items[i as usize]
 }
 
-/// The submenu's rows; those without an item are only text.
-fn sub_rows(app: &App) -> Vec<(Option<Item>, String, String)> {
+/// The rows of `parent`'s submenu; those without an item are only text.
+fn sub_rows(app: &App, parent: Item) -> Vec<(Option<Item>, String, String)> {
     let mut rows = Vec::new();
+    if parent == Item::Language {
+        for l in Lang::ALL {
+            let mark = if l == i18n::lang() { "✓" } else { "" };
+            rows.push((Some(Item::Lang(l)), l.label().to_string(), mark.to_string()));
+        }
+        return rows;
+    }
     let state = match app.account.paused {
-        Some(p) => format!("{PAUSED} Pausadas {}", until(p.until)),
-        None => "Notificações ativas".into(),
+        Some(p) => trf!("{PAUSED} Paused {}", "{PAUSED} Pausadas {}", until(p.until)),
+        None => tr("Notifications on", "Notificações ativas").into(),
     };
     rows.push((None, state, String::new()));
     rows.push((Some(Item::Sep), String::new(), String::new()));
     if app.account.paused.is_some() {
-        rows.push((Some(Item::Resume), "Retomar notificações".into(), String::new()));
+        rows.push((Some(Item::Resume), tr("Resume notifications", "Retomar notificações").into(), String::new()));
     }
-    for (min, label) in [(30, "Pausar por 30 minutos"), (60, "Pausar por 1 hora"), (120, "Pausar por 2 horas"), (0, "Pausar até amanhã")] {
+    let pauses = [
+        (30, tr("Pause for 30 minutes", "Pausar por 30 minutos")),
+        (60, tr("Pause for 1 hour", "Pausar por 1 hora")),
+        (120, tr("Pause for 2 hours", "Pausar por 2 horas")),
+        (0, tr("Pause until tomorrow", "Pausar até amanhã")),
+    ];
+    for (min, label) in pauses {
         rows.push((Some(Item::Pause(min)), label.into(), String::new()));
     }
     rows.push((Some(Item::Sep), String::new(), String::new()));
-    let level = app.account.level.clone().unwrap_or_else(|| "…".into());
-    rows.push((None, format!("Notificar sobre: {level}"), String::new()));
-    rows.push((Some(Item::NotifyPrefs), "Preferências de notificação".into(), "↗".into()));
+    let level = app.account.level.as_deref().map_or("…", level_label);
+    rows.push((None, trf!("Notify me about: {level}", "Notificar sobre: {level}"), String::new()));
+    rows.push((Some(Item::NotifyPrefs), tr("Notification preferences", "Preferências de notificação").into(), "↗".into()));
     rows
 }
 
-fn sub_items(app: &App) -> Vec<Item> {
-    sub_rows(app).into_iter().filter_map(|(i, ..)| i).collect()
+fn sub_items(app: &App, parent: Item) -> Vec<Item> {
+    sub_rows(app, parent).into_iter().filter_map(|(i, ..)| i).collect()
+}
+
+/// The row a submenu opens on: the current language, else the first item.
+fn first_sub(app: &App, parent: Item) -> Option<Item> {
+    if parent == Item::Language {
+        return Some(Item::Lang(i18n::lang()));
+    }
+    sub_items(app, parent).into_iter().find(|i| *i != Item::Sep)
 }
 
 /// Your status emoji: text, or a picture for custom ones; a status with
@@ -506,7 +560,7 @@ impl App {
                     card.1 = Some(p);
                 }
                 self.account.profile = None;
-                self.status = "perfil atualizado".into();
+                self.status = tr("profile updated", "perfil atualizado").into();
                 self.resort();
             }
             Ev::ProfileSaved { res: Err(e), .. } => {
@@ -523,16 +577,44 @@ impl App {
         match note {
             Note::Found { ver, assets } => self.update = Some(State::found(self.update.take(), ver, assets)),
             Note::Installed(Ok(ver)) => {
-                self.status = format!("atualizado para {ver} · clique em reiniciar ou Ctrl+O");
+                self.status = trf!("updated to {ver} · click restart or Ctrl+O", "atualizado para {ver} · clique em reiniciar ou Ctrl+O");
                 self.update = Some(State::Installed(ver));
             }
+            Note::Checked(Ok(Some((ver, assets)))) => {
+                self.status = trf!("slick {ver} is available", "slick {ver} disponível");
+                self.update = Some(State::found(self.update.take(), ver, assets));
+            }
+            Note::Checked(Ok(None)) => {
+                let v = crate::update::current();
+                self.status = trf!("slick is up to date ({v})", "slick está atualizado ({v})");
+            }
+            Note::Checked(Err(e)) => {
+                self.status = String::new();
+                self.error = Some(e);
+            }
             Note::Installed(Err(e)) => {
-                self.error = Some(format!("não atualizou: {e}"));
+                self.error = Some(trf!("didn't update: {e}", "não atualizou: {e}"));
                 if let Some(State::Installing { ver, assets }) = self.update.take() {
                     self.update = Some(State::Available { ver, assets });
                 }
             }
         }
+    }
+
+    /// "Check for updates": looks now; with one installed already, restarts.
+    fn check_updates(&mut self) {
+        if matches!(self.update, Some(State::Installed(_))) {
+            self.restart = true;
+            self.quit = true;
+            return;
+        }
+        self.error = None;
+        if crate::update::check_disabled() {
+            self.status = tr("development build: updates are disabled", "build de desenvolvimento: atualizações desligadas").into();
+            return;
+        }
+        self.status = tr("Checking for updates…", "Procurando atualizações…").into();
+        self.spawn(|_| crate::update::check_now());
     }
 
     /// The update button: install, or restart once installed.
@@ -543,7 +625,7 @@ impl App {
                     self.status = how;
                     self.update = Some(State::Available { ver, assets });
                 } else {
-                    self.status = format!("baixando slick {ver}…");
+                    self.status = trf!("downloading slick {ver}…", "baixando slick {ver}…");
                     self.update = Some(State::Installing { ver: ver.clone(), assets: assets.clone() });
                     self.spawn(move |_| crate::update::install_now(ver, assets));
                 }
@@ -590,7 +672,7 @@ impl App {
         let photo = Some(path).filter(|p| d.photo && !p.is_empty()).map(|p| photo_path(&p));
         let (uid, changed) = (d.uid.clone(), photo.is_some());
         d.saving = true;
-        self.status = "salvando perfil…".into();
+        self.status = tr("saving profile…", "salvando perfil…").into();
         self.dirty = true;
         self.spawn(move |s| {
             let res = save_profile(s, &uid, [real, display, title], photo);
@@ -718,14 +800,17 @@ impl App {
             Item::Sep => close = false,
             Item::Status => self.open_status_dialog(),
             Item::Away => self.toggle_away(),
-            Item::Notifications => {
+            Item::Notifications | Item::Language => {
                 close = false;
-                let first = sub_items(self).into_iter().find(|i| *i != Item::Sep);
+                let first = first_sub(self, item);
                 if let Some(p) = self.account.menu.as_mut() {
-                    p.sub = first;
+                    (p.sel, p.sub) = (item, first);
                 }
-                self.spawn(|s| Event::Account(Ev::Level(level(s))));
+                if item == Item::Notifications {
+                    self.spawn(|s| Event::Account(Ev::Level(level(s))));
+                }
             }
+            Item::Lang(l) => self.set_language(l),
             Item::Profile => {
                 if let Some(me) = self.my_id() {
                     self.open_profile(me);
@@ -739,6 +824,7 @@ impl App {
                 let _ = std::fs::create_dir_all(&dir);
                 self.open_url(&dir.to_string_lossy());
             }
+            Item::CheckUpdate => self.check_updates(),
             Item::About => self.account.about = true,
             Item::Logout => {
                 let confirmed = self.account.menu.as_ref().is_some_and(|p| p.confirm);
@@ -765,6 +851,14 @@ impl App {
         self.dirty = true;
     }
 
+    /// Switches the interface at once and remembers it in the config.
+    fn set_language(&mut self, l: Lang) {
+        i18n::set(l);
+        if let Err(e) = crate::config::set(&[("language", l.code().to_string())]) {
+            self.error = Some(trf!("didn't save the language: {e}", "não salvou o idioma: {e}"));
+        }
+    }
+
     pub(crate) fn about_key(&mut self, k: KeyEvent) {
         if matches!(k.code, KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q')) {
             self.account.about = false;
@@ -773,7 +867,8 @@ impl App {
     }
 
     pub(crate) fn account_key(&mut self, k: KeyEvent) {
-        let sub = sub_items(self);
+        let Some(parent) = self.account.menu.as_ref().map(|p| p.sel) else { return };
+        let sub = sub_items(self, parent);
         let Some(p) = self.account.menu.as_mut() else { return };
         let go = matches!(k.code, KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') | KeyCode::Char(' '));
         match p.sub {
@@ -800,8 +895,8 @@ impl App {
     }
 
     fn apply_preset(d: &mut StatusDialog, i: usize) {
-        let (emoji, text, clear) = PRESETS[i];
-        (d.emoji, d.text, d.clear, d.field) = (emoji.into(), text.into(), clear, 1);
+        let (emoji, en, pt, clear) = PRESETS[i];
+        (d.emoji, d.text, d.clear, d.field) = (emoji.into(), tr(en, pt).into(), clear, 1);
     }
 
     fn pick_emoji(&mut self, i: usize) {
@@ -868,8 +963,8 @@ impl App {
             KeyCode::BackTab | KeyCode::Up => d.field = (d.field + FIELDS - 1) % FIELDS,
             KeyCode::Enter if d.field == 0 => d.picker = Some(Picker::default()),
             KeyCode::Enter => Self::apply_preset(d, d.field - 2),
-            KeyCode::Left if d.field == AFTER => d.clear = (d.clear + CLEAR.len() - 1) % CLEAR.len(),
-            KeyCode::Right | KeyCode::Char(' ') if d.field == AFTER => d.clear = (d.clear + 1) % CLEAR.len(),
+            KeyCode::Left if d.field == AFTER => d.clear = (d.clear + CLEAR_EN.len() - 1) % CLEAR_EN.len(),
+            KeyCode::Right | KeyCode::Char(' ') if d.field == AFTER => d.clear = (d.clear + 1) % CLEAR_EN.len(),
             KeyCode::Backspace | KeyCode::Delete if d.field == 0 => d.emoji.clear(),
             KeyCode::Backspace => {
                 d.text.pop();
@@ -914,17 +1009,16 @@ impl App {
             return true;
         }
         if self.account.menu.is_some() {
-            let first_sub = sub_items(self).into_iter().find(|i| *i != Item::Sep);
             let hit = a.rows.iter().find(|(r, _)| r.contains(at)).map(|(_, i)| *i);
+            let first_sub = hit.filter(|i| i.has_sub()).and_then(|i| first_sub(self, i));
             let (clear, inside, button) = (a.clear.contains(at), a.menu.contains(at) || a.sub.contains(at), a.button.contains(at));
             let Some(p) = self.account.menu.as_mut() else { return true };
             match m.kind {
                 MouseEventKind::Moved | MouseEventKind::Drag(_) => match hit {
                     Some(i) if i.in_sub() => p.sub = Some(i),
                     // Like Slack, the submenu opens under the pointer.
-                    Some(Item::Notifications) if p.sub.is_none() => {
-                        p.sel = Item::Notifications;
-                        p.sub = first_sub;
+                    Some(i) if i.has_sub() && (p.sub.is_none() || p.sel != i) => {
+                        (p.sel, p.sub, p.confirm) = (i, first_sub, false);
                     }
                     Some(i) if i != p.sel => (p.sel, p.sub, p.confirm) = (i, None, false),
                     _ => return true,
@@ -981,7 +1075,7 @@ impl App {
         } else if let Some(i) = preset {
             Self::apply_preset(d, i);
         } else if after {
-            (d.field, d.clear) = (AFTER, (d.clear + 1) % CLEAR.len());
+            (d.field, d.clear) = (AFTER, (d.clear + 1) % CLEAR_EN.len());
         }
     }
 }
@@ -1000,7 +1094,7 @@ pub fn button_height(app: &App) -> u16 {
 /// Your presence, from the account's own state, and its word.
 fn my_presence(app: &App) -> (Presence, &'static str) {
     let p = Presence { active: app.account.online && !app.account.away, paused: app.account.paused.is_some() };
-    (p, if p.active { "Ativo" } else { "Ausente" })
+    (p, if p.active { tr("Active", "Ativo") } else { tr("Away", "Ausente") })
 }
 
 /// Your photo with presence and status, and your name beside it.
@@ -1080,8 +1174,8 @@ fn update_pill(app: &App) -> Option<Line<'static>> {
     let (label, fg, bg) = match app.update.as_ref()? {
         State::Available { ver, .. } => (format!("↑ {ver}"), Color::Black, Color::Green),
         // Faded while it works: there is nothing to click.
-        State::Installing { .. } => ("atualizando…".into(), Color::DarkGray, Color::Indexed(236)),
-        State::Installed(_) => ("↻ reiniciar".into(), Color::Black, Color::Green),
+        State::Installing { .. } => (tr("updating…", "atualizando…").into(), Color::DarkGray, Color::Indexed(236)),
+        State::Installed(_) => (tr("↻ restart", "↻ reiniciar").into(), Color::Black, Color::Green),
     };
     Some(pill(&label, fg, bg))
 }
@@ -1109,14 +1203,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 }
 
-/// "Sobre o slick": the mark, the name, the version and where the code is.
+/// "About slick": the mark, the name, the version and where the code is.
 fn draw_about(f: &mut Frame, app: &mut App) {
     let area = f.area();
     let commit = env!("GIT_COMMIT");
-    let version = match commit {
-        "" => format!("versão {}", env!("CARGO_PKG_VERSION")),
-        c => format!("versão {} · {c}", env!("CARGO_PKG_VERSION")),
-    };
+    let version = format!("{} {}", tr("version", "versão"), env!("CARGO_PKG_VERSION"));
+    let version = if commit.is_empty() { version } else { format!("{version} · {commit}") };
     // The mark as on the login screen: a picture where the terminal shows
     // one, else drawn in half blocks.
     let cell = crate::ui::dot_cell(app);
@@ -1193,22 +1285,35 @@ fn draw_profile_dialog(f: &mut Frame, app: &mut App) {
     let w = 64.min(area.width.saturating_sub(4));
     let iw = w.saturating_sub(4) as usize;
     let hint = |s: &str| crate::ui::wrap(s, iw.saturating_sub(2)).into_iter().map(Part::Hint).collect::<Vec<_>>();
-    let mut parts = vec![Part::Gap, Part::Label("Nome completo"), Part::Field(0), Part::Gap, Part::Label("Nome exibido"), Part::Field(1)];
-    parts.extend(hint("Pode ser seu nome ou um apelido, pense em como você quiser que as pessoas chamem você no Slack."));
-    parts.extend([Part::Gap, Part::Label("Cargo"), Part::Field(2)]);
-    parts.extend(hint(&format!("Deixe as pessoas verem o que você faz em {team}.")));
+    let mut parts = vec![
+        Part::Gap,
+        Part::Label(tr("Full name", "Nome completo")),
+        Part::Field(0),
+        Part::Gap,
+        Part::Label(tr("Display name", "Nome exibido")),
+        Part::Field(1),
+    ];
+    parts.extend(hint(tr(
+        "This could be your first name or a nickname, however you'd like people to refer to you in Slack.",
+        "Pode ser seu nome ou um apelido, pense em como você quiser que as pessoas chamem você no Slack.",
+    )));
+    parts.extend([Part::Gap, Part::Label(tr("Title", "Cargo")), Part::Field(2)]);
+    parts.extend(hint(&trf!("Let people know what you do at {team}.", "Deixe as pessoas verem o que você faz em {team}.")));
     if !tz.is_empty() {
-        parts.extend([Part::Gap, Part::Label("Fuso horário"), Part::Text(tz)]);
+        parts.extend([Part::Gap, Part::Label(tr("Time zone", "Fuso horário")), Part::Text(tz)]);
     }
-    parts.extend([Part::Gap, Part::Label("Foto do perfil"), Part::Photo]);
+    parts.extend([Part::Gap, Part::Label(tr("Profile photo", "Foto do perfil")), Part::Photo]);
     if photo {
         parts.push(Part::Field(PHOTO));
-        parts.extend(hint("JPG, PNG ou GIF; arraste o arquivo para cá ou digite o caminho."));
+        parts.extend(hint(tr(
+            "JPG, PNG or GIF; drag the file here or type its path.",
+            "JPG, PNG ou GIF; arraste o arquivo para cá ou digite o caminho.",
+        )));
     }
     let h = (parts.len() as u16 + 4).min(area.height.saturating_sub(2));
     let rect = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height.saturating_sub(h)) / 2, w, h);
     f.render_widget(Clear, rect);
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(dim()).title(Line::from(" Editar seu perfil ").bold());
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(dim()).title(Line::from(tr(" Edit your profile ", " Editar seu perfil ")).bold());
     let inner = block.inner(rect).inner(Margin { horizontal: 1, vertical: 0 });
     f.render_widget(block, rect);
     app.areas.account.dialog = rect;
@@ -1246,7 +1351,7 @@ fn draw_profile_dialog(f: &mut Frame, app: &mut App) {
                 line
             }
             Part::Photo => {
-                let label = " Fazer upload de foto ";
+                let label = tr(" Upload photo ", " Fazer upload de foto ");
                 let mut line = pill(label, Color::White, Color::DarkGray);
                 line.spans.insert(0, mark(PHOTO));
                 app.areas.account.photo = Rect::new(inner.x + 2, y, label.width() as u16 + 2, 1);
@@ -1256,16 +1361,17 @@ fn draw_profile_dialog(f: &mut Frame, app: &mut App) {
         f.render_widget(Paragraph::new(line), row);
     }
 
-    // Hint, then Cancelar and Salvar alterações on the right.
+    // Hint, then Cancel and Save changes on the right.
     let by = inner.bottom().saturating_sub(1);
-    let save = if saving { " Salvando… " } else { " Salvar alterações " };
-    let cancel = " Cancelar ";
+    let save = if saving { tr(" Saving… ", " Salvando… ") } else { tr(" Save changes ", " Salvar alterações ") };
+    let cancel = tr(" Cancel ", " Cancelar ");
     let save_r = Rect::new(inner.right().saturating_sub(save.width() as u16 + 2), by, save.width() as u16 + 2, 1);
     let cancel_r = Rect::new(save_r.x.saturating_sub(cancel.width() as u16 + 3), by, cancel.width() as u16 + 2, 1);
     f.render_widget(Paragraph::new(pill(save, Color::Black, Color::Green)), save_r);
     f.render_widget(Paragraph::new(pill(cancel, Color::Reset, Color::Indexed(236))), cancel_r);
     let hint_w = cancel_r.x.saturating_sub(inner.x + 1);
-    f.render_widget(Paragraph::new(truncate("Tab campos · Enter salva · Esc cancela", hint_w as usize)).style(dim()), Rect::new(inner.x, by, hint_w, 1));
+    let hint = tr("Tab fields · Enter saves · Esc cancels", "Tab campos · Enter salva · Esc cancela");
+    f.render_widget(Paragraph::new(truncate(hint, hint_w as usize)).style(dim()), Rect::new(inner.x, by, hint_w, 1));
     (app.areas.account.save, app.areas.account.cancel) = (save_r, cancel_r);
 }
 
@@ -1319,7 +1425,7 @@ fn draw_menu(f: &mut Frame, app: &mut App) {
 
     let (emoji, text) = app.my_status();
     let iw = inner.width as usize;
-    let mut notif_y = inner.y;
+    let mut sub_y = inner.y;
     for (n, item) in MAIN.iter().enumerate() {
         let row = Rect::new(inner.x, inner.y + 3 + n as u16, inner.width, 1);
         if row.y >= inner.bottom() {
@@ -1335,7 +1441,7 @@ fn draw_menu(f: &mut Frame, app: &mut App) {
                 // A field showing the status, with a ✕ that clears it.
                 let set = !emoji.is_empty() || !text.is_empty();
                 let g = glyph(app, &emoji, &text).unwrap_or(Glyph::Text("🙂".into()));
-                let words = if set { crate::text::shortcodes(&text) } else { "Atualizar seu status".into() };
+                let words = if set { crate::text::shortcodes(&text) } else { tr("Update your status", "Atualizar seu status").into() };
                 if *item != sel {
                     style = if set { Style::new().bg(Color::Indexed(236)) } else { dim().bg(Color::Indexed(236)) };
                 }
@@ -1344,37 +1450,47 @@ fn draw_menu(f: &mut Frame, app: &mut App) {
                 }
                 padded(&format!("{} {words}", shown(&g)), if set { "✕" } else { "" }, iw)
             }
-            Item::Away if app.account.away => padded("Defina seu status como ativo", "", iw),
-            Item::Away => padded("Defina seu status como ausente", "", iw),
-            Item::Notifications => {
-                notif_y = row.y;
-                if sub.is_some() && sel == Item::Notifications {
-                    style = Style::new().bg(Color::Indexed(236));
+            Item::Away if app.account.away => padded(tr("Set yourself as active", "Defina seu status como ativo"), "", iw),
+            Item::Away => padded(tr("Set yourself as away", "Defina seu status como ausente"), "", iw),
+            Item::Notifications | Item::Language => {
+                if *item == sel {
+                    sub_y = row.y;
+                    if sub.is_some() {
+                        style = Style::new().bg(Color::Indexed(236));
+                    }
                 }
-                let pause = if app.account.paused.is_some() { format!("{PAUSED} ") } else { String::new() };
-                let level = truncate(app.account.level.as_deref().unwrap_or(""), iw.saturating_sub(20));
-                padded("Notificações", &format!("{pause}{level} ›"), iw)
+                if *item == Item::Language {
+                    padded(tr("Language", "Idioma"), &format!("{} ›", i18n::lang().name()), iw)
+                } else {
+                    let pause = if app.account.paused.is_some() { format!("{PAUSED} ") } else { String::new() };
+                    let level = truncate(app.account.level.as_deref().map_or("", level_label), iw.saturating_sub(20));
+                    padded(tr("Notifications", "Notificações"), &format!("{pause}{level} ›"), iw)
+                }
             }
-            Item::Profile => padded("Perfil", "", iw),
-            Item::Preferences => padded("Preferências", "↗", iw),
-            Item::Settings => padded("Configurações da conta", "↗", iw),
+            Item::Profile => padded(tr("Profile", "Perfil"), "", iw),
+            Item::Preferences => padded(tr("Preferences", "Preferências"), "↗", iw),
+            Item::Settings => padded(tr("Account settings", "Configurações da conta"), "↗", iw),
             Item::Downloads => padded("Downloads", "", iw),
             Item::About if app.update.is_some() => {
                 // The note faded, after the words.
-                let note = "· atualização disponível";
-                let s = padded("Sobre o slick", note, iw);
+                let note = tr("· update available", "· atualização disponível");
+                let s = padded(tr("About slick", "Sobre o slick"), note, iw);
                 let cut = s.len().saturating_sub(note.len() + 1);
                 let line = Line::from(vec![Span::styled(s[..cut].to_string(), style), Span::styled(s[cut..].to_string(), style.patch(dim()))]);
                 f.render_widget(Paragraph::new(line), row);
                 app.areas.account.rows.push((row, *item));
                 continue;
             }
-            Item::About => padded("Sobre o slick", "", iw),
+            Item::CheckUpdate if matches!(app.update, Some(State::Installed(_))) => {
+                padded(tr("Restart to update", "Reinicie para atualizar"), "↻", iw)
+            }
+            Item::CheckUpdate => padded(tr("Check for updates", "Procurar atualizações"), "", iw),
+            Item::About => padded(tr("About slick", "Sobre o slick"), "", iw),
             Item::Logout if confirm => {
                 style = style.fg(Color::Yellow).bold();
-                padded("Sair? Enter confirma", "", iw)
+                padded(tr("Sign out? Enter confirms", "Sair? Enter confirma"), "", iw)
             }
-            _ => padded(&format!("Sair de {}", me.team), "", iw),
+            _ => padded(&trf!("Sign out of {}", "Sair de {}", me.team), "", iw),
         };
         // The picture of a custom emoji goes over its blank cells, after the text.
         f.render_widget(Paragraph::new(Line::from(label).style(style)), row);
@@ -1384,13 +1500,13 @@ fn draw_menu(f: &mut Frame, app: &mut App) {
         app.areas.account.rows.push((row, *item));
     }
     if let Some(s) = sub {
-        draw_sub(f, app, rect, notif_y, s);
+        draw_sub(f, app, rect, sub_y, sel, s);
     }
 }
 
-/// The notifications submenu, beside the menu.
-fn draw_sub(f: &mut Frame, app: &mut App, main: Rect, y: u16, sel: Item) {
-    let rows = sub_rows(app);
+/// The notifications or language submenu, beside the menu.
+fn draw_sub(f: &mut Frame, app: &mut App, main: Rect, y: u16, parent: Item, sel: Item) {
+    let rows = sub_rows(app, parent);
     let area = f.area();
     let w = (rows.iter().map(|(_, l, r)| l.width() + r.width() + 5).max().unwrap_or(20) as u16).max(30).min(area.width);
     let h = (rows.len() as u16 + 2).min(area.height);
@@ -1411,7 +1527,8 @@ fn draw_sub(f: &mut Frame, app: &mut App, main: Rect, y: u16, sel: Item) {
         let line = match item {
             Some(Item::Sep) => Line::from("─".repeat(iw)).style(dim()),
             None => {
-                let style = if app.account.paused.is_some() && n == 0 { Style::new().fg(Color::Yellow) } else { dim() };
+                let paused = parent == Item::Notifications && app.account.paused.is_some() && n == 0;
+                let style = if paused { Style::new().fg(Color::Yellow) } else { dim() };
                 Line::from(padded(left, right, iw)).style(style)
             }
             Some(i) => {
@@ -1432,7 +1549,7 @@ fn draw_dialog(f: &mut Frame, app: &mut App) {
     let (w, h) = (56.min(area.width.saturating_sub(4)), 18.min(area.height.saturating_sub(2)));
     let rect = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
     f.render_widget(Clear, rect);
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(dim()).title(Line::from(" Definir um status ").bold());
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(dim()).title(Line::from(tr(" Set a status ", " Definir um status ")).bold());
     let inner = block.inner(rect).inner(Margin { horizontal: 1, vertical: 0 });
     f.render_widget(block, rect);
     app.areas.account.dialog = rect;
@@ -1450,7 +1567,7 @@ fn draw_dialog(f: &mut Frame, app: &mut App) {
     let button = format!(" {face}{} ", " ".repeat(2usize.saturating_sub(face.width())));
     let button_style = if field == 0 { selected(0) } else if g.is_none() { dim().bg(Color::Indexed(236)) } else { Style::new().bg(Color::Indexed(236)) };
     let room = iw.saturating_sub(2 + 4 + 1 + 1);
-    let value = if text.is_empty() { Span::styled("O que você está fazendo?", dim()) } else { Span::raw(tail(&text, room)) };
+    let value = if text.is_empty() { Span::styled(tr("What's your status?", "O que você está fazendo?"), dim()) } else { Span::raw(tail(&text, room)) };
     let mark = if field <= 1 { Span::styled("› ", Style::new().fg(Color::Cyan).bold()) } else { Span::raw("  ") };
     f.render_widget(Paragraph::new(Line::from(vec![mark, Span::styled(button, button_style), Span::raw(" "), value])), Rect::new(inner.x, y, inner.width, 1));
     let emoji_rect = Rect::new(inner.x + 2, y, 4, 1);
@@ -1465,15 +1582,16 @@ fn draw_dialog(f: &mut Frame, app: &mut App) {
     }
 
     // Slack's suggestions.
-    f.render_widget(Paragraph::new(Line::from(" Sugestões").style(dim())), Rect::new(inner.x, y + 2, inner.width, 1));
-    for (i, (code, label, after)) in PRESETS.iter().enumerate() {
+    f.render_widget(Paragraph::new(Line::from(tr(" Suggestions", " Sugestões")).style(dim())), Rect::new(inner.x, y + 2, inner.width, 1));
+    for (i, (code, en, pt, after)) in PRESETS.iter().enumerate() {
+        let label = tr(en, pt);
         let row = Rect::new(inner.x, y + 3 + i as u16, inner.width, 1);
         let e = emoji::standard(code).unwrap_or_default();
         let line = Line::from(vec![
             marker(2 + i),
             Span::raw(format!("{e} ")),
             Span::styled(label.to_string(), selected(2 + i)),
-            Span::styled(format!(" — {}", CLEAR[*after].to_lowercase()), dim()),
+            Span::styled(format!(" — {}", clear_label(*after).to_lowercase()), dim()),
         ]);
         f.render_widget(Paragraph::new(line), row);
         app.areas.account.presets.push((row, i));
@@ -1481,20 +1599,22 @@ fn draw_dialog(f: &mut Frame, app: &mut App) {
 
     // When it clears.
     let ay = y + 4 + PRESETS.len() as u16;
-    let choice = format!("‹ {} ›", CLEAR[clear]);
-    let line = Line::from(vec![marker(AFTER), Span::styled("Limpar após  ", Style::new().bold()), Span::styled(choice.clone(), selected(AFTER).fg(Color::Cyan))]);
+    let choice = format!("‹ {} ›", clear_label(clear));
+    let after = tr("Clear after  ", "Limpar após  ");
+    let line = Line::from(vec![marker(AFTER), Span::styled(after, Style::new().bold()), Span::styled(choice.clone(), selected(AFTER).fg(Color::Cyan))]);
     f.render_widget(Paragraph::new(line), Rect::new(inner.x, ay, inner.width, 1));
-    app.areas.account.after = Rect::new(inner.x, ay, (15 + choice.width()) as u16, 1).intersection(inner);
+    app.areas.account.after = Rect::new(inner.x, ay, (2 + after.width() + choice.width()) as u16, 1).intersection(inner);
 
-    // Hint, then Cancelar and Salvar on the right.
+    // Hint, then Cancel and Save on the right.
     let by = inner.bottom().saturating_sub(1);
-    let (save, cancel) = (" Salvar ", " Cancelar ");
+    let (save, cancel) = (tr(" Save ", " Salvar "), tr(" Cancel ", " Cancelar "));
     let save_r = Rect::new(inner.right().saturating_sub(save.width() as u16), by, save.width() as u16, 1);
     let cancel_r = Rect::new(save_r.x.saturating_sub(cancel.width() as u16 + 1), by, cancel.width() as u16, 1);
     f.render_widget(Paragraph::new(Span::styled(save, Style::new().fg(Color::Black).bg(Color::Green).bold())), save_r);
     f.render_widget(Paragraph::new(Span::styled(cancel, Style::new().bg(Color::Indexed(236)))), cancel_r);
     let hint_w = cancel_r.x.saturating_sub(inner.x + 1);
-    f.render_widget(Paragraph::new(truncate("Tab campos · Enter salva · Esc cancela", hint_w as usize)).style(dim()), Rect::new(inner.x, by, hint_w, 1));
+    let hint = tr("Tab fields · Enter saves · Esc cancels", "Tab campos · Enter salva · Esc cancela");
+    f.render_widget(Paragraph::new(truncate(hint, hint_w as usize)).style(dim()), Rect::new(inner.x, by, hint_w, 1));
     (app.areas.account.save, app.areas.account.cancel) = (save_r, cancel_r);
 
     if let Some((query, sel)) = picker {
@@ -1514,14 +1634,14 @@ fn draw_picker(f: &mut Frame, app: &mut App, query: &str, sel: usize, below: Rec
     f.render_widget(block, rect);
     app.areas.account.picker = rect;
     let search = if query.is_empty() {
-        Line::from(vec![Span::raw(" 🔍 "), Span::styled("Procurar emoji", dim())])
+        Line::from(vec![Span::raw(" 🔍 "), Span::styled(tr("Search emoji", "Procurar emoji"), dim())])
     } else {
         Line::from(vec![Span::raw(" 🔍 "), Span::raw(query.to_string()), Span::raw("▏")])
     };
     f.render_widget(Paragraph::new(search), Rect::new(inner.x, inner.y, inner.width, 1));
     f.render_widget(Paragraph::new("─".repeat(inner.width as usize)).style(dim()), Rect::new(inner.x, inner.y + 1, inner.width, 1));
     if hits.is_empty() {
-        f.render_widget(Paragraph::new(" nenhum emoji").style(dim()), Rect::new(inner.x, inner.y + 2, inner.width, 1));
+        f.render_widget(Paragraph::new(tr(" no emoji", " nenhum emoji")).style(dim()), Rect::new(inner.x, inner.y + 2, inner.width, 1));
     }
     for (n, (name, glyph)) in hits.iter().enumerate() {
         let row = Rect::new(inner.x, inner.y + 2 + n as u16, inner.width, 1);

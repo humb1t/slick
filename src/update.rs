@@ -4,6 +4,7 @@
 //! nix, homebrew) owns it; then it only tells how to update.
 
 use crate::app::Event;
+use crate::i18n::tr;
 use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -23,6 +24,8 @@ pub enum Note {
     Found { ver: String, assets: Assets },
     /// The install asked for finished: the version, or why not.
     Installed(Result<String, String>),
+    /// A check asked for from the menu: a newer version, none, or why not.
+    Checked(Result<Option<(String, Assets)>, String>),
 }
 
 /// Where the update stands, shown as the button by your name.
@@ -110,14 +113,14 @@ pub fn how() -> Option<String> {
     let dir = exe.parent().map(|d| d.display().to_string()).unwrap_or_default();
     let msg = match mode() {
         Mode::Own => return None,
-        Mode::Off => "build de desenvolvimento: não se atualiza, compile de novo".to_string(),
+        Mode::Off => tr("development build: doesn't update itself, build it again", "build de desenvolvimento: não se atualiza, compile de novo").to_string(),
         Mode::Managed if exe.starts_with(cargo_bin()) => {
-            format!("instalado via cargo: rode cargo install --locked --git {REPO}")
+            trf!("installed with cargo: run cargo install --locked --git {REPO}", "instalado via cargo: rode cargo install --locked --git {REPO}")
         }
-        Mode::Managed if s.starts_with("/nix/") => "instalado via nix: atualize pelo nix".into(),
-        Mode::Managed if s.starts_with("/opt/homebrew") => "instalado via homebrew: atualize pelo brew".into(),
-        Mode::Managed if s.starts_with("/usr/") => "instalado pelo sistema: atualize pelo gerenciador de pacotes".into(),
-        Mode::Managed => format!("{dir} não é gravável: baixe a versão nova em {REPO}/releases"),
+        Mode::Managed if s.starts_with("/nix/") => tr("installed with nix: update it through nix", "instalado via nix: atualize pelo nix").into(),
+        Mode::Managed if s.starts_with("/opt/homebrew") => tr("installed with homebrew: update it through brew", "instalado via homebrew: atualize pelo brew").into(),
+        Mode::Managed if s.starts_with("/usr/") => tr("installed by the system: update it through the package manager", "instalado pelo sistema: atualize pelo gerenciador de pacotes").into(),
+        Mode::Managed => trf!("{dir} isn't writable: download the new version at {REPO}/releases", "{dir} não é gravável: baixe a versão nova em {REPO}/releases"),
     };
     Some(msg)
 }
@@ -144,7 +147,7 @@ fn latest() -> Result<(String, Assets), String> {
         .map_err(|e| e.to_string())?
         .into_json()
         .map_err(|e| e.to_string())?;
-    let tag = v["tag_name"].as_str().ok_or("release sem tag")?.trim_start_matches('v').to_string();
+    let tag = v["tag_name"].as_str().ok_or(tr("release without a tag", "release sem tag"))?.trim_start_matches('v').to_string();
     let assets = v["assets"].as_array().into_iter().flatten();
     let assets = assets
         .filter_map(|a| Some((a["name"].as_str()?.to_string(), a["browser_download_url"].as_str()?.to_string())))
@@ -171,17 +174,17 @@ fn archive(ver: &str) -> String {
 
 /// Downloads this machine's archive, checks its sha256 and swaps `slick` for the new one.
 fn install(ver: &str, assets: &[(String, String)], log: &dyn Fn(&str)) -> Result<(), String> {
-    let exe = exe().ok_or("não achou o executável")?;
-    let dir = exe.parent().ok_or("executável sem pasta")?;
+    let exe = exe().ok_or(tr("couldn't find the executable", "não achou o executável"))?;
+    let dir = exe.parent().ok_or(tr("executable without a folder", "executável sem pasta"))?;
     let name = archive(ver);
-    let url = |n: &str| assets.iter().find(|(a, _)| a == n).map(|(_, u)| u.clone()).ok_or(format!("release sem {n}"));
+    let url = |n: &str| assets.iter().find(|(a, _)| a == n).map(|(_, u)| u.clone()).ok_or(trf!("release without {n}", "release sem {n}"));
     let (tar_url, sum_url) = (url(&name)?, url(&format!("{name}.sha256"))?);
-    log(&format!("baixando {name}…"));
+    log(&trf!("downloading {name}…", "baixando {name}…"));
     let tar = download(&tar_url)?;
     let sum = String::from_utf8_lossy(&download(&sum_url)?).split_whitespace().next().unwrap_or("").to_lowercase();
     let got: String = Sha256::digest(&tar).iter().map(|b| format!("{b:02x}")).collect();
     if got != sum {
-        return Err(format!("sha256 não confere ({got} ≠ {sum})"));
+        return Err(trf!("sha256 doesn't match ({got} ≠ {sum})", "sha256 não confere ({got} ≠ {sum})"));
     }
     // Unpacked next to the binary, so the rename below stays on one filesystem.
     let tmp = dir.join(format!(".slick-update-{}", std::process::id()));
@@ -196,7 +199,7 @@ fn install(ver: &str, assets: &[(String, String)], log: &dyn Fn(&str)) -> Result
         };
         let ok = std::process::Command::new(tar).arg(flags).arg(&name).current_dir(&tmp).status();
         if !ok.is_ok_and(|s| s.success()) {
-            return Err("tar não extraiu o pacote".to_string());
+            return Err(tr("tar didn't extract the package", "tar não extraiu o pacote").to_string());
         }
         let file = if cfg!(windows) { "slick.exe" } else { "slick" };
         let new = PathBuf::from(format!("{}.new", exe.display()));
@@ -250,6 +253,30 @@ pub fn background(tx: Sender<Event>) {
     });
 }
 
+/// This version, as the menu's check reports it.
+pub fn current() -> &'static str {
+    VERSION
+}
+
+/// A development build checks only with `SLICK_UPDATE_DEV=1`.
+pub fn check_disabled() -> bool {
+    matches!(mode(), Mode::Off) && !dev()
+}
+
+/// "Check for updates" in the account menu: looks now, even with
+/// `auto_update = false`, and reports errors. It blocks, so it runs in a thread.
+pub fn check_now() -> Event {
+    let dev = dev();
+    let res = match latest() {
+        Ok((ver, assets)) if dev || newer(&ver, VERSION) => Ok(Some((ver, assets))),
+        Ok(_) => Ok(None),
+        // No release to show: a made-up one, as in `background`.
+        Err(_) if dev => Ok(Some((format!("{VERSION}-dev"), vec![]))),
+        Err(e) => Err(e),
+    };
+    Event::Update(Note::Checked(res))
+}
+
 /// Installs `ver` for a click on the button; it blocks, so it runs in a thread.
 pub fn install_now(ver: String, assets: Assets) -> Event {
     Event::Update(Note::Installed(install(&ver, &assets, &|_| {}).map(|()| ver)))
@@ -259,32 +286,38 @@ pub fn install_now(ver: String, assets: Assets) -> Event {
 pub fn cli() -> i32 {
     let path = exe().map(|p| p.display().to_string()).unwrap_or_default();
     if matches!(mode(), Mode::Off) {
-        eprintln!("{path}: build de desenvolvimento, não se atualiza");
+        eprintln!("{}", trf!("{path}: development build, doesn't update itself", "{path}: build de desenvolvimento, não se atualiza"));
         return 1;
     }
-    eprintln!("slick {VERSION} · procurando versão nova…");
+    eprintln!("{}", trf!("slick {VERSION} · looking for a new version…", "slick {VERSION} · procurando versão nova…"));
     let (ver, assets) = match latest() {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("não consultou as releases: {e}");
+            eprintln!("{}", trf!("couldn't check the releases: {e}", "não consultou as releases: {e}"));
             return 1;
         }
     };
     if !newer(&ver, VERSION) {
-        eprintln!("já é a mais recente");
+        eprintln!("{}", tr("already the latest", "já é a mais recente"));
         return 0;
     }
     if matches!(mode(), Mode::Managed) {
-        eprintln!("slick {ver} disponível; {path} é de outra ferramenta (ou a pasta não é gravável): atualize por ela");
+        eprintln!(
+            "{}",
+            trf!(
+                "slick {ver} available; {path} belongs to another tool (or the folder isn't writable): update through it",
+                "slick {ver} disponível; {path} é de outra ferramenta (ou a pasta não é gravável): atualize por ela"
+            )
+        );
         return 1;
     }
     match install(&ver, &assets, &|s| eprintln!("{s}")) {
         Ok(()) => {
-            eprintln!("atualizado para {ver}");
+            eprintln!("{}", trf!("updated to {ver}", "atualizado para {ver}"));
             0
         }
         Err(e) => {
-            eprintln!("não atualizou: {e}");
+            eprintln!("{}", trf!("didn't update: {e}", "não atualizou: {e}"));
             1
         }
     }
@@ -293,7 +326,7 @@ pub fn cli() -> i32 {
 /// Runs the new binary in this process's place, with the same arguments.
 /// Returns only when that fails.
 pub fn restart() -> std::io::Error {
-    let Some(exe) = exe() else { return std::io::Error::other("não achou o executável") };
+    let Some(exe) = exe() else { return std::io::Error::other(tr("couldn't find the executable", "não achou o executável")) };
     let mut cmd = std::process::Command::new(exe);
     cmd.args(std::env::args_os().skip(1));
     #[cfg(unix)]

@@ -15,7 +15,7 @@ pub struct Names<'a> {
 /// is drawn by `blocks`.
 pub fn body(m: &Message, n: &Names) -> String {
     if m.subtype.as_deref() == Some("huddle_thread") {
-        return "📞 iniciou um huddle".into();
+        return crate::i18n::tr("📞 started a huddle", "📞 iniciou um huddle").into();
     }
     let mut out = match m.blocks.as_array() {
         Some(b) if !b.is_empty() => blocks(b, n),
@@ -198,9 +198,9 @@ fn blocks(bs: &[Value], n: &Names) -> String {
                 .collect::<Vec<_>>()
                 .join(" "),
             "divider" => "────────".into(),
-            "image" => format!("[imagem] {}", b["title"]["text"].as_str().or(b["alt_text"].as_str()).unwrap_or("")),
-            "video" => format!("[vídeo] {}", b["title"]["text"].as_str().unwrap_or("")),
-            "file" => "[arquivo]".into(),
+            "image" => format!("{} {}", crate::i18n::tr("[image]", "[imagem]"), b["title"]["text"].as_str().or(b["alt_text"].as_str()).unwrap_or("")),
+            "video" => format!("{} {}", crate::i18n::tr("[video]", "[vídeo]"), b["title"]["text"].as_str().unwrap_or("")),
+            "file" => crate::i18n::tr("[file]", "[arquivo]").into(),
             _ => String::new(),
         };
         if !line.is_empty() {
@@ -279,7 +279,7 @@ fn rich_inline(e: &Value, n: &Names, out: &mut String) {
             out.push('#');
             out.push_str(n.chans.get(s("channel_id")).map(String::as_str).unwrap_or(s("channel_id")));
         }
-        "usergroup" => out.push_str("@grupo"),
+        "usergroup" => out.push_str(crate::i18n::tr("@group", "@grupo")),
         "broadcast" => {
             out.push('@');
             out.push_str(s("range"));
