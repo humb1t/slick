@@ -45,12 +45,13 @@ fn body_as(m: &Message, n: &Names, html: bool) -> String {
     if m.subtype.as_deref() == Some("huddle_thread") {
         return esc(crate::i18n::tr("📞 started a huddle", "📞 iniciou um huddle").into());
     }
+    let sys = system(m);
     let mut out = match m.blocks.as_array() {
-        Some(b) if !b.is_empty() => blocks(b, n, html),
+        Some(b) if !b.is_empty() && sys.is_none() => blocks(b, n, html),
         _ => String::new(),
     };
     if out.trim().is_empty() {
-        out = esc(mrkdwn(&m.text, n));
+        out = esc(mrkdwn(sys.as_deref().unwrap_or(&m.text), n));
     }
     if let Some(atts) = m.attachments.as_array() {
         for a in atts {
@@ -62,6 +63,43 @@ fn body_as(m: &Message, n: &Names, html: bool) -> String {
     }
     // Files are drawn by the UI: images inline, the rest as cards.
     shortcodes(&out)
+}
+
+/// A system message ("set the channel topic: x") in the app's language, as
+/// mrkdwn: Slack's `text` comes in the workspace's. None for anything else.
+pub fn system(m: &Message) -> Option<String> {
+    use crate::i18n::tr;
+    let s = m.system.as_ref()?;
+    let val = |v: &Option<String>| v.clone().filter(|v| !v.trim().is_empty());
+    Some(match m.subtype.as_deref()? {
+        "channel_topic" | "group_topic" => match val(&s.topic) {
+            Some(t) => format!("{} {t}", tr("set the channel topic:", "definiu o assunto do canal:")),
+            None => tr("cleared the channel topic", "limpou o assunto do canal").into(),
+        },
+        "channel_purpose" | "group_purpose" => match val(&s.purpose) {
+            Some(t) => format!("{} {t}", tr("set the channel description:", "definiu a descrição do canal:")),
+            None => tr("cleared the channel description", "limpou a descrição do canal").into(),
+        },
+        "channel_name" | "group_name" => {
+            let new = val(&s.name)?;
+            match val(&s.old_name) {
+                Some(old) => trf!("renamed the channel from #{old} to #{new}", "renomeou o canal de #{old} para #{new}"),
+                None => trf!("renamed the channel to #{new}", "renomeou o canal para #{new}"),
+            }
+        }
+        "channel_join" | "group_join" => match val(&s.inviter) {
+            Some(by) => trf!("was added by <@{by}>", "foi adicionado por <@{by}>"),
+            None => tr("joined the channel", "entrou no canal").into(),
+        },
+        "channel_leave" | "group_leave" => tr("left the channel", "saiu do canal").into(),
+        "channel_archive" | "group_archive" => tr("archived the channel", "arquivou o canal").into(),
+        "channel_unarchive" | "group_unarchive" => tr("unarchived the channel", "desarquivou o canal").into(),
+        "channel_convert_to_private" => tr("made the channel private", "tornou o canal privado").into(),
+        "channel_convert_to_public" => tr("made the channel public", "tornou o canal público").into(),
+        // The pinned message itself stays as its attachment.
+        "pinned_item" => tr("pinned a message to this channel", "fixou uma mensagem neste canal").into(),
+        _ => return None,
+    })
 }
 
 /// `:green_heart:` → 💚 for the shortcodes that have a Unicode emoji.

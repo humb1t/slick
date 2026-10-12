@@ -113,6 +113,8 @@ pub enum Event {
     Unarchived { id: String, res: Res<()> },
     /// The threads you follow: their counts, the list, one marked read (`threads`).
     Threads(crate::threads::Ev),
+    /// "Invite people": your address's domain and the invitations sent (`invite`).
+    Invite(crate::invite::Ev),
 }
 
 /// Why the open conversation has a notice instead of a message box.
@@ -370,6 +372,8 @@ pub struct Areas {
     pub details: crate::details::Areas,
     /// The Threads view's cards.
     pub threads: crate::threads::Areas,
+    /// The invite modal.
+    pub invite: crate::invite::Areas,
 }
 
 pub struct App {
@@ -481,6 +485,8 @@ pub struct App {
     pub details: Option<crate::details::Details>,
     /// The threads you follow, and their view in the main pane.
     pub threads: crate::threads::Threads,
+    /// "Invite people to …", opened from the account menu.
+    pub invite: Option<crate::invite::Invite>,
     /// Whose data the cache holds.
     owner: String,
     pub status: String,
@@ -594,6 +600,7 @@ impl App {
             attach: Default::default(),
             details: None,
             threads: Default::default(),
+            invite: None,
             owner: cache.owner,
             status: tr("connecting…", "conectando…").into(),
             update: None,
@@ -1847,6 +1854,7 @@ impl App {
             Event::Dm(res) => self.dm_opened(res),
             Event::Slash(e) => self.on_slash(e),
             Event::Details(e) => self.on_details(e),
+            Event::Invite(e) => self.on_invite(e),
             Event::Unarchived { id, res } => self.unarchived(id, res),
             Event::Threads(e) => self.on_threads(e),
             Event::Live(ev) => self.on_live(ev),
@@ -2438,11 +2446,18 @@ impl App {
         if self.account.dialog.is_some() {
             return self.status_paste(s);
         }
+        // No text to type in the pause dialog.
+        if self.account.pause.is_some() {
+            return;
+        }
         if self.account.profile.is_some() {
             return self.profile_paste(s);
         }
         if self.details.is_some() {
             return self.details_paste(s);
+        }
+        if self.invite.is_some() {
+            return self.people_paste(s);
         }
         match self.focus {
             // No message box in a read-only conversation.
@@ -2482,6 +2497,9 @@ impl App {
         if self.account.dialog.is_some() {
             return self.status_key(k);
         }
+        if self.account.pause.is_some() {
+            return self.pause_key(k);
+        }
         if self.account.profile.is_some() {
             return self.profile_key(k);
         }
@@ -2493,6 +2511,9 @@ impl App {
         }
         if self.details.is_some() {
             return self.details_key(k);
+        }
+        if self.invite.is_some() {
+            return self.people_key(k);
         }
         // The conversation's details, or a DM's profile, as a click on its name.
         if k.modifiers.contains(KeyModifiers::ALT) && k.code == KeyCode::Char('i') {
@@ -2738,6 +2759,12 @@ impl App {
         }
         if self.details.is_some() {
             return self.details_mouse(m);
+        }
+        if self.account.pause.is_some() {
+            return self.pause_mouse(m);
+        }
+        if self.invite.is_some() {
+            return self.people_mouse(m);
         }
         let covered = self.menu.is_some() || self.viewer.is_some() || self.react.is_some() || self.dialog.is_some() || self.account.profile.is_some() || self.account.about || self.account.settings.is_some();
         if m.kind == MouseEventKind::Down(MouseButton::Left) && !covered && self.areas.latest.contains(at) {

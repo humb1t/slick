@@ -40,6 +40,19 @@ pub(crate) fn dim() -> Style {
 
 /// The bar under a selected row, the sidebar's: quieter than inverting it.
 pub(crate) const SELECTED: Color = Color::Indexed(238);
+/// A surface a little lighter than the background, for pills and bars.
+pub(crate) const SURFACE: Color = Color::Indexed(236);
+
+/// A text input: a rounded frame, dim or in the focus accent, with the
+/// text a column in from each side. Returns where the text went.
+pub(crate) fn rounded_input<'a>(f: &mut Frame, area: Rect, focused: bool, text: impl Into<ratatui::text::Text<'a>>) -> Rect {
+    let border = if focused { Style::new().fg(Color::Cyan) } else { dim() };
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(border);
+    let inner = block.inner(area).inner(ratatui::layout::Margin { horizontal: 1, vertical: 0 });
+    f.render_widget(block, area);
+    f.render_widget(Paragraph::new(text), inner);
+    inner
+}
 
 /// Marks the selected row of a popup list, already padded to its width:
 /// the bar under all of it, a thin accent where it starts with a space,
@@ -110,6 +123,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     menu(f, app);
     crate::account::draw(f, app);
     crate::details::draw(f, app);
+    crate::invite::draw(f, app);
     react_picker(f, app);
     crate::edit::draw(f, app);
     viewer(f, app);
@@ -364,9 +378,12 @@ fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
     // A bigger workspace icon takes two rows, the name beside it.
     let icon = app.team_icon.clone().filter(|_| app.picker.is_some());
     let head_h = if icon.is_some() { 2 } else { 1 };
-    let [team, search, _, list_area, account] = Layout::vertical([
+    // A blank row under the name, then the search box: three rows tall,
+    // its text on the middle one.
+    let [team, _, search, _, list_area, account] = Layout::vertical([
         Constraint::Length(head_h),
         Constraint::Length(1),
+        Constraint::Length(3),
         Constraint::Length(1),
         Constraint::Min(1),
         Constraint::Length(crate::account::button_height(app)),
@@ -395,13 +412,26 @@ fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
         draw_image(f, app, &ImgRef::avatar(&key, &icon), Rect::new(team.x + 1, team.y, 4, 2));
     }
 
+    // A rounded input a column in from each side, with "^K" at its right end.
+    let search = Rect::new(search.x + 1, search.y, search.width.saturating_sub(2), search.height);
     let filtering = app.focus == Focus::Filter;
-    let search_line = if filtering || !app.filter.is_empty() {
-        Line::from(vec![Span::raw(" 🔍 "), Span::raw(app.filter.clone()), Span::raw("▏")])
+    // Text room: the frame and a column of padding on each side.
+    let tw = (search.width as usize).saturating_sub(4);
+    let (fill, hint) = if filtering || !app.filter.is_empty() {
+        let room = tw.saturating_sub(4);
+        (vec![Span::styled("🔍 ", dim()), Span::raw(truncate(&app.filter, room)), Span::raw("▏")], "")
     } else {
-        Line::from(tr(" 🔍 Find a conversation  ^K", " 🔍 Encontrar uma conversa  ^K")).style(dim())
+        let text = tr("Find a conversation", "Encontrar uma conversa");
+        (vec![Span::styled("🔍 ", dim()), Span::styled(truncate(text, tw.saturating_sub(3)), dim())], "^K")
     };
-    f.render_widget(Paragraph::new(search_line), search);
+    let used: usize = fill.iter().map(|s| s.content.width()).sum();
+    let mut middle = fill;
+    // "^K" only where it fits beside the placeholder.
+    if used + hint.width() + 1 <= tw {
+        middle.push(Span::raw(" ".repeat(tw - used - hint.width())));
+        middle.push(Span::styled(hint, dim()));
+    }
+    rounded_input(f, search, filtering, Line::from(middle));
     app.areas.search = search;
     app.areas.sidebar = list_area;
 
@@ -1880,7 +1910,8 @@ pub(crate) fn message_lines(
             || matches!(
                 m.subtype.as_deref(),
                 Some("channel_join" | "channel_leave" | "channel_topic" | "channel_purpose" | "huddle_thread")
-            );
+            )
+            || crate::text::system(m).is_some_and(|_| m.subtype.as_deref() != Some("pinned_item"));
         // Block Kit and mrkdwn laid out at this width, then moved past the avatar.
         let mut pieces = blocks::parse(m, names);
         blocks::drop_author(&mut pieces, &author);

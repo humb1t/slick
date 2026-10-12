@@ -26,8 +26,8 @@ const STAR_ON: &str = "\u{f005}";
 const STAR_OFF: &str = "\u{f006}";
 /// The dropdown's button and the highlighted level: a quiet bar, as in
 /// the sidebar, rather than inverted colors.
-const BUTTON_BG: Color = Color::Indexed(236);
-const HOVER_BG: Color = Color::Indexed(238);
+pub(crate) const BUTTON_BG: Color = Color::Indexed(236);
+pub(crate) const HOVER_BG: Color = Color::Indexed(238);
 /// nf-fa-archive, beside "Unarchive".
 const ARCHIVE: &str = "\u{f187}";
 /// The notification levels' dropdown.

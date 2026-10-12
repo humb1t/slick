@@ -12,6 +12,7 @@ mod details;
 mod edit;
 mod editor;
 mod icons;
+mod invite;
 mod ipc;
 mod emoji;
 mod events;
@@ -20,6 +21,7 @@ mod login;
 mod mention;
 #[cfg(not(target_os = "linux"))]
 mod login_window;
+mod pause;
 mod pins;
 mod rtm;
 mod selection;

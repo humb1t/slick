@@ -246,6 +246,20 @@ pub struct Message {
     /// A thread parent: whether its replies notify you.
     #[serde(default)]
     pub subscribed: bool,
+    /// What a system message (topic, rename, join…) is about, to write it in
+    /// the app's language. None in caches from before it: then `text` is used.
+    #[serde(default)]
+    pub system: Option<System>,
+}
+
+/// The fields of a system message that Slack's own (localized) text is made of.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct System {
+    pub topic: Option<String>,
+    pub purpose: Option<String>,
+    pub name: Option<String>,
+    pub old_name: Option<String>,
+    pub inviter: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -831,6 +845,10 @@ pub(crate) fn parse_message(m: &Value) -> Message {
         edited: serde_json::from_value(m["edited"].clone()).ok(),
         pinned_to: m["pinned_to"].as_array().into_iter().flatten().filter_map(|c| c.as_str().map(String::from)).collect(),
         subscribed: m["subscribed"].as_bool().unwrap_or(false),
+        system: m["subtype"].is_string().then(|| {
+            let s = |k: &str| m[k].as_str().map(String::from);
+            System { topic: s("topic"), purpose: s("purpose"), name: s("name"), old_name: s("old_name"), inviter: s("inviter") }
+        }),
     }
 }
 

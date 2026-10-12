@@ -161,9 +161,11 @@ pub fn parse(m: &Message, n: &Names) -> Vec<Piece> {
     if m.subtype.as_deref() == Some("huddle_thread") {
         return vec![Piece::Text(vec![Para::plain(vec![Seg::new(tr("📞 started a huddle", "📞 iniciou um huddle"), Style::new())])], None)];
     }
-    let mut out = m.blocks.as_array().map(|b| blocks(b, n, &m.ts)).unwrap_or_default();
+    // System messages are written here, in the app's language, not Slack's.
+    let sys = text::system(m);
+    let mut out = if sys.is_some() { Vec::new() } else { m.blocks.as_array().map(|b| blocks(b, n, &m.ts)).unwrap_or_default() };
     if out.is_empty() {
-        let paras = mrkdwn(&m.text, n);
+        let paras = mrkdwn(sys.as_deref().unwrap_or(&m.text), n);
         if !blank(&paras) {
             out.push(Piece::Text(paras, None));
         }

@@ -71,6 +71,8 @@ enum Item {
     Status,
     Away,
     Notifications,
+    /// "Invite people to <workspace>", in a section of its own.
+    Invite,
     Profile,
     Preferences,
     Settings,
@@ -82,13 +84,19 @@ enum Item {
     Resume,
     /// Minutes; 0 is "until tomorrow".
     Pause(i64),
+    /// Until Monday, 9am.
+    PauseWeek,
+    /// The "Pause Notifications" dialog, for any day and time.
+    PauseCustom,
     NotifyPrefs,
 }
 
-const MAIN: [Item; 12] = [
+const MAIN: [Item; 14] = [
     Item::Status,
     Item::Away,
     Item::Notifications,
+    Item::Sep,
+    Item::Invite,
     Item::Sep,
     Item::Profile,
     Item::Preferences,
@@ -102,7 +110,7 @@ const MAIN: [Item; 12] = [
 
 impl Item {
     fn in_sub(self) -> bool {
-        matches!(self, Item::Resume | Item::Pause(_) | Item::NotifyPrefs)
+        matches!(self, Item::Resume | Item::Pause(_) | Item::PauseWeek | Item::PauseCustom | Item::NotifyPrefs)
     }
 
     /// Opens a submenu beside the menu.
@@ -154,6 +162,8 @@ pub struct Account {
     pub level: Option<String>,
     pub menu: Option<Popup>,
     pub dialog: Option<StatusDialog>,
+    /// "Pause Notifications", from "Custom…".
+    pub pause: Option<crate::pause::PauseDialog>,
     /// "Edit your profile".
     pub profile: Option<ProfileDialog>,
     /// "About slick", open.
@@ -203,6 +213,8 @@ pub enum Ev {
     Dnd(Res<Option<Paused>>),
     /// After pausing or resuming here.
     DndSaved(Res<Option<Paused>>),
+    /// The custom pause dialog's.
+    Pause(crate::pause::Ev),
     Level(Res<String>),
     /// Someone else's pause; on failure the notice just does not show.
     UserDnd { uid: String, res: Res<bool> },
@@ -411,8 +423,18 @@ fn expiration(clear: usize) -> i64 {
 
 /// Minutes until 9am tomorrow, Slack's "until tomorrow".
 fn until_tomorrow() -> i64 {
+    until_nine(1)
+}
+
+/// Minutes until 9am next Monday (a week from a Monday), Slack's "until next week".
+fn until_next_week() -> i64 {
+    until_nine(7 - Local::now().weekday().num_days_from_monday() as u64)
+}
+
+/// Minutes until 9am `days` from today, local time.
+fn until_nine(days: u64) -> i64 {
     let now = Local::now();
-    let at = (now.date_naive() + Days::new(1)).and_hms_opt(9, 0, 0).and_then(|t| Local.from_local_datetime(&t).single());
+    let at = (now.date_naive() + Days::new(days)).and_hms_opt(9, 0, 0).and_then(|t| Local.from_local_datetime(&t).single());
     at.map_or(12 * 60, |t| (t.timestamp() - now.timestamp()) / 60)
 }
 
@@ -449,23 +471,24 @@ fn step(items: &[Item], cur: Item, delta: isize) -> Item {
 /// The notifications submenu's rows; those without an item are only text.
 fn sub_rows(app: &App, _parent: Item) -> Vec<(Option<Item>, String, String)> {
     let mut rows = Vec::new();
-    let state = match app.account.paused {
-        Some(p) => trf!("{PAUSED} Paused {}", "{PAUSED} Pausadas {}", until(p.until)),
-        None => tr("Notifications on", "Notificações ativas").into(),
-    };
-    rows.push((None, state, String::new()));
-    rows.push((Some(Item::Sep), String::new(), String::new()));
-    if app.account.paused.is_some() {
+    // Paused: until when, and a way back, before pausing anew.
+    if let Some(p) = app.account.paused {
+        rows.push((None, trf!("{PAUSED} Paused {}", "{PAUSED} Pausadas {}", until(p.until)), String::new()));
+        rows.push((Some(Item::Sep), String::new(), String::new()));
         rows.push((Some(Item::Resume), tr("Resume notifications", "Retomar notificações").into(), String::new()));
+        rows.push((Some(Item::Sep), String::new(), String::new()));
     }
+    rows.push((None, tr("Pause notifications for…", "Pausar notificações por…").into(), String::new()));
     let pauses = [
-        (30, tr("Pause for 30 minutes", "Pausar por 30 minutos")),
-        (60, tr("Pause for 1 hour", "Pausar por 1 hora")),
-        (120, tr("Pause for 2 hours", "Pausar por 2 horas")),
-        (0, tr("Pause until tomorrow", "Pausar até amanhã")),
+        (Item::Pause(30), tr("30 minutes", "30 minutos")),
+        (Item::Pause(60), tr("1 hour", "1 hora")),
+        (Item::Pause(120), tr("2 hours", "2 horas")),
+        (Item::Pause(0), tr("Until tomorrow", "Até amanhã")),
+        (Item::PauseWeek, tr("Until next week", "Até a próxima semana")),
+        (Item::PauseCustom, tr("Custom…", "Personalizado…")),
     ];
-    for (min, label) in pauses {
-        rows.push((Some(Item::Pause(min)), label.into(), String::new()));
+    for (item, label) in pauses {
+        rows.push((Some(item), label.into(), String::new()));
     }
     rows.push((Some(Item::Sep), String::new(), String::new()));
     let level = app.account.level.as_deref().map_or("…", level_label);
@@ -586,6 +609,7 @@ impl App {
                 }
             }
             Ev::Dnd(Ok(p)) | Ev::DndSaved(Ok(p)) => self.account.paused = p,
+            Ev::Pause(e) => self.on_pause(e),
             Ev::Level(Ok(l)) => self.account.level = Some(l),
             Ev::UserDnd { uid, res: Ok(p) } => {
                 self.account.others_paused.insert(uid, p);
@@ -879,6 +903,7 @@ impl App {
                 }
                 self.spawn(|s| Event::Account(Ev::Level(level(s))));
             }
+            Item::Invite => self.open_invite(),
             Item::Profile => {
                 if let Some(me) = self.my_id() {
                     self.open_profile(me);
@@ -906,6 +931,8 @@ impl App {
             }
             Item::Resume => self.resume_notifications(),
             Item::Pause(min) => self.pause_notifications(if min == 0 { until_tomorrow() } else { min }),
+            Item::PauseWeek => self.pause_notifications(until_next_week()),
+            Item::PauseCustom => self.open_pause(),
         }
         if close {
             self.account.menu = None;
@@ -1334,6 +1361,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.account.settings.is_some() {
         draw_settings(f, app);
     }
+    crate::pause::draw(f, app);
 }
 
 /// slick's settings: the language, the sidebar's photos, the tray icon and a way to Slack's own.
@@ -1666,6 +1694,7 @@ fn draw_menu(f: &mut Frame, app: &mut App) {
                 let level = truncate(app.account.level.as_deref().map_or("", level_label), iw.saturating_sub(20));
                 padded(tr("Notifications", "Notificações"), &format!("{pause}{level} ›"), iw)
             }
+            Item::Invite => padded(&trf!("Invite people to {}", "Convidar pessoas para {}", me.team), "", iw),
             Item::Profile => padded(tr("Profile", "Perfil"), "", iw),
             Item::Preferences => padded(tr("Preferences", "Preferências"), "↗", iw),
             Item::Settings => padded(tr("Settings", "Configurações"), "", iw),
