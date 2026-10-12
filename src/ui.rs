@@ -294,7 +294,7 @@ fn login(f: &mut Frame, app: &mut App) {
     }
     if let Some(m) = &l.message {
         let style = if l.checking { dim() } else { Style::new().fg(Color::Yellow) };
-        lines.push(Line::from(Span::styled(m.clone(), style)));
+        lines.extend(m.lines().map(|m| Line::from(Span::styled(m.to_string(), style))));
     }
 
     let [body, footer] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(area);

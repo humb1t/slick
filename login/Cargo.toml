@@ -1,0 +1,28 @@
+# The sign-in window as a program of its own. On Linux slick builds it from
+# build.rs, carries it inside its binary and runs it from the cache, so slick
+# itself never links WebKitGTK and starts without it.
+[package]
+name = "slick-login"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[[bin]]
+name = "slick-login"
+path = "main.rs"
+
+[dependencies]
+wry = "0.57"
+tao = "0.37"
+serde_json = "1"
+
+# Its own workspace, apart from slick's.
+[workspace]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

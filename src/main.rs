@@ -12,6 +12,7 @@ mod icons;
 mod emoji;
 mod files;
 mod login;
+#[cfg(not(target_os = "linux"))]
 mod login_window;
 mod pins;
 mod selection;
@@ -110,7 +111,8 @@ fn version() -> String {
 fn main() {
     i18n::init();
     match std::env::args().nth(1).as_deref() {
-        Some(login_window::ARG) => login_window::run(),
+        #[cfg(not(target_os = "linux"))]
+        Some(login::ARG) => login_window::run(),
         Some("-V" | "--version") => return println!("{}", version()),
         Some("-h" | "--help") => return print!("{}", usage()),
         Some(a) if a.starts_with('-') => {

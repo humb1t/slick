@@ -61,9 +61,10 @@ each install and cache directory on disk).
 - A terminal with an image protocol is recommended: kitty, ghostty, WezTerm,
   foot or any sixel terminal. Others fall back to half-block images.
 - A [Nerd Font](https://www.nerdfonts.com/) for the icons.
-- Linux: GTK 3 and WebKitGTK 4.1 at runtime, for the sign-in window
-  (`webkit2gtk-4.1` on Arch, `libwebkit2gtk-4.1-0` on Debian/Ubuntu,
-  `webkit2gtk4.1` on Fedora).
+- Linux: WebKitGTK 4.1 for the sign-in window only (`webkit2gtk-4.1` on Arch,
+  `libwebkit2gtk-4.1-0` on Debian/Ubuntu, `webkit2gtk4.1` on Fedora). slick
+  starts without it and says so when you try to sign in; signing in with a
+  token doesn't need it.
 - Windows: [Windows Terminal](https://aka.ms/terminal) (or another terminal
   with true color and, ideally, an image protocol, like WezTerm); the old
   console host is not supported. The sign-in window uses WebView2, which comes
@@ -79,7 +80,7 @@ The script ([install.sh](install.sh)) downloads the latest
 [release](https://github.com/leonavas/slick/releases) for your architecture
 (built on Ubuntu 24.04, so glibc 2.39 or newer), checks its SHA-256 and puts
 `slick` in `~/.local/bin`, without sudo. It warns when that folder is not on
-your `PATH` or WebKitGTK is missing. `SLICK_INSTALL_DIR` changes the folder and
+your `PATH`. `SLICK_INSTALL_DIR` changes the folder and
 `SLICK_VERSION=v0.2.0` picks a version. Installed this way, slick updates itself
 (see below).
 

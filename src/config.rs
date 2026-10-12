@@ -27,6 +27,7 @@ pub fn cache_dir() -> PathBuf {
 }
 
 /// slick's data folder (the sign-in window's profile); `%LOCALAPPDATA%\slick` on Windows.
+#[cfg(not(target_os = "linux"))]
 pub fn data_dir() -> PathBuf {
     if cfg!(windows) { xdg("LOCALAPPDATA", "AppData/Local") } else { xdg("XDG_DATA_HOME", ".local/share") }.join("slick")
 }

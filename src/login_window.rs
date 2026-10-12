@@ -1,6 +1,8 @@
 //! The sign-in window: Slack's own sign-in page. Runs in a process of its
-//! own (`slick __login-window [workspace]`, started by `login::window`), so
-//! tao's event loop never meets the TUI and the process can just exit.
+//! own (`… __login-window [workspace]`, started by `login::window`), so
+//! tao's event loop never meets the TUI and the process can just exit. On
+//! Linux that process is the `slick-login` helper (`login/`), so slick itself
+//! doesn't link WebKitGTK; elsewhere it's slick itself.
 //! Once the person is in, prints the session it created as one JSON line on
 //! stdout, `{"token":"xoxc-…","cookie":"xoxd-…"}`, and exits. Closing the
 //! window without signing in exits with status 1.
@@ -18,9 +20,6 @@ use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
 use tao::window::{Icon, WindowBuilder};
 use wry::{WebContext, WebViewBuilder};
-
-/// The hidden argument that runs this window instead of the app.
-pub const ARG: &str = "__login-window";
 
 /// The slick mark, 64×64 RGBA.
 const ICON: &[u8] = include_bytes!("../assets/icon-64.rgba");

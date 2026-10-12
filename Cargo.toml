@@ -17,14 +17,17 @@ ratatui-image = { version = "11.1", default-features = false, features = ["cross
 emojis = "0.6"
 sha2 = "0.10"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
-# The sign-in window (`login_window`): WebKitGTK on Linux.
-wry = "0.57"
-tao = "0.37"
-
 # The tray icon: StatusNotifierItem over zbus (pure Rust, no libdbus), driven
 # from a thread by a single-threaded tokio runtime; fewer crates than async-io.
 [target.'cfg(target_os = "linux")'.dependencies]
 ksni = { version = "0.3", features = ["blocking"] }
+
+# The sign-in window (`login_window`), WebView2 on Windows. On Linux it's the
+# `slick-login` helper in login/, built by build.rs and carried inside slick,
+# so slick starts without WebKitGTK.
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+wry = "0.57"
+tao = "0.37"
 
 # Its own workspace, also when checked out inside another (worktrees).
 [workspace]
