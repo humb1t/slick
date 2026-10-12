@@ -45,7 +45,8 @@ touches the disk on Linux: `$XDG_RUNTIME_DIR` is a tmpfs.
       "unread": true, "mentions": 1, "latest": "1760000000.000100",
       "messages": [
         { "ts": "1760000000.000100", "user": "U0456", "author": "Bruno Lima",
-          "text": "Can you look at the deploy?", "thread_ts": null }
+          "text": "Can you look at the deploy?", "html": "Can you look at the <b>deploy</b>?",
+          "thread_ts": null }
       ]
     }
   ],
@@ -64,6 +65,11 @@ touches the disk on Linux: `$XDG_RUNTIME_DIR` is a tmpfs.
 ```
 
 - `kind` is `dm`, `group` (a group DM), `channel` or `private`.
+- `text` is plain text, exactly as people wrote it: `<b>` in a message is
+  those three characters. Escape it before showing it as HTML or markup
+  (`notify-send` bodies, Qt rich text, a web page). `html` is the same text
+  ready for that: escaped, with only the message's own bold (`<b>`), italic
+  (`<i>`) and strikethrough (`<s>`) as tags.
 - `conversations` holds the unread ones, newest first. `messages` are the
   newest unread ones, up to 3, oldest first. They fill in a moment after the
   conversation appears, and channels with neither a mention nor a DM only get

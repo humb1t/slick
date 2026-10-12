@@ -203,6 +203,23 @@ fn emoji_file(name: &str, url: &str) -> Option<String> {
     None
 }
 
+
+/// `text` as HTML (`text::body_html`): escaped, with the message's own bold,
+/// italic and strikethrough. Cut like `text`, never inside a tag or an entity.
+fn preview_html(m: &Message, names: &crate::text::Names) -> String {
+    let mut html = crate::text::body_html(m, names).lines().map(|l| l.trim_start_matches('▎').trim_start()).collect::<Vec<_>>().join("\n");
+    if html.trim().is_empty() && !m.files.is_empty() {
+        html = m.files.iter().map(|f| format!("📎 {}", crate::text::escape(&f.name))).collect::<Vec<_>>().join("\n");
+    }
+    if html.chars().count() > 1000 {
+        html = html.chars().take(1000).collect();
+        if let Some(i) = html.rfind(['<', '&']).filter(|&i| !html[i..].contains(['>', ';'])) {
+            html.truncate(i);
+        }
+        html.push('…');
+    }
+    html
+}
 impl App {
     /// The new counts: conversations whose newest message moved get their
     /// unread messages fetched for the preview.
@@ -320,6 +337,7 @@ impl App {
             "user": m.user,
             "author": crate::ui::author(m, &names),
             "text": text,
+            "html": preview_html(m, &names),
             "thread_ts": m.thread_ts.as_ref().filter(|t| **t != m.ts),
         })
     }

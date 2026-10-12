@@ -31,19 +31,30 @@ impl Names<'_> {
 /// The flat text, for copying and previews; the conversation itself
 /// is drawn by `blocks`.
 pub fn body(m: &Message, n: &Names) -> String {
+    body_as(m, n, false)
+}
+
+/// `body` as HTML for other programs to show: everything escaped, with only
+/// the bold, italic and strikethrough the message itself has as tags.
+pub fn body_html(m: &Message, n: &Names) -> String {
+    body_as(m, n, true)
+}
+
+fn body_as(m: &Message, n: &Names, html: bool) -> String {
+    let esc = |t: String| if html { escape(&t) } else { t };
     if m.subtype.as_deref() == Some("huddle_thread") {
-        return crate::i18n::tr("📞 started a huddle", "📞 iniciou um huddle").into();
+        return esc(crate::i18n::tr("📞 started a huddle", "📞 iniciou um huddle").into());
     }
     let mut out = match m.blocks.as_array() {
-        Some(b) if !b.is_empty() => blocks(b, n),
+        Some(b) if !b.is_empty() => blocks(b, n, html),
         _ => String::new(),
     };
     if out.trim().is_empty() {
-        out = mrkdwn(&m.text, n);
+        out = esc(mrkdwn(&m.text, n));
     }
     if let Some(atts) = m.attachments.as_array() {
         for a in atts {
-            let t = attachment(a, n);
+            let t = esc(attachment(a, n));
             if !t.is_empty() {
                 push_line(&mut out, &t.lines().map(|l| format!("▎ {l}")).collect::<Vec<_>>().join("\n"));
             }
@@ -101,7 +112,7 @@ fn push_line(out: &mut String, line: &str) {
 fn attachment(a: &Value, n: &Names) -> String {
     let mut out = String::new();
     if let Some(b) = a["blocks"].as_array() {
-        out = blocks(b, n);
+        out = blocks(b, n, false);
     }
     // Shared messages carry the same content as blocks and as text.
     let keys: &[&str] = if out.is_empty() { &["pretext", "title", "text"] } else { &["pretext", "title"] };
@@ -177,14 +188,20 @@ fn unescape(s: &str) -> String {
     s.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 }
 
-fn blocks(bs: &[Value], n: &Names) -> String {
+/// Text made safe to put in HTML.
+pub fn escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+/// With `html`, escaped, and rich text keeps its bold, italic and strikethrough.
+fn blocks(bs: &[Value], n: &Names, html: bool) -> String {
     let mut out = String::new();
     for b in bs {
         let line = match b["type"].as_str().unwrap_or("") {
             "rich_text" => {
                 let mut s = String::new();
                 for el in b["elements"].as_array().into_iter().flatten() {
-                    rich_block(el, n, &mut s);
+                    rich_block(el, n, html, &mut s);
                 }
                 s.trim_end().to_string()
             }
@@ -220,6 +237,7 @@ fn blocks(bs: &[Value], n: &Names) -> String {
             "file" => crate::i18n::tr("[file]", "[arquivo]").into(),
             _ => String::new(),
         };
+        let line = if html && b["type"] != "rich_text" { escape(&line) } else { line };
         if !line.is_empty() {
             push_line(&mut out, &line);
         }
@@ -248,10 +266,10 @@ fn text_obj(t: &Value, n: &Names) -> String {
     }
 }
 
-fn rich_block(el: &Value, n: &Names, out: &mut String) {
+fn rich_block(el: &Value, n: &Names, html: bool, out: &mut String) {
     let inline = |out: &mut String| {
         for e in el["elements"].as_array().into_iter().flatten() {
-            rich_inline(e, n, out);
+            rich_inline(e, n, html, out);
         }
     };
     match el["type"].as_str().unwrap_or("") {
@@ -262,7 +280,7 @@ fn rich_block(el: &Value, n: &Names, out: &mut String) {
                 let bullet = if ordered { format!("{}.", i + 1) } else { "•".into() };
                 let mut s = String::new();
                 for e in item["elements"].as_array().into_iter().flatten() {
-                    rich_inline(e, n, &mut s);
+                    rich_inline(e, n, html, &mut s);
                 }
                 out.push_str(&format!("{indent}{bullet} {s}\n"));
             }
@@ -270,8 +288,9 @@ fn rich_block(el: &Value, n: &Names, out: &mut String) {
         "rich_text_quote" => {
             let mut s = String::new();
             inline(&mut s);
+            let mark = if html { "&gt;" } else { ">" };
             for l in s.lines() {
-                out.push_str(&format!("> {l}\n"));
+                out.push_str(&format!("{mark} {l}\n"));
             }
         }
         _ => {
@@ -283,7 +302,20 @@ fn rich_block(el: &Value, n: &Names, out: &mut String) {
     }
 }
 
-fn rich_inline(e: &Value, n: &Names, out: &mut String) {
+fn rich_inline(e: &Value, n: &Names, html: bool, out: &mut String) {
+    if html {
+        let mut plain = String::new();
+        rich_inline(e, n, false, &mut plain);
+        let mut text = escape(&plain);
+        // Innermost first, so the tags close in order.
+        for (k, tag) in [("strike", "s"), ("italic", "i"), ("bold", "b")] {
+            if e["style"][k] == true && !text.trim().is_empty() {
+                text = format!("<{tag}>{text}</{tag}>");
+            }
+        }
+        out.push_str(&text);
+        return;
+    }
     let s = |k: &str| e[k].as_str().unwrap_or("");
     match s("type") {
         "text" => out.push_str(s("text")),
