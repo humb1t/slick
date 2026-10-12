@@ -3,7 +3,7 @@
 //! (see build.rs), elsewhere this same binary.
 
 use crate::i18n::tr;
-use crate::slack::{Creds, Res};
+use crate::slack::{AuthInfo, Creds, Res};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -50,13 +50,34 @@ fn program() -> Res<PathBuf> {
     Ok(crate::update::exe().ok_or(tr("couldn't find slick's executable", "não achou o executável do slick"))?)
 }
 
-/// Opens the window and waits for the person to sign in. With a workspace
-/// it opens on that workspace's email-and-password form.
-pub fn window(workspace: Option<&str>) -> Res<Creds> {
+/// A workspace the browser is signed in to, from Slack's `localConfig_v2`.
+#[allow(dead_code)]
+#[derive(Clone, Debug, Default)]
+pub struct Team {
+    pub id: String,
+    pub name: String,
+    pub domain: String,
+    pub token: String,
+}
+
+/// What the window brings back: the session it took, the workspace that
+/// session is for, and every workspace the browser is signed in to.
+#[allow(dead_code)]
+pub struct Signed {
+    pub creds: Creds,
+    pub team: Option<String>,
+    pub teams: Vec<Team>,
+}
+
+/// The window, leaving out the workspaces in `known` (their ids): with some,
+/// it opens on Slack's sign-in page (unless `workspace` names one) and only
+/// takes a workspace that is not among them. Empty is the first sign-in.
+pub fn window_known(workspace: Option<&str>, known: &[String]) -> Res<Signed> {
     let out = Command::new(program()?)
         .arg(ARG)
         .args(workspace)
         .env("SLICK_LANG", crate::i18n::lang().code())
+        .env("SLICK_KNOWN_TEAMS", known.join(","))
         .stdin(Stdio::null())
         .output()
         .map_err(|e| trf!("couldn't open the sign-in window: {e}", "não abriu a janela de login: {e}"))?;
@@ -82,5 +103,59 @@ pub fn window(workspace: Option<&str>) -> Res<Creds> {
     if token.is_empty() || cookie.is_none() {
         return Err(tr("the sign-in window didn't return the session", "a janela de login não devolveu a sessão").into());
     }
-    Ok(Creds { token, cookie })
+    let s = |t: &serde_json::Value, k: &str| t[k].as_str().unwrap_or("").to_string();
+    let teams = v["teams"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|t| Team { id: s(t, "id"), name: s(t, "name"), domain: s(t, "domain"), token: s(t, "token") })
+        .filter(|t| !t.id.is_empty() && !t.token.is_empty())
+        .collect();
+    let team = v["team"].as_str().filter(|t| !t.is_empty()).map(String::from);
+    Ok(Signed { creds: Creds { token, cookie }, team, teams })
+}
+
+/// Signing in, checked: the window (leaving out `known`, as `window_known`)
+/// and then `auth.test` on the session it brought. Blocks until the window
+/// closes, so it runs off the interface's thread. "Add a workspace" passes
+/// the ids of the ones slick has; signing in again to one of them passes the
+/// others; the first sign-in passes none.
+#[allow(dead_code)]
+pub fn sign_in(workspace: Option<&str>, known: &[String]) -> Res<(AuthInfo, Creds)> {
+    let signed = window_known(workspace, known)?;
+    let me = crate::slack::Slack::new(signed.creds.clone()).auth()?;
+    Ok((me, signed.creds))
+}
+
+/// `slick login [workspace]`: the sign-in window, then the session saved
+/// to the config, as a workspace added or one signed in to again.
+#[allow(dead_code)]
+pub fn cli(workspace: Option<&str>) -> i32 {
+    let saved = crate::config::workspaces();
+    let workspace = workspace.and_then(crate::config::workspace_name);
+    // Signing in again to a workspace slick has: the window may take it; the others it leaves.
+    let known: Vec<String> = match &workspace {
+        Some(w) => saved.iter().filter(|c| c.domain.as_deref() != Some(w.as_str())).filter_map(|c| c.team_id.clone()).collect(),
+        None => Vec::new(),
+    };
+    // Without one, the workspace last signed in to, as before.
+    let workspace = workspace.or_else(crate::config::workspace);
+    eprintln!("{}", tr("Opening the Slack sign-in window…", "Abrindo a janela de login do Slack…"));
+    match sign_in(workspace.as_deref(), &known) {
+        Ok((me, creds)) => match crate::config::save_workspace(&me, &creds) {
+            Ok(()) => {
+                eprintln!("{}", trf!("Signed in: {} · {}", "Entrou: {} · {}", me.team, me.user));
+                0
+            }
+            Err(e) => {
+                let p = crate::config::path();
+                eprintln!("{}", trf!("Signed in, but didn't save {}: {e}", "Entrou, mas não salvou {}: {e}", p.display()));
+                1
+            }
+        },
+        Err(e) => {
+            eprintln!("{e}");
+            1
+        }
+    }
 }

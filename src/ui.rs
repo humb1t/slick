@@ -393,23 +393,44 @@ fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
 
     let team_name = app.me.as_ref().map(|m| m.team.clone()).unwrap_or_else(|| "slick".into());
     let indent = if icon.is_some() { 6 } else { 1 };
+    // Other workspaces: a stacked icon, or "⧉" after the name without one,
+    // and what they wait with beside the arrow.
+    let multi = app.workspaces.len() > 1;
+    let others = crate::switcher::others(&app.workspaces);
+    let stack = if multi && icon.is_none() { " ⧉" } else { "" };
+    let mut badge = crate::switcher::badge_spans(others);
+    if !badge.is_empty() {
+        badge.insert(0, Span::raw(" "));
+    }
+    let badge_w: usize = badge.iter().map(|s| s.content.width()).sum();
     // Room on the right for the "new" button.
-    let name = truncate(&team_name, (team.width as usize).saturating_sub(indent + 5));
+    let name = truncate(&team_name, (team.width as usize).saturating_sub(indent + 5 + stack.width() + badge_w));
     let arrow = if app.team_popup { " ▴" } else { " ▾" };
-    let mut lines = vec![Line::from(vec![Span::raw(" ".repeat(indent)), Span::raw(name.clone()).bold(), Span::styled(arrow, dim())])];
+    let mut first = vec![Span::raw(" ".repeat(indent)), Span::raw(name.clone()).bold(), Span::styled(stack, dim()), Span::styled(arrow, dim())];
+    first.extend(badge);
+    let mut lines = vec![Line::from(first)];
     if icon.is_some() {
         let who = app.me.as_ref().map(|m| format!("@{}", m.user)).unwrap_or_default();
         lines.push(Line::from(vec![Span::raw(" ".repeat(indent)), Span::styled(truncate(&who, (team.width as usize).saturating_sub(indent)), dim())]));
     }
     f.render_widget(Paragraph::new(lines), team);
-    app.areas.team_name = Rect::new(team.x, team.y, (indent + name.width() + 2) as u16, team.height).intersection(team);
+    app.areas.team_name = Rect::new(team.x, team.y, (indent + name.width() + stack.width() + 2 + badge_w) as u16, team.height).intersection(team);
     let new = Rect::new(team.right().saturating_sub(3), team.y, 3.min(team.width), 1);
     let new_style = if app.compose_hover { Style::new().fg(Color::Cyan).bold() } else { dim() };
     f.render_widget(Paragraph::new(format!(" {} ", crate::compose::NEW)).style(new_style), new);
     app.areas.compose.button = new;
     if let Some(icon) = icon {
-        let key = format!("team-{}", app.me.as_ref().map(|m| m.domain.as_str()).unwrap_or(""));
-        draw_image(f, app, &ImgRef::avatar(&key, &icon), Rect::new(team.x + 1, team.y, 4, 2));
+        let domain = app.me.as_ref().map(|m| m.domain.clone()).unwrap_or_default();
+        let plain = ImgRef::avatar(&format!("team-{domain}"), &icon);
+        let rect = Rect::new(team.x + 1, team.y, 4, 2);
+        let dot = matches!(others, crate::switcher::Badge::Count(_));
+        match multi.then(|| stacked_icon(app, &plain.key, &domain, dot)).flatten() {
+            Some(key) => {
+                let r = ImgRef { key, url: String::new(), name: String::new(), link: None };
+                draw_image(f, app, &r, Rect { height: 3, ..rect });
+            }
+            _ => draw_image(f, app, &plain, rect),
+        }
     }
 
     // A rounded input a column in from each side, with "^K" at its right end.
@@ -979,6 +1000,14 @@ fn messages(f: &mut Frame, app: &mut App, area: Rect) {
                 "  PgUp PgDn rolar (ou a roda)   Shift+Enter     nova linha",
             )),
             Line::from(tr(
+                "  Ctrl+B    bold                Ctrl+I          italic",
+                "  Ctrl+B    negrito             Ctrl+I          itálico",
+            )),
+            Line::from(tr(
+                "  Alt+X     strikethrough       Alt+C           code",
+                "  Alt+X     riscado             Alt+C           código",
+            )),
+            Line::from(tr(
                 "  Tab       list ↔ message      click an image  enlarge",
                 "  Tab       lista ↔ mensagem    clique na imagem  ampliar",
             )),
@@ -1440,38 +1469,158 @@ fn viewer(f: &mut Frame, app: &mut App) {
     f.render_widget(Paragraph::new(line), links);
 }
 
-/// The workspace's address and ID, under its name.
+/// The workspace icon over a grey card, made once from the plain icon when
+/// it's loaded; the key it's kept under. Sized for 4×3 cells.
+fn stacked_icon(app: &mut App, plain: &str, domain: &str, dot: bool) -> Option<String> {
+    let s = app.picker.as_ref()?.font_size();
+    let (w, h) = (4 * s.width as u32, 3 * s.height as u32);
+    let key = format!("team-stack-{domain}-{w}x{h}{}", if dot { "-dot" } else { "" });
+    if !app.images.contains_key(&key) {
+        let Some(Img::Ready(img)) = app.images.get(plain) else { return None };
+        let img = crate::icons::stacked(img, crate::icons::grey(), dot, w, h);
+        app.images.insert(key.clone(), Img::Ready(img));
+    }
+    Some(key)
+}
+
+/// The workspace's address and ID, under its name, then every signed-in
+/// workspace to switch to and "Add a workspace", as in Slack's dropdown.
 fn team_popup(f: &mut Frame, app: &mut App) {
     app.areas.team_popup = Rect::default();
     app.areas.team_url = Rect::default();
     app.areas.team_id = Rect::default();
+    app.areas.switcher.rows.clear();
+    app.areas.switcher.add = Rect::default();
     if !app.team_popup {
+        app.areas.switcher.open = false;
         return;
     }
     let Some(me) = app.me.clone() else { return };
+    let list = crate::switcher::list(app);
+    let n = list.len();
+    // Just opened: start on the one on screen.
+    if !app.areas.switcher.open {
+        app.areas.switcher.open = true;
+        app.areas.switcher.sel = list.iter().position(|w| w.active).unwrap_or(0);
+    }
+    let sel = app.areas.switcher.sel.min(n);
     let url = app.team_url().unwrap_or_default();
     let shown = url.trim_start_matches("https://").to_string();
     let id = format!("ID {}", me.team_id);
     let (copy, copy_style) = copy_hint(app, "team");
-    let lines = vec![
+    let info = vec![
         Line::from(me.team.clone()).bold(),
         Line::from(vec![Span::styled(shown.clone(), Style::new().fg(Color::Cyan).italic().underlined()), Span::styled("  ↗", dim())]),
         Line::from(vec![Span::styled(id.clone(), dim()), Span::styled(copy, copy_style)]),
-        Line::from(""),
-        Line::from(crate::account::version()).style(dim()),
     ];
+    let version = crate::account::version();
+    let add = tr("Add a workspace", "Adicionar um workspace");
+    let expired = tr("Session expired · sign in again", "Sessão expirada · entre de novo");
+    let check = " ✓";
+    let ctrl = |i: usize| if i < 9 { format!("Ctrl {}", i + 1) } else { String::new() };
+    let address = |w: &crate::switcher::WsInfo| format!("{}.slack.com", w.domain);
+    // The right side of a workspace's first line: its badge and shortcut.
+    let right = |i: usize, w: &crate::switcher::WsInfo| {
+        let mut spans = crate::switcher::badge_spans(w.badge);
+        let key = ctrl(i);
+        if !key.is_empty() {
+            spans.push(Span::raw(if spans.is_empty() { "" } else { "  " }));
+            spans.push(Span::styled(key, dim()));
+        }
+        spans
+    };
+    let width = |spans: &[Span]| spans.iter().map(|s| s.content.width()).sum::<usize>();
+    // The icon takes four columns and a gap.
+    let rows_w = list.iter().enumerate().map(|(i, w)| {
+        let top = w.name.width() + if w.active { check.width() } else { 0 } + 2 + width(&right(i, w));
+        let bottom = if w.expired { expired.width() } else { address(w).width() };
+        5 + top.max(bottom)
+    });
+    let content = info.iter().map(|l| l.width()).chain(rows_w).chain([5 + add.width(), version.width()]).max().unwrap_or(10).max(30);
     let area = f.area();
-    let w = (lines.iter().map(|l| l.width()).max().unwrap_or(10) as u16 + 4).min(area.width);
+    let w = (content as u16 + 4).min(area.width);
+    // The address and ID, a divider, three rows per workspace (the last a gap), "Add", a divider and the version.
+    let h = 3 + 1 + 3 * n as u16 + 1 + 1 + 1 + 2;
     let below = app.areas.team_name;
-    let rect = Rect::new(below.x + 1, below.bottom(), w, lines.len() as u16 + 2).intersection(area);
+    let rect = Rect::new(below.x + 1, below.bottom(), w, h).intersection(area);
     f.render_widget(Clear, rect);
     let block = Block::bordered().border_type(BorderType::Rounded).border_style(dim());
-    let inner = block.inner(rect).inner(ratatui::layout::Margin { horizontal: 1, vertical: 0 });
+    let full = block.inner(rect);
+    let inner = full.inner(ratatui::layout::Margin { horizontal: 1, vertical: 0 });
     f.render_widget(block, rect);
-    f.render_widget(Paragraph::new(lines), inner);
     app.areas.team_popup = rect;
+    if inner.width < 10 || inner.height < 3 {
+        return;
+    }
+    f.render_widget(Paragraph::new(info), inner);
     app.areas.team_url = Rect::new(inner.x, inner.y + 1, shown.width() as u16 + 3, 1).intersection(inner);
     app.areas.team_id = Rect::new(inner.x, inner.y + 2, (id.width() + copy.width()) as u16, 1).intersection(inner);
+
+    // A divider joined to the frame.
+    let divider = |f: &mut Frame, y: u16| {
+        if y < full.bottom() {
+            let line = format!("├{}┤", "─".repeat(full.width as usize));
+            f.render_widget(Paragraph::new(line).style(dim()), Rect::new(rect.x, y, rect.width, 1));
+        }
+    };
+    // The highlighted row: the selection bar with a thin accent where it starts.
+    let highlight = |f: &mut Frame, r: Rect| {
+        f.buffer_mut().set_style(r, Style::new().bg(SELECTED));
+        for y in r.y..r.bottom() {
+            f.render_widget(Paragraph::new("▎").style(Style::new().fg(Color::Cyan)), Rect::new(r.x, y, 1, 1));
+        }
+    };
+    divider(f, inner.y + 3);
+    let text_x = inner.x + 5;
+    let text_w = inner.width.saturating_sub(5) as usize;
+    let mut y = inner.y + 4;
+    for (i, ws) in list.iter().enumerate() {
+        if y + 1 >= full.bottom() {
+            break;
+        }
+        let row = Rect::new(full.x, y, full.width, 2);
+        if i == sel {
+            highlight(f, row);
+        }
+        let icon = Rect::new(inner.x, y, 4, 2);
+        match ws.icon_url.as_deref().filter(|_| app.picker.is_some()) {
+            Some(u) => draw_image(f, app, &ImgRef::avatar(&format!("team-{}", ws.domain), u), icon),
+            None => {
+                // The name's initial on a tile, without pictures.
+                let initial: String = ws.name.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_default();
+                let tile = Paragraph::new(vec![Line::from(format!(" {initial}")).bold(), Line::from("")]).style(Style::new().bg(SURFACE));
+                f.render_widget(tile, icon);
+            }
+        }
+        let right = right(i, ws);
+        let right_w = width(&right);
+        let mark = if ws.active { check } else { "" };
+        let name = truncate(&ws.name, text_w.saturating_sub(right_w + mark.width() + 1));
+        let gap = text_w.saturating_sub(name.width() + mark.width() + right_w);
+        let mut top = vec![Span::raw(name).bold(), Span::styled(mark, Style::new().fg(Color::Green).bold()), Span::raw(" ".repeat(gap))];
+        top.extend(right);
+        let bottom = if ws.expired {
+            Span::styled(truncate(expired, text_w), Style::new().fg(Color::Yellow))
+        } else {
+            Span::styled(truncate(&address(ws), text_w), dim())
+        };
+        f.render_widget(Paragraph::new(vec![Line::from(top), Line::from(bottom)]), Rect::new(text_x, y, text_w as u16, 2));
+        app.areas.switcher.rows.push((row, i));
+        y += 3;
+    }
+    if y < full.bottom() {
+        let row = Rect::new(full.x, y, full.width, 1);
+        if sel == n {
+            highlight(f, row);
+        }
+        f.render_widget(Paragraph::new(" +").bold(), Rect::new(inner.x, y, 4, 1));
+        f.render_widget(Paragraph::new(truncate(add, text_w)), Rect::new(text_x, y, text_w as u16, 1));
+        app.areas.switcher.add = row;
+    }
+    divider(f, y + 1);
+    if y + 2 < full.bottom() {
+        f.render_widget(Paragraph::new(version).style(dim()), Rect::new(inner.x, y + 2, inner.width, 1));
+    }
 }
 
 /// The right-click menu, kept on screen.
@@ -1915,7 +2064,10 @@ pub(crate) fn message_lines(
         // Block Kit and mrkdwn laid out at this width, then moved past the avatar.
         let mut pieces = blocks::parse(m, names);
         blocks::drop_author(&mut pieces, &author);
-        let rich = blocks::render(&pieces, body_width, font, if muted { dim().italic() } else { Style::new() });
+        let mut rich = blocks::render(&pieces, body_width, font, if muted { dim().italic() } else { Style::new() });
+        if app.copied.is_some_and(|(what, _)| what == "code") {
+            blocks::mark_copied(&mut rich, &app.copied_code);
+        }
         let (top, dx) = (lines.len(), gutter as u16);
         for p in rich.pics {
             slots.push(Slot { line: top + p.line, x: dx + p.x, cols: p.cols, rows: p.rows, full: Some(p.img.clone()), img: p.img, user: None });

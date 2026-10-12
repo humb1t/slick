@@ -27,12 +27,14 @@ type Stream = std::net::TcpStream;
 type Listener = std::net::TcpListener;
 
 /// What another process asks the running slick to do.
+#[allow(dead_code)]
 pub enum Cmd {
     /// Bring the window to the front.
     Focus,
     /// A conversation, scrolled to a message, in its thread when it has one.
-    Open { conv: String, ts: Option<String>, thread: Option<String>, focus: bool },
-    MarkRead(String),
+    /// `team`: the workspace (id or domain) it belongs to; `None` looks in each.
+    Open { conv: String, ts: Option<String>, thread: Option<String>, focus: bool, team: Option<String> },
+    MarkRead { conv: String, team: Option<String> },
     /// Pause notifications for this many minutes, or resume them.
     Pause(i64),
     Resume,
@@ -44,8 +46,8 @@ impl Cmd {
         let s = |k: &str| v[k].as_str().filter(|s| !s.is_empty()).map(String::from);
         Some(match v["cmd"].as_str()? {
             "focus" => Cmd::Focus,
-            "open" => Cmd::Open { conv: s("conv")?, ts: s("ts"), thread: s("thread_ts"), focus: v["focus"].as_bool() != Some(false) },
-            "mark-read" => Cmd::MarkRead(s("conv")?),
+            "open" => Cmd::Open { conv: s("conv")?, ts: s("ts"), thread: s("thread_ts"), focus: v["focus"].as_bool() != Some(false), team: s("team") },
+            "mark-read" => Cmd::MarkRead { conv: s("conv")?, team: s("team") },
             "dnd.pause" => Cmd::Pause(v["minutes"].as_i64().filter(|m| *m > 0)?),
             "dnd.resume" => Cmd::Resume,
             "quit" => Cmd::Quit,

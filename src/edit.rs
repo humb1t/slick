@@ -15,7 +15,6 @@ use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 use ratatui::Frame;
-use serde_json::Value;
 use std::collections::HashSet;
 use std::ops::Range;
 
@@ -137,10 +136,19 @@ pub enum Ev {
 }
 
 impl Slack {
-    /// New text for a message. Without `blocks=[]` Slack keeps the old rich-text
-    /// blocks, which the official clients draw instead of the text.
-    fn update(&self, chan: &str, ts: &str, text: &str) -> Res<Message> {
-        let v = self.call("chat.update", &[("channel", chan), ("ts", ts), ("text", text), ("blocks", "[]")])?;
+    /// New text for a message, with its markup as rich-text blocks. Should
+    /// Slack refuse those, `blocks=[]`: otherwise it keeps the old blocks,
+    /// which the official clients draw instead of the text.
+    fn update(&self, chan: &str, ts: &str, typed: &str) -> Res<Message> {
+        let text = escape(typed);
+        let p = [("channel", chan), ("ts", ts), ("text", text.as_str())];
+        let blocks = crate::markup::blocks(typed).to_string();
+        let v = match self.call("chat.update", &[p[0], p[1], p[2], ("blocks", &blocks)]) {
+            Err(e) if ["invalid_blocks", "invalid_blocks_format", "invalid_arguments"].iter().any(|c| e.ends_with(c)) => {
+                self.call("chat.update", &[p[0], p[1], p[2], ("blocks", "[]")])?
+            }
+            res => res?,
+        };
         Ok(parse_message(&v["message"]))
     }
 
@@ -329,7 +337,8 @@ impl App {
             let newline = k.modifiers.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT);
             match k.code {
                 KeyCode::Esc => self.cancel_edit(),
-                KeyCode::Enter if !newline => self.save_edit(),
+                // In a ``` block Enter breaks the line, as in the box.
+                KeyCode::Enter if !newline && !self.pane_editor(thread).is_some_and(|e| e.in_code()) => self.save_edit(),
                 _ => return false,
             }
             return true;
@@ -531,9 +540,11 @@ impl App {
             return;
         }
         self.cancel_edit();
-        // Mentions, channels and emoji come back as the box's pills and emoji.
+        // Mentions, channels and emoji come back as the box's pills and emoji;
+        // the rich-text formatting as its markup.
         let mut text = Editor::default();
-        text.load(&m.text, true, &Lookup { users: &self.users, chans: &self.chans, emoji: &self.emoji, pictures: self.picker.is_some() });
+        let src = crate::markup::markup(&m.blocks).unwrap_or_else(|| m.text.clone());
+        text.load(&src, true, &Lookup { users: &self.users, chans: &self.chans, emoji: &self.emoji, pictures: self.picker.is_some() });
         let Some(e) = self.pane_editor(it.thread) else { return };
         let draft = std::mem::replace(e, text);
         self.edit.editing = Some(Editing { chan: it.chan, ts: it.ts, thread: it.thread, draft });
@@ -568,17 +579,19 @@ impl App {
         if let Some(ed) = self.pane_editor(thread) {
             *ed = e.draft;
         }
-        let Some(old) = self.message(&e.chan, &e.ts).filter(|m| m.text != text) else { return };
+        let blocks = crate::markup::blocks(&typed);
+        let unchanged = |m: &Message| m.text == text || crate::markup::markup(&m.blocks).is_some_and(|t| t == text);
+        let Some(old) = self.message(&e.chan, &e.ts).filter(|m| !unchanged(m)) else { return };
         let user = self.me.as_ref().map(|m| m.user_id.clone()).unwrap_or_default();
         let edited = Edited { user, ts: format!("{}.000000", Local::now().timestamp()) };
         self.each_copy(&e.chan, &e.ts, |m| {
             m.text = text.clone();
-            m.blocks = Value::Null;
+            m.blocks = blocks.clone();
             m.edited = Some(edited.clone());
         });
         let (chan, ts) = (e.chan, e.ts);
         self.spawn(move |s| {
-            let res = s.update(&chan, &ts, &text);
+            let res = s.update(&chan, &ts, &typed);
             Event::Edit(Ev::Updated { chan, old, res })
         });
     }

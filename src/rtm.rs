@@ -12,7 +12,6 @@ use crate::slack::Slack;
 use serde_json::Value;
 use std::net::TcpStream;
 use std::sync::mpsc::Sender;
-use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::Message as Frame;
@@ -53,6 +52,8 @@ pub enum Ev {
     UserStale(String),
     /// A channel was archived (or unarchived), here or elsewhere.
     Archived { chan: String, archived: bool },
+    /// A channel was deleted, here or elsewhere.
+    Deleted(String),
     /// A message only you see, like a slash command's answer: Slack never
     /// lists it, so it comes whole.
     Ephemeral { chan: String, msg: crate::slack::Message },
@@ -60,22 +61,6 @@ pub enum Ev {
 
 /// Slack expects a word from the client now and then; quiet sockets get dropped.
 const PING_EVERY: Duration = Duration::from_secs(30);
-
-/// The people whose presence the socket should report: the app sets it,
-/// each connection subscribes to it (again) after `hello`.
-fn wanted() -> &'static Mutex<Vec<String>> {
-    static WANTED: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
-    WANTED.get_or_init(Default::default)
-}
-
-/// Whose presence to hear about. Sent within seconds, and only when it changed.
-pub fn subscribe(mut ids: Vec<String>) {
-    ids.sort();
-    ids.dedup();
-    if let Ok(mut w) = wanted().lock() {
-        *w = ids;
-    }
-}
 
 /// Runs for the life of the process, reconnecting with a growing pause.
 pub fn start(slack: Slack, tx: Sender<Event>) {
@@ -116,7 +101,7 @@ fn run(slack: &Slack, tx: &Sender<Event>) -> bool {
     // What this connection is subscribed to; `None` until `hello`.
     let mut subscribed: Option<Vec<String>> = None;
     loop {
-        let want = wanted().lock().map(|w| w.clone()).unwrap_or_default();
+        let want = slack.wanted();
         if subscribed.as_ref().is_some_and(|s| *s != want) {
             // Each presence_sub replaces the last one.
             let sub = serde_json::json!({ "type": "presence_sub", "ids": want }).to_string();
@@ -206,6 +191,7 @@ fn classify(v: &Value) -> Option<Ev> {
         "channel_joined" | "group_joined" | "im_created" | "mpim_joined" | "mpim_open" | "im_open" | "group_open" | "channel_created" => Ev::Convs,
         "channel_archive" | "group_archive" => Ev::Archived { chan: s("channel")?, archived: true },
         "channel_unarchive" | "group_unarchive" => Ev::Archived { chan: s("channel")?, archived: false },
+        "channel_deleted" | "group_deleted" => Ev::Deleted(s("channel")?),
         // The whole user object, profile and status included; the last two
         // are what Slack sends when only those changed.
         "user_change" | "user_status_changed" | "user_profile_changed" if v["user"]["id"].is_string() => Ev::User(v["user"].clone()),

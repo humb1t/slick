@@ -42,6 +42,10 @@ fn code_block() -> Style {
     Style::new().fg(Color::Gray)
 }
 
+/// A code block's frame, subtle on its fill, and the copy button in it.
+const CODE_BORDER: Color = Color::Indexed(240);
+const COPY: &str = "\u{f0c5}";
+
 /// A run of text in one style; links keep where they go.
 #[derive(Clone, Default)]
 pub struct Seg {
@@ -129,6 +133,8 @@ pub enum Target {
     /// A mentioned person: opens the DM.
     User(String),
     Channel(String),
+    /// A code block's copy button: the text it copies.
+    Copy(String),
 }
 
 /// Where an image goes, in cells from the top left of the laid-out text.
@@ -451,9 +457,8 @@ pub fn mrkdwn(s: &str, n: &Names) -> Vec<Para> {
         if fenced && (i < last || last % 2 == 0) {
             let body = part.strip_prefix('\n').unwrap_or(part);
             let body = body.strip_suffix('\n').unwrap_or(body);
-            for l in unescape(body).split('\n') {
-                out.push(Para { kind: ParaKind::Code, segs: vec![Seg::new(l, code_block())] });
-            }
+            // One paragraph per block, so two blocks side by side stay two boxes.
+            out.push(Para { kind: ParaKind::Code, segs: vec![Seg::new(unescape(body), code_block())] });
             continue;
         }
         let owned = if fenced { format!("```{part}") } else { part.to_string() };
@@ -1050,7 +1055,7 @@ fn para_rows(p: &Para, width: usize, base: Style) -> Vec<Row> {
     let prefix = match p.kind {
         ParaKind::Plain => return wrap(&p.segs, width, base),
         ParaKind::Quote => "▎ ",
-        ParaKind::Code => "│ ",
+        ParaKind::Code => return code_box(&p.segs, width, base),
     };
     wrap(&p.segs, width.saturating_sub(2), base)
         .into_iter()
@@ -1061,6 +1066,108 @@ fn para_rows(p: &Para, width: usize, base: Style) -> Vec<Row> {
             row
         })
         .collect()
+}
+
+/// A code block as Slack draws it: a filled, rounded box the full width,
+/// a column of padding, the text verbatim (long lines broken at the edge)
+/// and a copy button in the top right corner.
+fn code_box(segs: &[Seg], width: usize, base: Style) -> Vec<Row> {
+    let width = width.max(5);
+    let inner = width - 4;
+    let fill = Style::new().bg(crate::ui::SURFACE);
+    let border = fill.fg(CODE_BORDER);
+    let text: String = segs.iter().map(|s| s.text.as_str()).collect();
+    let mut top = Row::default();
+    if width >= 8 {
+        top.push(format!("╭{}", "─".repeat(width - 6)), border, None);
+        top.push(format!(" {COPY} "), fill.fg(Color::Gray), Some(Target::Copy(text)));
+        top.push("─╮".into(), border, None);
+    } else {
+        top.push(format!("╭{}╮", "─".repeat(width - 2)), border, None);
+    }
+    let mut rows = vec![top];
+    for r in code_lines(segs, inner, base.bg(crate::ui::SURFACE)) {
+        let mut row = Row::default();
+        row.push("│".into(), border, None);
+        row.push(" ".into(), fill, None);
+        let pad = inner.saturating_sub(r.w);
+        row.append(r);
+        row.push(" ".repeat(pad + 1), fill, None);
+        row.push("│".into(), border, None);
+        rows.push(row);
+    }
+    let mut bottom = Row::default();
+    bottom.push(format!("╰{}╯", "─".repeat(width - 2)), border, None);
+    rows.push(bottom);
+    rows
+}
+
+/// Code broken only at `\n` and at the box's edge: spaces, indentation and
+/// empty lines all stay; tabs become four spaces.
+fn code_lines(segs: &[Seg], width: usize, base: Style) -> Vec<Row> {
+    let target = |s: &Seg| s.target.clone().or_else(|| s.url.clone().map(Target::Link));
+    let mut rows = Vec::new();
+    let mut row = Row::default();
+    for s in segs {
+        let style = base.patch(s.style);
+        let flush = |row: &mut Row, chunk: &mut String| {
+            if !chunk.is_empty() {
+                if let Some(img) = &s.emoji {
+                    row.pics.push((row.w, img.clone()));
+                }
+                row.push(std::mem::take(chunk), style, target(s));
+            }
+        };
+        for (k, line) in s.text.split('\n').enumerate() {
+            if k > 0 {
+                rows.push(std::mem::take(&mut row));
+            }
+            let mut chunk = String::new();
+            let mut cw = 0;
+            for ch in line.replace('\t', "    ").chars() {
+                let w = ch.width().unwrap_or(0);
+                if row.w + cw + w > width && row.w + cw > 0 {
+                    flush(&mut row, &mut chunk);
+                    rows.push(std::mem::take(&mut row));
+                    cw = 0;
+                }
+                chunk.push(ch);
+                cw += w;
+            }
+            flush(&mut row, &mut chunk);
+        }
+    }
+    rows.push(row);
+    rows
+}
+
+/// Shows "✓ copied" in place of the copy button of the block holding `text`.
+pub fn mark_copied(out: &mut Out, text: &str) {
+    let label = format!(" ✓ {} ", tr("copied", "copiado"));
+    for h in out.hits.iter_mut().filter(|h| matches!(&h.target, Target::Copy(t) if t == text)) {
+        let Some(line) = out.lines.get_mut(h.line) else { continue };
+        // The button's span, found by its column.
+        let mut x = 0;
+        let Some(i) = line.spans.iter().position(|s| {
+            let at = x;
+            x += s.width();
+            at == h.x as usize
+        }) else {
+            continue;
+        };
+        // The dashes before it make room for the longer label.
+        let grow = label.width().saturating_sub(line.spans[i].width());
+        let Some(dashes) = i.checked_sub(1).map(|j| &mut line.spans[j]) else { continue };
+        let n = dashes.content.chars().count();
+        if n <= grow + 1 {
+            continue;
+        }
+        dashes.content = dashes.content.chars().take(n - grow).collect::<String>().into();
+        let style = line.spans[i].style.fg(Color::Green);
+        line.spans[i] = Span::styled(label.clone(), style);
+        h.x -= grow as u16;
+        h.w = label.width() as u16;
+    }
 }
 
 /// Greedy word wrap over styled runs: a word may span runs (`*bold*,`),

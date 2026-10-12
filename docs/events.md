@@ -22,7 +22,8 @@ hooks are `.exe`, `.bat` or `.cmd` files.
 
 ## Snapshot
 
-Rewritten (atomically) whenever something in it changes. Message text never
+One snapshot for every workspace slick is signed in to. Rewritten
+(atomically) whenever something in it changes. Message text never
 touches the disk on Linux: `$XDG_RUNTIME_DIR` is a tmpfs.
 
 ```json
@@ -42,6 +43,7 @@ touches the disk on Linux: `$XDG_RUNTIME_DIR` is a tmpfs.
   "conversations": [
     {
       "id": "D0123", "kind": "dm", "name": "Bruno Lima", "user": "U0456",
+      "team": { "id": "T0AAA", "domain": "acme", "name": "Acme" },
       "unread": true, "mentions": 1, "latest": "1760000000.000100",
       "muted": false, "notify": "default", "quiet": false,
       "messages": [
@@ -59,7 +61,8 @@ touches the disk on Linux: `$XDG_RUNTIME_DIR` is a tmpfs.
       "reaction": "tada",
       "emoji": { "name": "tada", "char": "🎉", "url": null, "file": null },
       "user": { "id": "U0456", "name": "Bruno Lima" },
-      "at": 1759999000
+      "at": 1759999000,
+      "team": { "id": "T0AAA", "domain": "acme", "name": "Acme" }
     }
   ],
   "threads": {
@@ -67,6 +70,7 @@ touches the disk on Linux: `$XDG_RUNTIME_DIR` is a tmpfs.
     "list": [
       {
         "conversation": { "id": "C0789", "kind": "channel", "name": "deploys", "user": null },
+        "team": { "id": "T0AAA", "domain": "acme", "name": "Acme" },
         "ts": "1759980000.000300", "latest": "1760000100.000400", "unread": 1, "new": 1, "mention": false,
         "root": { "ts": "1759980000.000300", "user": "U0123", "author": "Ana",
                   "text": "Who takes the rollback?", "html": "Who takes the rollback?", "thread_ts": null },
@@ -76,9 +80,23 @@ touches the disk on Linux: `$XDG_RUNTIME_DIR` is a tmpfs.
         ]
       }
     ]
-  }
+  },
+  "workspaces": [
+    { "id": "T0AAA", "team": "Acme", "domain": "acme", "user": "Ana", "active": true,
+      "attention": 4, "totals": { "mentions": 2, "dms": 2, "…": "as above" },
+      "dnd": { "paused": true, "until": 1760003600, "snooze": true } }
+  ]
 }
 ```
+
+- With more than one workspace, `team`, `domain`, `user` and `dnd` are the
+  one on screen's; `attention` and every number in `totals` (and
+  `threads.new`, `threads.mentions`) add up all of them; `conversations`,
+  `reactions` and `threads.list` are all of theirs, merged newest first, and
+  each item's `team` (`id`, `domain`, `name`) says whose it is.
+  `workspaces` lists them in their order (Ctrl+1…9 in slick), each with its
+  own `attention`, `totals` and `dnd`, and `active: true` on the one on
+  screen. A workspace shows up there once its counts are in.
 
 - `kind` is `dm`, `group` (a group DM), `channel` or `private`.
 - `text` is plain text, exactly as people wrote it: `<b>` in a message is
@@ -109,8 +127,8 @@ touches the disk on Linux: `$XDG_RUNTIME_DIR` is a tmpfs.
   they don't count in `attention`.
 - `emoji` is how to draw a reaction: `char` for a standard emoji (skin tone
   included), or, for one of the workspace's own, its picture's `url` and a
-  copy of it in `file` (`emoji/<name>.<ext>` next to the snapshot, animated
-  GIFs as they are). `file` is `null` until the copy is downloaded, a moment
+  copy of it in `file` (`emoji/<team id>/<name>.<ext>` next to the snapshot,
+  animated GIFs as they are). `file` is `null` until the copy is downloaded, a moment
   after the reaction first shows up; the snapshot is rewritten then.
 - `threads` are the threads you follow (you started, replied to, were
   mentioned in or followed them, as Slack's Threads view lists them) with
@@ -142,15 +160,19 @@ Each event is one line of JSON:
 { "v": 1, "event": "message.new", "at": 1760000000, "data": { … } }
 ```
 
+Every event about a workspace has its `team` in `data`
+(`{ "id": "T0AAA", "domain": "acme", "name": "Acme" }`), from the one on
+screen or not.
+
 | event | `data` |
 | --- | --- |
-| `app.started` | `pid`, `version`, `team` |
+| `app.started` | `pid`, `version`, `team` (the name of the one on screen), `workspaces` (as in the snapshot) |
 | `app.stopped` | `pid` |
-| `counts.changed` | `attention`, `totals` (as in the snapshot) |
-| `message.new` | `conversation` (`id`, `kind`, `name`, `user`), `message` (as in the snapshot), `mention`, and `thread: true` for a reply in a thread you follow |
+| `counts.changed` | `attention`, `totals`, `workspaces` (as in the snapshot: added up), `team`: the workspace whose counts changed |
+| `message.new` | `conversation` (`id`, `kind`, `name`, `user`), `message` (as in the snapshot), `mention`, `dnd` (that workspace's pause, as in the snapshot), and `thread: true` for a reply in a thread you follow |
 | `conversation.read` | `conversation` |
 | `thread.read` | `conversation`, `ts` (the thread) |
-| `dnd.changed` | `paused`, and `until` and `snooze` while paused |
+| `dnd.changed` | `paused`, and `until` and `snooze` while paused; each workspace says its own |
 | `reaction.added` | `conversation`, `message` (`ts`, and the rest as in the snapshot when slick has it loaded), `reaction` (`thumbsup`, without colons), `emoji` (as in the snapshot), `user` (`id`, `name`: who reacted), `mine`, `by_me` |
 | `reaction.removed` | as `reaction.added` |
 | `presence.changed` | `user` (`id`, `name`), `active`, `dm` (the DM with them, or `null`), `me` |
@@ -159,15 +181,17 @@ Each event is one line of JSON:
 read, as slick learns about them: at once, through Slack's real-time
 websocket, or within 15 seconds while that is down. It does not
 replay what was already unread when slick started. `mention` is true when the
-message names you, `@here`, `@channel` or `@everyone`.
+message names you, `@here`, `@channel` or `@everyone`. Workspaces not on
+screen announce theirs too; `dnd` is the message's own workspace's pause,
+for a hook that keeps quiet while it is on.
 
 It also covers replies other people send to threads you follow, with
 `thread: true` and the reply's `message.thread_ts`: like Slack, whatever the
 channel's notification level, except in a muted channel unless the reply
 mentions you, and not for the thread open in slick while its window has
 focus (it is read there). `thread.read` says a thread left the snapshot's
-unread ones: read in slick (opening it marks it read in Slack too) or
-elsewhere.
+unread ones: read in slick (opening it, or seeing its new replies in the
+Threads view, marks it read in Slack too) or elsewhere.
 
 `reaction.added` and `reaction.removed` come through the websocket only:
 while it is down slick sees that a conversation changed, not which reaction,
@@ -218,8 +242,8 @@ jq -e '.data.conversation.kind == "dm"' >/dev/null && pw-play /usr/share/sounds/
 ## Commands
 
 ```sh
-slick open <conversation> [ts] [--thread <ts>] [--background]
-slick mark-read <conversation>
+slick open <conversation|link> [ts] [--thread <ts>] [--team <workspace>] [--background]
+slick mark-read <conversation> [--team <workspace>]
 slick dnd pause <minutes> | resume | status
 slick quit
 slick status [--json]
@@ -229,8 +253,16 @@ slick events
 `slick open` shows the conversation, scrolled to the message `ts` (inside its
 thread with `--thread`), and brings the window to the front (Hyprland) unless
 `--background` is given. With slick closed it opens it, in a new terminal
-window (`xdg-terminal-exec`) when not run from one. `slick dnd` works with
-slick closed too, using the saved session.
+window (`xdg-terminal-exec`) when not run from one. It also takes a link
+to a message, as Slack copies it (`https://acme.slack.com/archives/C0123/p1760000000000100`,
+with `?thread_ts=…` for a reply). `--team` names the workspace, by id
+(`T0AAA`) or address (`acme`); without it slick looks in the one on screen,
+then in the others.
+
+`slick dnd pause` and `resume` are for every workspace. They work with slick
+closed too, using the saved sessions; `status` then asks the workspace last
+on screen. `slick status` lists each workspace's unread conversations under
+its name (`*` on the one on screen).
 
 Underneath, these write JSON lines to the socket at
 `$XDG_RUNTIME_DIR/slick/slick.sock`, which you can also do directly:
@@ -239,6 +271,7 @@ Underneath, these write JSON lines to the socket at
 echo '{"cmd":"open","conv":"C0123","ts":"1760000000.000100"}' | socat - UNIX-CONNECT:$XDG_RUNTIME_DIR/slick/slick.sock
 ```
 
-Commands: `focus`, `open` (`conv`, `ts`, `thread_ts`, `focus`), `mark-read`
-(`conv`), `dnd.pause` (`minutes`), `dnd.resume`, `quit`, and `subscribe`, which
-turns the connection into the event stream.
+Commands: `focus`, `open` (`conv`, `ts`, `thread_ts`, `focus`, `team`),
+`mark-read` (`conv`, `team`), `dnd.pause` (`minutes`), `dnd.resume`, `quit`,
+and `subscribe`, which turns the connection into the event stream. `team` is
+optional: a workspace's id or address.

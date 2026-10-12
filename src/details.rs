@@ -28,8 +28,13 @@ const STAR_OFF: &str = "\u{f006}";
 /// the sidebar, rather than inverted colors.
 pub(crate) const BUTTON_BG: Color = Color::Indexed(236);
 pub(crate) const HOVER_BG: Color = Color::Indexed(238);
-/// nf-fa-archive, beside "Unarchive".
+/// nf-fa-archive, beside "Archive" and "Unarchive".
 const ARCHIVE: &str = "\u{f187}";
+/// nf-fa-trash, beside "Delete this channel".
+const TRASH: &str = "\u{f1f8}";
+// Nerd Font squares, as the thread panel's checkbox.
+const BOX_OFF: &str = "\u{f096}";
+const BOX_ON: &str = "\u{f14a}";
 /// The notification levels' dropdown.
 const LEVELS: [Notify; 3] = [Notify::All, Notify::Mentions, Notify::Mute];
 
@@ -91,6 +96,7 @@ enum Item {
     Private,
     Archive,
     Unarchive,
+    Delete,
 }
 
 /// What `conversations.info` says about the channel.
@@ -124,7 +130,17 @@ pub struct Details {
     confirm: Option<Item>,
     /// "Add people": the people picked and the search, as in a new message.
     adding: Option<NewMessage>,
+    /// "Delete channel?", open over the details.
+    delete: Option<Delete>,
     busy: bool,
+}
+
+/// The delete confirmation: the box that enables the button, and what
+/// Slack said when it refused.
+#[derive(Default)]
+struct Delete {
+    checked: bool,
+    error: Option<String>,
 }
 
 /// A change sent to Slack.
@@ -135,6 +151,7 @@ pub enum Job {
     Purpose(String),
     Leave,
     Archive,
+    Delete,
     Private,
     Invite(Vec<String>),
     Notify(Notify),
@@ -164,6 +181,13 @@ pub struct Areas {
     picks: Vec<(Rect, usize)>,
     chips: Vec<(Rect, usize)>,
     invite: Rect,
+    /// "Delete channel?": the dialog, its ✕, the box, the link and the buttons.
+    del: Rect,
+    del_close: Rect,
+    del_check: Rect,
+    del_archive: Rect,
+    del_cancel: Rect,
+    del_ok: Rect,
 }
 
 // ---- Slack -----------------------------------------------------------------
@@ -254,6 +278,9 @@ fn run(s: &Slack, chan: &str, job: &Job) -> Res<()> {
         Job::Purpose(p) => s.set_purpose(chan, p),
         Job::Leave => call("conversations.leave", &[]),
         Job::Archive => call("conversations.archive", &[]),
+        // The web client's own call (session tokens); `admin.conversations.delete`
+        // is for Enterprise org admins only.
+        Job::Delete => call("conversations.delete", &[]),
         Job::Private => call("conversations.convertToPrivate", &[]),
         Job::Invite(users) => call("conversations.invite", &[("users", &users.join(","))]),
         Job::Notify(n) => set_notify(s, chan, *n),
@@ -274,6 +301,9 @@ fn friendly(e: &str) -> String {
         "invalid_name_maxlength" => tr("The name can have at most 80 characters.", "O nome pode ter no máximo 80 caracteres."),
         "too_long" => tr("That's too long for Slack.", "Ficou longo demais para o Slack."),
         "cant_leave_general" => tr("No one can leave the workspace's general channel.", "Ninguém pode sair do canal geral do workspace."),
+        "cant_delete_general" => tr("The general channel can't be deleted.", "O canal geral não pode ser apagado."),
+        "channel_not_found" => tr("Slack couldn't find this channel: it may be gone already.", "O Slack não encontrou este canal: talvez já tenha sido apagado."),
+        "method_not_supported_for_channel_type" => tr("Slack doesn't allow that for this kind of conversation.", "O Slack não permite isso para este tipo de conversa."),
         "cant_archive_general" => tr("The general channel can't be archived.", "O canal geral não pode ser arquivado."),
         "last_member" => tr("You're the last member: archive the channel instead.", "Você é o último membro: arquive o canal."),
         "already_in_channel" => tr("They're already in the channel.", "Já estão no canal."),
@@ -333,6 +363,7 @@ impl App {
             notify: None,
             confirm: None,
             adding: None,
+            delete: None,
             busy: false,
         });
         self.dirty = true;
@@ -387,7 +418,14 @@ impl App {
             d.confirm = None;
         }
         if let Err(e) = res {
-            self.error = Some(friendly(&e));
+            // A refused delete reads in its dialog.
+            match self.details.as_mut().filter(|d| d.chan == chan).and_then(|d| d.delete.as_mut()) {
+                Some(del) if matches!(job, Job::Delete) => {
+                    del.error = Some(friendly(&e));
+                    self.status.clear();
+                }
+                _ => self.error = Some(friendly(&e)),
+            }
             if matches!(job, Job::Notify(_)) {
                 self.refresh_prefs();
             }
@@ -449,6 +487,11 @@ impl App {
                 }
                 self.brief(tr("Channel archived", "Canal arquivado").into(), 3);
             }
+            Job::Delete => {
+                self.details = None;
+                self.forget_channel(&chan);
+                self.brief(tr("Channel deleted", "Canal apagado").into(), 3);
+            }
             Job::Leave => {
                 self.details = None;
                 self.convs.retain(|c| c.id != chan);
@@ -462,6 +505,27 @@ impl App {
                 self.brief(tr("You left the channel", "Você saiu do canal").into(), 3);
             }
         }
+    }
+
+    /// A channel gone for good (deleted, here or by someone else): out of
+    /// the sidebar and the state; if it was open, the default one opens.
+    pub(crate) fn forget_channel(&mut self, chan: &str) {
+        if self.details.as_ref().is_some_and(|d| d.chan == chan) {
+            self.details = None;
+        }
+        self.convs.retain(|c| c.id != chan);
+        self.recents.retain(|r| r != chan);
+        self.messages.remove(chan);
+        self.counts.remove(chan);
+        self.stars.retain(|s| s != chan);
+        self.resort();
+        if self.current.as_deref() == Some(chan) {
+            self.current = None;
+            self.thread = None;
+            self.focus = Focus::Sidebar;
+            self.open_default();
+        }
+        self.dirty = true;
     }
 
     fn details_job(&mut self, job: Job) {
@@ -570,6 +634,11 @@ impl App {
                 } else if !info.general {
                     v.push(Item::Archive);
                 }
+                // Slack doesn't say who may delete (admins, by default):
+                // offered to all, its refusal explains.
+                if !info.general && matches!(kind, Kind::Channel | Kind::Private) {
+                    v.push(Item::Delete);
+                }
                 v
             }
         }
@@ -625,6 +694,7 @@ impl App {
             Item::Archive => self.details_job(Job::Archive),
             Item::Private => self.details_job(Job::Private),
             Item::Unarchive => self.unarchive(chan),
+            Item::Delete => (d.delete, d.confirm) = (Some(Delete::default()), None),
             Item::CopyId => {
                 self.copy(&chan);
                 self.brief_copied(trf!("ID {chan} copied", "ID {chan} copiado"));
@@ -718,6 +788,17 @@ impl App {
         let alt = k.modifiers.contains(KeyModifiers::ALT);
         let (group, archived) = (self.details_kind() == Some(Kind::Group), self.details_archived());
         let Some(d) = self.details.as_mut() else { return };
+        if let Some(del) = d.delete.as_mut() {
+            match k.code {
+                _ if d.busy => {}
+                KeyCode::Esc | KeyCode::Char('q') => d.delete = None,
+                KeyCode::Char(' ') => (del.checked, del.error) = (!del.checked, None),
+                KeyCode::Char('a') if !archived => self.archive_instead(),
+                KeyCode::Enter if del.checked => self.details_job(Job::Delete),
+                _ => {}
+            }
+            return;
+        }
         if let Some(i) = d.notify {
             match k.code {
                 KeyCode::Up | KeyCode::Char('k') => d.notify = Some(i.saturating_sub(1)),
@@ -802,6 +883,18 @@ impl App {
         }
     }
 
+    /// The dialog's "archive a channel instead": closes it and starts the
+    /// archive confirmation in its place.
+    fn archive_instead(&mut self) {
+        let Some(d) = self.details.as_ref() else { return };
+        let at = self.details_items(d).iter().position(|i| *i == Item::Archive);
+        let Some(d) = self.details.as_mut() else { return };
+        d.delete = None;
+        if let Some(i) = at {
+            (d.sel, d.confirm) = (i, Some(Item::Archive));
+        }
+    }
+
     fn detail_edit_key(&mut self, k: KeyEvent, ctrl: bool) {
         let word = ctrl || k.modifiers.contains(KeyModifiers::ALT);
         let Some(d) = self.details.as_mut() else { return };
@@ -883,9 +976,27 @@ impl App {
         let chip = a.chips.iter().find(|(r, _)| r.contains(at)).map(|(_, i)| *i);
         let (close, star, notify, invite) = (a.close.contains(at), a.star.contains(at), a.notify.contains(at), a.invite.contains(at));
         let (inside, in_dropdown) = (a.modal.contains(at), a.dropdown.contains(at));
+        let (in_del, del_close, del_check) = (a.del.contains(at), a.del_close.contains(at), a.del_check.contains(at));
+        let (del_archive, del_cancel, del_ok) = (a.del_archive.contains(at), a.del_cancel.contains(at), a.del_ok.contains(at));
         let picks = self.invite_candidates();
         let Some(d) = self.details.as_mut() else { return };
         self.dirty = true;
+        // "Delete channel?" takes every click; outside closes it.
+        if let Some(del) = d.delete.as_mut() {
+            if !left || d.busy {
+                return;
+            }
+            if !in_del || del_close || del_cancel {
+                d.delete = None;
+            } else if del_check {
+                (del.checked, del.error) = (!del.checked, None);
+            } else if del_archive {
+                self.archive_instead();
+            } else if del_ok && del.checked {
+                self.details_job(Job::Delete);
+            }
+            return;
+        }
         if d.notify.is_some() {
             match m.kind {
                 MouseEventKind::Moved if level.is_some() => d.notify = level,
@@ -1081,6 +1192,127 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if let Some(sel) = notify {
         dropdown(f, app, level, sel);
     }
+    if app.details.as_ref().is_some_and(|d| d.delete.is_some()) {
+        delete_dialog(f, app);
+    }
+}
+
+/// A rounded button, like the other dialogs'.
+fn pill(label: &str, style: Style) -> Line<'static> {
+    let cap = Style::new().fg(style.bg.unwrap_or(BUTTON_BG));
+    Line::from(vec![Span::styled(crate::blocks::CAP_L, cap), Span::styled(label.to_string(), style), Span::styled(crate::blocks::CAP_R, cap)])
+}
+
+/// "Delete channel?", as Slack asks it: what goes, what stays, and a box
+/// to check before the red button wakes up.
+fn delete_dialog(f: &mut Frame, app: &mut App) {
+    let Some(d) = app.details.as_ref() else { return };
+    let Some(del) = d.delete.as_ref() else { return };
+    let (checked, error, busy) = (del.checked, del.error.clone(), d.busy);
+    let archived = app.details_archived();
+    let area = f.area();
+    let w = 74.min(area.width.saturating_sub(4));
+    // Inside the frame and two columns of margin on each side.
+    let tw = w.saturating_sub(6) as usize;
+
+    // The warning, its last sentence in bold.
+    let plain = tr(
+        "When you delete a channel, all messages from this channel will be removed from Slack immediately.",
+        "Ao apagar um canal, todas as mensagens dele serão removidas do Slack imediatamente.",
+    );
+    let strong = tr("This can't be undone.", "Isso não pode ser desfeito.");
+    let lead = plain.split(' ').count();
+    let mut lines: Vec<Line> = Vec::new();
+    let mut word = 0;
+    for l in wrap(&format!("{plain} {strong}"), tw) {
+        let words: Vec<&str> = l.split(' ').collect();
+        let spans: Vec<Span> = words
+            .iter()
+            .enumerate()
+            .map(|(i, wd)| {
+                let text = if i == 0 { wd.to_string() } else { format!(" {wd}") };
+                Span::styled(text, if word + i >= lead { Style::new().bold() } else { Style::new() })
+            })
+            .collect();
+        word += words.len();
+        lines.push(Line::from(spans));
+    }
+    lines.push(Line::default());
+    lines.push(Line::from(tr("Keep in mind that:", "Tenha em mente que:")));
+    let files = tr("Any files uploaded to this channel won't be removed", "Os arquivos enviados para este canal não serão removidos");
+    for (i, l) in wrap(files, tw.saturating_sub(3)).into_iter().enumerate() {
+        lines.push(Line::from(format!("{}{l}", if i == 0 { " • " } else { "   " })));
+    }
+    // "archive a channel instead", a link to the archive confirmation.
+    let mut link = None;
+    if !archived {
+        let (before, label, after) = if i18n::is_pt() {
+            ("Você pode ", "arquivar o canal", " em vez disso, sem remover as mensagens")
+        } else {
+            ("You can ", "archive a channel instead", " without removing its messages")
+        };
+        link = Some((lines.len(), 3 + before.width() as u16, label.width() as u16));
+        lines.push(Line::from(vec![
+            Span::raw(format!(" • {before}")),
+            Span::styled(label, Style::new().fg(Color::Cyan).underlined()),
+            Span::raw(after),
+        ]));
+    }
+    if let Some(e) = &error {
+        lines.push(Line::default());
+        lines.extend(wrap(e, tw).into_iter().map(|l| Line::from(Span::styled(l, Style::new().fg(Color::Red)))));
+    }
+
+    // The text, a blank, the box and the buttons, a blank, the hint.
+    let n = lines.len() as u16;
+    let h = (n + 7).min(area.height);
+    let rect = Rect::new(area.x + (area.width - w) / 2, area.y + area.height.saturating_sub(h) / 2, w, h);
+    f.render_widget(Clear, rect);
+    let title = Line::from(vec![Span::raw(" "), Span::raw(tr("Delete channel?", "Apagar canal?")).bold(), Span::raw(" ")]);
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(dim()).title(title);
+    let inner = block.inner(rect).inner(Margin { horizontal: 2, vertical: 0 });
+    f.render_widget(block, rect);
+    let close = Rect::new(rect.right().saturating_sub(5), rect.y, 3, 1);
+    f.render_widget(Paragraph::new(" ✕ "), close);
+    let a = &mut app.areas.details;
+    (a.del, a.del_close) = (rect, close);
+    if inner.height < n + 5 {
+        return;
+    }
+    let text = Rect::new(inner.x, inner.y + 1, inner.width, n);
+    f.render_widget(Paragraph::new(lines), text);
+    if let Some((row, x, lw)) = link {
+        a.del_archive = Rect::new(text.x + x, text.y + row as u16, lw, 1).intersection(text);
+    }
+
+    // "Cancel" and "Delete Channel" on the right, the box on the left.
+    let y = text.bottom() + 1;
+    let ok_label = if busy { tr(" Deleting… ", " Apagando… ") } else { tr(" Delete Channel ", " Apagar canal ") };
+    let ok_style = if checked && !busy { Style::new().fg(Color::White).bg(Color::Red).bold() } else { Style::new().fg(Color::DarkGray).bg(BUTTON_BG) };
+    let ok = pill(ok_label, ok_style);
+    let cancel = pill(tr(" Cancel ", " Cancelar "), Style::new().bg(BUTTON_BG).bold());
+    let (ow, cw) = (ok.width() as u16, cancel.width() as u16);
+    let ok_r = Rect::new(inner.right().saturating_sub(ow), y, ow, 1).intersection(inner);
+    let cancel_r = Rect::new(ok_r.x.saturating_sub(cw + 1), y, cw, 1).intersection(inner);
+    f.render_widget(Paragraph::new(ok), ok_r);
+    f.render_widget(Paragraph::new(cancel), cancel_r);
+    (a.del_ok, a.del_cancel) = (ok_r, cancel_r);
+    let (icon, style) = if checked { (BOX_ON, Style::new().fg(Color::Cyan)) } else { (BOX_OFF, dim()) };
+    let room = cancel_r.x.saturating_sub(inner.x + 3) as usize;
+    let label = truncate(tr("Yes, permanently delete the channel", "Sim, apagar o canal para sempre"), room);
+    let check = Line::from(vec![Span::styled(icon, style), Span::raw(" "), Span::raw(label)]);
+    let check_r = Rect::new(inner.x, y, check.width() as u16, 1).intersection(inner);
+    f.render_widget(Paragraph::new(check), check_r);
+    a.del_check = check_r;
+
+    let hint = if busy {
+        tr("deleting…", "apagando…")
+    } else if archived {
+        tr("Space checks · Enter deletes · Esc cancels", "Espaço marca · Enter apaga · Esc cancela")
+    } else {
+        tr("Space checks · Enter deletes · A archives instead · Esc cancels", "Espaço marca · Enter apaga · A arquiva · Esc cancela")
+    };
+    f.render_widget(Paragraph::new(truncate(hint, inner.width as usize)).style(dim()), Rect::new(inner.x, y + 2, inner.width, 1).intersection(inner));
 }
 
 /// "Notify you about…", under its button, as Slack lays it out: a check
@@ -1265,8 +1497,9 @@ fn settings(f: &mut Frame, app: &mut App, area: Rect) {
             Item::Archive if confirm == Some(item) => {
                 Line::from(Span::styled(trf!("Archive #{name} for everyone? Enter again", "Arquivar #{name} para todos? Enter de novo"), red))
             }
-            Item::Archive => Line::from(Span::styled(tr("Archive channel for everyone", "Arquivar canal para todos"), red)),
+            Item::Archive => Line::from(vec![Span::styled(format!("{ARCHIVE} "), red), Span::styled(tr("Archive channel for everyone", "Arquivar canal para todos"), red)]),
             Item::Unarchive => Line::from(vec![Span::raw(format!("{ARCHIVE} ")), Span::raw(tr("Unarchive this channel", "Desarquivar este canal"))]),
+            Item::Delete => Line::from(vec![Span::styled(format!("{TRASH} "), red), Span::styled(tr("Delete this channel", "Apagar este canal"), red)]),
             _ => continue,
         };
         rows.push(row(Some(item), true, line));

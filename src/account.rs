@@ -553,11 +553,18 @@ impl App {
         self.spawn(|s| Event::Account(Ev::Dnd(dnd(s))));
     }
 
-    /// Pauses notifications, as from the menu, for `minutes`.
-    pub(crate) fn pause_notifications(&self, minutes: i64) {
-        self.spawn(move |s| Event::Account(Ev::DndSaved(pause(s, minutes))));
+    /// Pauses notifications, as from the menu, for `minutes`: in every
+    /// workspace, which `Workspaces` takes from here.
+    pub(crate) fn pause_notifications(&mut self, minutes: i64) {
+        self.dnd_all = Some(crate::pause::DndAll::Pause { minutes, vips: None });
     }
 
+    /// Ends the pause in every workspace (`Workspaces`).
+    pub(crate) fn resume_everywhere(&mut self) {
+        self.dnd_all = Some(crate::pause::DndAll::Resume);
+    }
+
+    /// Ends the pause in this workspace.
     pub(crate) fn resume_notifications(&self) {
         let snooze = self.account.paused.is_none_or(|p| p.snooze);
         self.spawn(move |s| Event::Account(Ev::DndSaved(resume(s, snooze))));
@@ -929,7 +936,7 @@ impl App {
                     close = false;
                 }
             }
-            Item::Resume => self.resume_notifications(),
+            Item::Resume => self.resume_everywhere(),
             Item::Pause(min) => self.pause_notifications(if min == 0 { until_tomorrow() } else { min }),
             Item::PauseWeek => self.pause_notifications(until_next_week()),
             Item::PauseCustom => self.open_pause(),

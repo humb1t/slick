@@ -36,8 +36,9 @@ pub fn dir() -> PathBuf {
     crate::config::cache_dir()
 }
 
-fn path() -> PathBuf {
-    dir().join("cache.json")
+/// A workspace's own cache, `cache-<team_id>.json`; `cache.json` while its id is unknown.
+fn path(team: Option<&str>) -> PathBuf {
+    dir().join(team.map_or_else(|| "cache.json".to_string(), |t| format!("cache-{t}.json")))
 }
 
 pub fn image_path(file_id: &str) -> PathBuf {
@@ -68,21 +69,39 @@ pub fn prune_images() {
 }
 
 pub fn load() -> Cache {
-    std::fs::read(path())
+    load_for(None)
+}
+
+/// A workspace's cache. The legacy `cache.json` becomes the first
+/// workspace's (`config::team`) the first time it is asked for by id; the
+/// app still drops it at `auth.test` if its owner is someone else.
+pub fn load_for(team: Option<&str>) -> Cache {
+    let p = path(team);
+    if let Some(t) = team {
+        let legacy = path(None);
+        let first = crate::config::team().as_deref() == Some(t);
+        if !p.exists() && legacy.exists() && first {
+            let _ = std::fs::rename(&legacy, &p);
+        }
+    }
+    std::fs::read(p)
         .ok()
         .and_then(|b| serde_json::from_slice::<Cache>(&b).ok())
         .unwrap_or_default()
 }
 
-pub fn save(cache: Cache) {
-    let p = path();
+pub fn save_for(team: Option<&str>, cache: Cache) {
+    let p = path(team);
     if let Some(dir) = p.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
     if let Ok(json) = serde_json::to_vec(&cache) {
         let tmp = p.with_extension("tmp");
-        if std::fs::write(&tmp, json).is_ok() {
-            let _ = std::fs::rename(tmp, p);
+        if std::fs::write(&tmp, json).is_ok() && std::fs::rename(tmp, p).is_ok() {
+            // Saved under its id: the legacy file would only go stale.
+            if team.is_some_and(|t| crate::config::team().as_deref() == Some(t)) {
+                let _ = std::fs::remove_file(path(None));
+            }
         }
     }
 }

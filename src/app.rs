@@ -30,6 +30,11 @@ const PRESENCE_EVERY: Duration = Duration::from_secs(60);
 /// Everyone's names, photos and statuses read again: the websocket of a
 /// browser session never says when someone changes them. Two pages or so.
 const USERS_EVERY: Duration = Duration::from_secs(2 * 60);
+/// The same for a workspace behind another, and its pause.
+const USERS_EVERY_BACKGROUND: Duration = Duration::from_secs(15 * 60);
+const DND_EVERY_BACKGROUND: Duration = Duration::from_secs(5 * 60);
+/// A background workspace's start: the rest of `refresh` this long after the light part.
+const REST_AFTER: Duration = Duration::from_secs(10);
 /// How soon a change in the sidebar's DMs reaches the presence subscription.
 const WATCH_EVERY: Duration = Duration::from_secs(5);
 const COUNTS_EVERY: Duration = Duration::from_secs(15);
@@ -374,6 +379,9 @@ pub struct Areas {
     pub threads: crate::threads::Areas,
     /// The invite modal.
     pub invite: crate::invite::Areas,
+    /// The workspace switcher's rows and "Add a workspace".
+    #[allow(dead_code)]
+    pub switcher: crate::switcher::Areas,
 }
 
 pub struct App {
@@ -495,6 +503,8 @@ pub struct App {
     /// What was just copied from a card (`id`, `email`, `team`), shown
     /// beside it for a moment since the status line sits under the popup.
     pub copied: Option<(&'static str, Instant)>,
+    /// The code block behind `copied` = `code`.
+    pub copied_code: String,
     /// A newer version, shown as the button by your name.
     pub update: Option<crate::update::State>,
     /// Quitting to run the updated binary.
@@ -524,13 +534,38 @@ pub struct App {
     /// The counts asked for by the websocket, a moment after its first nudge,
     /// so a burst of messages costs one request.
     counts_at: Option<Instant>,
+    /// Another workspace is on screen: this one keeps only what feeds its badge.
+    pub background: bool,
+    /// Every signed-in workspace, for the switcher; filled by `Workspaces` before each draw.
+    pub workspaces: Vec<crate::switcher::WsInfo>,
+    /// A switch asked for by a key or click, carried out by `Workspaces`.
+    pub switch_req: Option<crate::switcher::SwitchReq>,
+    /// Started by "Add a workspace": its sign-in is a new workspace, which
+    /// `Workspaces` keeps (or merges into one already there).
+    pub adding: bool,
+    /// That sign-in, checked, for `Workspaces` to decide on.
+    pub added: Option<(AuthInfo, Creds)>,
+    /// Esc on the "add" sign-in: `Workspaces` drops this one.
+    pub discard: bool,
+    /// Signed out with other workspaces left: `Workspaces` drops this one.
+    pub signed_out: bool,
+    /// A pause set or ended here, which `Workspaces` applies in every workspace.
+    pub dnd_all: Option<crate::pause::DndAll>,
+    /// A config from before multi-workspace: its session, saved again with
+    /// the workspace's id (`config::team`) at the first `auth.test`.
+    pub legacy: Option<Creds>,
+    /// A workspace opened behind another: when it starts loading, then the rest.
+    start_at: Option<Instant>,
+    rest_at: Option<Instant>,
+    /// The conversation it was left on, opened once it comes on screen.
+    reopen: Option<String>,
     pub dirty: bool,
     pub quit: bool,
 }
 
 impl App {
-    pub fn new(slack: Slack, tx: Sender<Event>, cache: Cache, picker: Option<Picker>, logged_in: bool) -> Self {
-        let mut app = Self {
+    fn build(slack: Slack, tx: Sender<Event>, cache: Cache, picker: Option<Picker>) -> Self {
+        Self {
             slack,
             tx,
             me: None,
@@ -607,6 +642,7 @@ impl App {
             restart: false,
             status_until: None,
             copied: None,
+            copied_code: String::new(),
             error: None,
             loading: HashSet::new(),
             no_older: HashSet::new(),
@@ -621,20 +657,92 @@ impl App {
             typing: HashMap::new(),
             rtm_started: false,
             counts_at: None,
+            background: false,
+            workspaces: Vec::new(),
+            switch_req: None,
+            adding: false,
+            added: None,
+            discard: false,
+            signed_out: false,
+            dnd_all: None,
+            legacy: None,
+            start_at: None,
+            rest_at: None,
+            reopen: None,
             dirty: true,
             quit: false,
-        };
+        }
+    }
+
+    pub fn new(slack: Slack, tx: Sender<Event>, cache: Cache, picker: Option<Picker>, logged_in: bool) -> Self {
+        let current = cache.current.clone();
+        let mut app = Self::build(slack, tx, cache, picker);
         app.resort();
         if logged_in {
             app.refresh();
             // Back where it was left; a `slick open` arriving next replaces it.
-            if let Some(id) = cache.current.filter(|id| app.convs.iter().any(|c| &c.id == id)) {
+            if let Some(id) = current.filter(|id| app.convs.iter().any(|c| &c.id == id)) {
                 app.open(id);
             }
         } else {
             app.open_login(None);
         }
         app
+    }
+
+    /// A signed-in workspace behind the one on screen: it starts loading
+    /// after `delay`, the little its badge needs first.
+    pub fn new_background(slack: Slack, tx: Sender<Event>, cache: Cache, picker: Option<Picker>, delay: Duration) -> Self {
+        let current = cache.current.clone();
+        let mut app = Self::build(slack, tx, cache, picker);
+        app.resort();
+        app.background = true;
+        app.start_at = Some(Instant::now() + delay);
+        app.reopen = current.filter(|id| app.convs.iter().any(|c| &c.id == id));
+        app
+    }
+
+    /// It comes on screen: what the background skipped is fetched now.
+    pub fn activated(&mut self) {
+        self.background = false;
+        self.dirty = true;
+        if self.login.is_some() {
+            return;
+        }
+        // Never started: all of it at once.
+        if self.start_at.take().is_some() {
+            self.rest_at = None;
+            self.refresh();
+        } else if self.rest_at.take().is_some() {
+            self.refresh_rest();
+        }
+        let now = Instant::now();
+        self.last_presence = now.checked_sub(PRESENCE_EVERY).unwrap_or(now);
+        if let Some(id) = self.reopen.take() {
+            return self.open(id);
+        }
+        // What came in while it was behind.
+        self.last_poll = now.checked_sub(LIVE_FALLBACK).unwrap_or(now);
+        self.refresh_thread();
+        self.open_default();
+    }
+
+    /// Nothing open yet (a workspace just signed in to, or never left on a
+    /// conversation): its default channel, as Slack does, or else the
+    /// sidebar's first conversation.
+    pub(crate) fn open_default(&mut self) {
+        if self.current.is_some() || self.threads.open || self.background || self.login.is_some() || self.reopen.is_some() {
+            return;
+        }
+        let rows = self.rows();
+        let general = self.convs.iter().find(|c| !c.archived && (c.general || (c.kind == Kind::Channel && c.name == "general")));
+        let first = || rows.iter().find_map(|r| match r {
+            Row::Conv(i) => Some(&self.convs[*i]),
+            _ => None,
+        });
+        if let Some(id) = general.or_else(first).map(|c| c.id.clone()) {
+            self.open(id);
+        }
     }
 
     pub fn to_cache(&self) -> Cache {
@@ -671,6 +779,11 @@ impl App {
         });
     }
 
+    /// This workspace's client; clones share its session and presence list.
+    pub(crate) fn slack(&self) -> &Slack {
+        &self.slack
+    }
+
     fn spawn_quiet(&self, job: impl FnOnce(&Slack) + Send + 'static) {
         let slack = self.slack.clone();
         std::thread::spawn(move || job(&slack));
@@ -690,6 +803,29 @@ impl App {
         self.spawn(|s| Event::Slash(crate::slash::Ev::List(crate::slash::fetch(s))));
         self.refresh_account(true);
         self.refresh_prefs();
+        self.spawn(|s| Event::Edit(crate::edit::Ev::Saved(s.saved())));
+    }
+
+    /// A background workspace's start: what its badge, previews and pause need.
+    fn refresh_light(&self) {
+        self.spawn(|s| Event::Auth(s.auth()));
+        self.spawn(|s| Event::Convs(s.conversations()));
+        self.fetch_counts();
+        self.refresh_prefs();
+        self.spawn(|s| Event::TeamIcon(s.team_icon()));
+        self.refresh_dnd();
+    }
+
+    /// The rest of `refresh`, a while after `refresh_light`.
+    fn refresh_rest(&self) {
+        self.spawn(|s| Event::Users(s.users()));
+        self.spawn(|s| Event::Sections(s.sections()));
+        self.spawn(|s| Event::Stars(s.stars()));
+        self.spawn(|s| Event::Vips(s.vips()));
+        self.spawn(|s| Event::Boot(s.boot()));
+        self.spawn(|s| Event::Emoji(emoji::Ev::List(emoji::fetch(s))));
+        self.spawn(|s| Event::Slash(crate::slash::Ev::List(crate::slash::fetch(s))));
+        self.refresh_account(true);
         self.spawn(|s| Event::Edit(crate::edit::Ev::Saved(s.saved())));
     }
 
@@ -1699,12 +1835,32 @@ impl App {
         if self.login.is_some() {
             return;
         }
-        if self.last_presence.elapsed() >= PRESENCE_EVERY && !self.convs.is_empty() {
+        let now = Instant::now();
+        if self.start_at.is_some_and(|t| t <= now) {
+            self.start_at = None;
+            self.rest_at = Some(now + REST_AFTER);
+            self.refresh_light();
+        }
+        if self.rest_at.is_some_and(|t| t <= now) {
+            self.rest_at = None;
+            self.refresh_rest();
+        }
+        if self.start_at.is_some() {
+            return;
+        }
+        // Behind another workspace: no presence polling, only its pause now and then.
+        if self.background {
+            if self.last_presence.elapsed() >= DND_EVERY_BACKGROUND {
+                self.last_presence = now;
+                self.refresh_dnd();
+            }
+        } else if self.last_presence.elapsed() >= PRESENCE_EVERY && !self.convs.is_empty() {
             self.last_presence = Instant::now();
             self.refresh_presence();
             self.refresh_dnd();
         }
-        if self.last_users.elapsed() >= USERS_EVERY {
+        let users_every = if self.background { USERS_EVERY_BACKGROUND } else { USERS_EVERY };
+        if self.last_users.elapsed() >= users_every {
             self.last_users = Instant::now();
             // Quietly: a failure here waits for the next round.
             let (slack, tx) = (self.slack.clone(), self.tx.clone());
@@ -1726,7 +1882,9 @@ impl App {
             self.last_counts = Instant::now();
             self.fetch_counts();
         }
-        self.poll_thread();
+        if !self.background {
+            self.poll_thread();
+        }
         self.poll_threads();
         if self.copied.is_some_and(|(_, at)| at.elapsed() >= COPIED_FOR) {
             self.copied = None;
@@ -1754,7 +1912,7 @@ impl App {
             self.flash = None;
             self.dirty = true;
         }
-        let Some(chan) = self.current.clone() else { return };
+        let Some(chan) = self.current.clone().filter(|_| !self.background) else { return };
         if self.polling || self.last_poll.elapsed() < self.poll_every() || !self.messages.contains_key(&chan) {
             return;
         }
@@ -1805,6 +1963,9 @@ impl App {
                     self.focus = Focus::Sidebar;
                 }
                 self.owner = me.user_id.clone();
+                if let Some(creds) = self.legacy.take() {
+                    let _ = config::save_workspace(&me, &creds);
+                }
                 self.status.clear();
                 self.me = Some(me);
                 self.resort();
@@ -1822,6 +1983,7 @@ impl App {
             Event::Convs(Ok(convs)) => {
                 self.convs = convs;
                 self.resort();
+                self.open_default();
             }
             Event::Sections(Ok(s)) => self.sections = s,
             Event::Stars(Ok(s)) => self.stars = s,
@@ -2020,6 +2182,10 @@ impl App {
                     t.remove(&u);
                 }
                 self.counts_soon();
+                // Behind another workspace, the open conversation waits until it's on screen.
+                if self.background {
+                    return;
+                }
                 if self.current.as_deref() == Some(chan.as_str()) && !self.polling && self.messages.contains_key(&chan) {
                     self.polling = true;
                     self.last_poll = Instant::now();
@@ -2044,6 +2210,16 @@ impl App {
             Ev::Archived { chan, archived } => {
                 if let Some(c) = self.convs.iter_mut().find(|c| c.id == chan) {
                     c.archived = archived;
+                }
+            }
+            // Deleted by someone else (ours is already gone: a no-op).
+            Ev::Deleted(chan) => {
+                let open = self.current.as_deref() == Some(chan.as_str());
+                if self.convs.iter().any(|c| c.id == chan) {
+                    self.forget_channel(&chan);
+                    if open {
+                        self.brief(tr("This channel was deleted", "Este canal foi apagado").into(), 3);
+                    }
                 }
             }
         }
@@ -2072,7 +2248,7 @@ impl App {
         use crate::ipc::Cmd;
         match cmd {
             Cmd::Focus => focus_window(),
-            Cmd::Open { conv, ts, thread, focus } => {
+            Cmd::Open { conv, ts, thread, focus, .. } => {
                 if focus {
                     focus_window();
                 }
@@ -2097,9 +2273,9 @@ impl App {
                     None => self.show_message(conv, ts),
                 }
             }
-            Cmd::MarkRead(conv) => self.run_action(Action::MarkRead(conv)),
+            Cmd::MarkRead { conv, .. } => self.run_action(Action::MarkRead(conv)),
             Cmd::Pause(minutes) => self.pause_notifications(minutes),
-            Cmd::Resume => self.resume_notifications(),
+            Cmd::Resume => self.resume_everywhere(),
             Cmd::Quit => self.quit = true,
         }
     }
@@ -2286,8 +2462,11 @@ impl App {
         l.checking = true;
         l.message = Some(tr("Sign in through the window that opened…", "Entre na janela de login que abriu…").into());
         let tx = self.tx.clone();
+        // The other workspaces, which the window leaves alone: all of them on
+        // "Add a workspace", the rest when signing in to this one again.
+        let known: Vec<String> = self.workspaces.iter().filter(|w| !w.active && !w.id.is_empty()).map(|w| w.id.clone()).collect();
         std::thread::spawn(move || {
-            let res = crate::login::window(workspace.as_deref()).and_then(|creds| Slack::new(creds.clone()).auth().map(|me| (me, creds)));
+            let res = crate::login::sign_in(workspace.as_deref(), &known);
             let _ = tx.send(Event::Login(res));
         });
     }
@@ -2319,18 +2498,30 @@ impl App {
 
     fn finish_login(&mut self, res: Res<(AuthInfo, Creds)>) {
         match res {
+            // A new workspace: `Workspaces` keeps it, or updates the one it already has.
+            Ok((me, creds)) if self.adding => self.added = Some((me, creds)),
             Ok((me, creds)) => {
-                if let Err(e) = config::save(&creds, &me.domain) {
-                    self.error = Some(trf!("didn't save the config: {e}", "não salvou o config: {e}"));
+                let old = self.me.as_ref().map(|m| m.team_id.clone()).filter(|t| *t != me.team_id);
+                // Next to others, another workspace comes in through "Add a workspace".
+                if old.is_some() && self.workspaces.len() > 1 {
+                    if let Some(l) = self.login.as_mut() {
+                        l.checking = false;
+                        l.message = Some(tr("That's another workspace: add it from the workspace menu.", "Esse é outro workspace: adicione pelo menu do workspace.").into());
+                    }
+                    return;
                 }
-                self.slack.set_creds(creds);
-                self.login = None;
-                self.error = None;
-                self.loading.clear();
-                self.polling = false;
-                self.refresh();
-                if let Some(chan) = self.current.clone() {
-                    self.fetch(chan, Fetch::Initial);
+                // Alone, it replaces the one signed in before.
+                if let Some(old) = old {
+                    let _ = config::remove_workspace(&old);
+                }
+                // A legacy session never confirmed: the new one takes its keys.
+                if self.legacy.take().is_some() {
+                    let _ = config::logout();
+                }
+                let saved = crate::workspaces::save_session(&me, &creds);
+                self.sign_in(creds);
+                if let Err(e) = saved {
+                    self.error = Some(trf!("didn't save the config: {e}", "não salvou o config: {e}"));
                 }
             }
             Err(e) => {
@@ -2346,13 +2537,37 @@ impl App {
         }
     }
 
+    /// Takes a checked session: the sign-in screen closes and everything loads.
+    pub(crate) fn sign_in(&mut self, creds: Creds) {
+        self.slack.set_creds(creds);
+        self.login = None;
+        self.error = None;
+        self.loading.clear();
+        self.polling = false;
+        self.refresh();
+        if let Some(chan) = self.current.clone() {
+            self.fetch(chan, Fetch::Initial);
+        }
+    }
+
     /// "Sign out": the session is forgotten with everything of the account,
-    /// as when another account signs in, and the login screen opens.
+    /// as when another account signs in, and the login screen opens. With
+    /// other workspaces signed in, only this one goes and another takes the screen.
     pub(crate) fn logout(&mut self) {
-        if let Err(e) = config::logout() {
+        let team = self.me.as_ref().map(|m| m.team_id.clone());
+        let listed = team.as_ref().is_some_and(|t| config::workspaces().iter().any(|w| w.team_id.as_ref() == Some(t)));
+        let res = match team.filter(|_| listed) {
+            Some(t) => config::remove_workspace(&t),
+            None => config::logout(),
+        };
+        if let Err(e) = res {
             self.error = Some(trf!("didn't save the config: {e}", "não salvou o config: {e}"));
         }
         self.slack.set_creds(Creds::default());
+        if self.workspaces.len() > 1 {
+            self.signed_out = true;
+            return;
+        }
         self.me = None;
         self.users = Users::default();
         self.emoji = emoji::Emoji::default();
@@ -2419,6 +2634,8 @@ impl App {
             &mut l.cookie
         };
         match k.code {
+            // "Add a workspace" given up: back to the one before.
+            KeyCode::Esc if self.adding => self.discard = true,
             KeyCode::Esc if self.me.is_some() || !self.convs.is_empty() => self.login = None,
             KeyCode::Tab | KeyCode::BackTab | KeyCode::Up | KeyCode::Down => l.field = 1 - l.field,
             KeyCode::Enter if token_empty && cookie_empty => self.login_window(),
@@ -2474,7 +2691,9 @@ impl App {
     pub fn on_key(&mut self, k: KeyEvent) {
         self.dirty = true;
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
-        if ctrl && k.code == KeyCode::Char('c') {
+        // Ctrl+Shift+C, where the terminal lets it through, is code in the box.
+        let code = k.modifiers.contains(KeyModifiers::SHIFT) && self.typing_editor().is_some();
+        if ctrl && k.code == KeyCode::Char('c') && !code {
             // With a message picked, Ctrl+C copies it, as in Slack.
             if self.login.is_none() && self.menu.is_none() && self.edit.forward.is_none() && self.copy_selected() {
                 return;
@@ -2541,8 +2760,7 @@ impl App {
         if self.edit.forward.is_some() {
             return self.forward_key(k);
         }
-        if self.team_popup && k.code == KeyCode::Esc {
-            self.team_popup = false;
+        if self.team_popup && self.switcher_key(k) {
             return;
         }
         if let Some(r) = self.viewer.clone() {
@@ -2560,6 +2778,9 @@ impl App {
             return;
         }
         if k.code == KeyCode::Esc && self.selection.take().is_some_and(|s| s.moved) {
+            return;
+        }
+        if self.format_key(k) {
             return;
         }
         if self.emoji_key(k) || self.mention_key(k) || self.slash_key(k) {
@@ -2707,8 +2928,8 @@ impl App {
         let newline = k.modifiers.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT);
         match k.code {
             KeyCode::Esc => self.focus = Focus::Sidebar,
-            KeyCode::Enter if newline => self.editor.insert("\n"),
-            KeyCode::Char('j') if ctrl => self.editor.insert("\n"),
+            KeyCode::Enter if newline || self.editor.in_code() => self.editor.newline(),
+            KeyCode::Char('j') if ctrl => self.editor.newline(),
             // Clears the whole box, handy when editing a message.
             KeyCode::Char('d') if ctrl => self.editor.set(String::new()),
             KeyCode::Char('v') if ctrl => self.paste_clipboard(false),
@@ -2765,6 +2986,10 @@ impl App {
         }
         if self.invite.is_some() {
             return self.people_mouse(m);
+        }
+        // The workspace dropdown sits over the sidebar: it sees the mouse first.
+        if self.team_popup && self.switcher_mouse(m) {
+            return;
         }
         let covered = self.menu.is_some() || self.viewer.is_some() || self.react.is_some() || self.dialog.is_some() || self.account.profile.is_some() || self.account.about || self.account.settings.is_some();
         if m.kind == MouseEventKind::Down(MouseButton::Left) && !covered && self.areas.latest.contains(at) {
@@ -2918,22 +3143,6 @@ impl App {
                 self.dirty = true;
                 return;
             }
-            if self.team_popup {
-                if button == MouseButton::Left && self.areas.team_url.contains(at) {
-                    if let Some(url) = self.team_url() {
-                        self.open_url(&url);
-                    }
-                } else if button == MouseButton::Left && self.areas.team_id.contains(at) {
-                    let id = self.me.as_ref().map(|m| m.team_id.clone()).unwrap_or_default();
-                    self.copy(&id);
-                    self.brief_copied(trf!("ID {id} copied", "ID {id} copiado"));
-                    self.copied = Some(("team", Instant::now()));
-                } else if !self.areas.team_popup.contains(at) {
-                    self.team_popup = false;
-                }
-                self.dirty = true;
-                return;
-            }
         }
         if let (MouseEventKind::Down(MouseButton::Left), Some((uid, data))) = (m.kind, self.profile.clone()) {
             if self.areas.profile_close.contains(at) {
@@ -2995,6 +3204,15 @@ impl App {
                     // A channel we're not in opens all the same: its history reads fine.
                     crate::blocks::Target::Channel(id) => return self.open(id.clone()),
                     crate::blocks::Target::User(uid) => return self.open_dm(uid.clone()),
+                    crate::blocks::Target::Copy(text) => {
+                        let text = text.clone();
+                        self.copy(&text);
+                        self.brief_copied(tr("code copied", "código copiado").into());
+                        self.copied = Some(("code", Instant::now()));
+                        self.copied_code = text;
+                        self.dirty = true;
+                        return;
+                    }
                 };
                 self.open_url(&url);
                 return;

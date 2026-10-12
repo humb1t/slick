@@ -19,6 +19,7 @@ mod events;
 mod files;
 mod login;
 mod mention;
+mod markup;
 #[cfg(not(target_os = "linux"))]
 mod login_window;
 mod pause;
@@ -27,6 +28,7 @@ mod rtm;
 mod selection;
 mod slack;
 mod slash;
+mod switcher;
 mod text;
 mod thread;
 mod threads;
@@ -34,6 +36,7 @@ mod threads;
 mod tray;
 mod ui;
 mod update;
+mod workspaces;
 
 use crossterm::event::{
     self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste, EnableFocusChange,
@@ -103,8 +106,8 @@ usage:
   slick --version          show the version
 
 talking to the running slick (see docs/events.md):
-  slick open <conversation> [ts] [--thread <ts>] [--background]
-  slick mark-read <conversation>
+  slick open <conversation|link> [ts] [--thread <ts>] [--team <workspace>] [--background]
+  slick mark-read <conversation|link> [--team <workspace>]
   slick dnd pause <minutes> | resume | status
   slick quit
   slick status [--json]    what is unread, as JSON for scripts
@@ -119,8 +122,8 @@ uso:
   slick --version          mostra a versão
 
 falando com o slick aberto (veja docs/events.md):
-  slick open <conversa> [ts] [--thread <ts>] [--background]
-  slick mark-read <conversa>
+  slick open <conversa|link> [ts] [--thread <ts>] [--team <workspace>] [--background]
+  slick mark-read <conversa|link> [--team <workspace>]
   slick dnd pause <minutos> | resume | status
   slick quit
   slick status [--json]    o que não foi lido, em JSON para scripts
@@ -156,7 +159,7 @@ fn main() {
     config::migrate();
     update::cleanup();
     if std::env::args().nth(1).as_deref() == Some("login") {
-        std::process::exit(login_cli());
+        std::process::exit(login::cli(std::env::args().nth(2).as_deref()));
     }
     if std::env::args().nth(1).as_deref() == Some("update") {
         std::process::exit(update::cli());
@@ -194,8 +197,8 @@ fn main() {
             std::process::exit(1);
         }
     }
-    let creds = config::load();
     std::thread::spawn(cache::prune_images);
+    // Slick's own events (an update, the socket, the tray); each workspace has its channel.
     let (tx, rx) = mpsc::channel();
 
     ratatui::init();
@@ -226,39 +229,45 @@ fn main() {
     }
     #[cfg(target_os = "linux")]
     let (tray_tx, mut tray) = (tx.clone(), None::<tray::Tray>);
-    let logged_in = creds.is_some();
-    let mut app = app::App::new(slack::Slack::new(creds.unwrap_or_default()), tx, cache::load(), picker, logged_in);
-    app.events.on = owner;
-    app.starting();
-    #[cfg(target_os = "linux")]
-    {
-        app.account.tray = config::tray();
-    }
-    while !app.quit {
-        if app.dirty {
-            app.dirty = false;
+    let mut ws = workspaces::Workspaces::new(picker, owner);
+    while !ws.quit() {
+        if ws.dirty() {
+            ws.fill_infos();
             // Turned on or off in the settings: dropping it takes it off the bar.
             #[cfg(target_os = "linux")]
-            if app.account.tray != tray.is_some() {
-                tray = app.account.tray.then(|| tray::Tray::start(tray_tx.clone()));
+            if ws.active().account.tray != tray.is_some() {
+                tray = ws.active().account.tray.then(|| tray::Tray::start(tray_tx.clone()));
             }
             #[cfg(target_os = "linux")]
             if let Some(t) = &mut tray {
                 // A pause you set dims it, like the widget; the night schedule doesn't.
-                let snoozed = app.account.paused.is_some_and(|p| p.snooze);
-                t.set(if snoozed { (0, 0) } else { app.attention() });
+                let snoozed = ws.active().account.paused.is_some_and(|p| p.snooze);
+                t.set(if snoozed { (0, 0) } else { ws.attention() });
             }
-            app.publish();
-            if terminal.draw(|f| ui::draw(f, &mut app)).is_err() {
-                break;
+            ws.publish();
+            // Only the one on screen is drawn; the others just feed its switcher.
+            for (i, w) in ws.list.iter_mut().enumerate() {
+                if i != ws.active {
+                    w.app.dirty = false;
+                }
             }
-            app.request_images();
-            app.request_names();
+            let app = ws.active_mut();
+            if app.dirty {
+                app.dirty = false;
+                if terminal.draw(|f| ui::draw(f, app)).is_err() {
+                    break;
+                }
+                app.request_images();
+                app.request_names();
+            }
         }
+        ws.drain();
         while let Ok(ev) = rx.try_recv() {
-            app.handle(ev);
+            ws.global(ev);
         }
-        app.tick();
+        ws.tick();
+        ws.settle();
+        let app = ws.active_mut();
         // A visible animated emoji asks for a redraw when its frame changes,
         // at most every 20ms: wait just until then, so it isn't late by up to 50ms.
         // With none on screen nothing changes here.
@@ -280,7 +289,12 @@ fn main() {
                 app.set_focused(true);
             }
             match ev {
-                Ok(TermEvent::Key(k)) if k.kind != KeyEventKind::Release => app.on_key(k),
+                // Ctrl+1..9 picks the workspace before the app sees the key.
+                Ok(TermEvent::Key(k)) if k.kind != KeyEventKind::Release => {
+                    if !ws.key(k) {
+                        ws.active_mut().on_key(k);
+                    }
+                }
                 Ok(TermEvent::Mouse(m)) => app.on_mouse(m),
                 Ok(TermEvent::Paste(s)) => app.on_paste(&s),
                 Ok(TermEvent::FocusGained) => app.set_focused(true),
@@ -291,38 +305,15 @@ fn main() {
                 }
                 _ => {}
             }
+            ws.settle();
         }
     }
     let _ = crossterm::execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
     let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste, DisableFocusChange);
     ratatui::restore();
-    app.unpublish();
-    cache::save(app.to_cache());
-    if app.restart {
+    ws.unpublish();
+    ws.save();
+    if ws.restart() {
         eprintln!("{}", trf!("didn't restart: {}", "não reiniciou: {}", update::restart()));
-    }
-}
-
-/// `slick login`: the sign-in window, then the session saved to the config.
-fn login_cli() -> i32 {
-    let workspace = std::env::args().nth(2).and_then(|w| config::workspace_name(&w)).or_else(config::workspace);
-    eprintln!("{}", i18n::tr("Opening the Slack sign-in window…", "Abrindo a janela de login do Slack…"));
-    let checked = login::window(workspace.as_deref()).and_then(|creds| slack::Slack::new(creds.clone()).auth().map(|me| (me, creds)));
-    match checked {
-        Ok((me, creds)) => match config::save(&creds, &me.domain) {
-            Ok(()) => {
-                eprintln!("{}", trf!("Signed in: {} · {}", "Entrou: {} · {}", me.team, me.user));
-                0
-            }
-            Err(e) => {
-                let p = config::path();
-                eprintln!("{}", trf!("Signed in, but didn't save {}: {e}", "Entrou, mas não salvou {}: {e}", p.display()));
-                1
-            }
-        },
-        Err(e) => {
-            eprintln!("{e}");
-            1
-        }
     }
 }

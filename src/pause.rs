@@ -84,6 +84,14 @@ fn vip_pref(s: &Slack) -> Res<Option<bool>> {
     Ok(p.as_bool().or_else(|| p.as_str().map(|s| s == "true" || s == "1")))
 }
 
+/// A pause set or ended here, for every workspace (`Workspaces`); the VIP
+/// pref changed with it goes to all of them too.
+#[derive(Clone, Copy)]
+pub(crate) enum DndAll {
+    Pause { minutes: i64, vips: Option<bool> },
+    Resume,
+}
+
 /// The VIP pref first, when changed: a failure there pauses nothing.
 fn save(s: &Slack, minutes: i64, vips: Option<bool>) -> Res<Option<Paused>> {
     if let Some(on) = vips {
@@ -267,7 +275,22 @@ impl App {
         };
         let vips = d.vips.filter(|v| d.vips_was != Some(*v));
         (d.saving, d.error) = (true, None);
-        self.spawn(move |s| Event::Account(crate::account::Ev::Pause(Ev::Saved(save(s, minutes, vips)))));
+        self.dnd_all = Some(DndAll::Pause { minutes, vips });
+    }
+
+    /// A pause asked for in any workspace, applied in this one. The one
+    /// whose dialog is saving hears back through it.
+    pub(crate) fn apply_dnd(&mut self, req: DndAll) {
+        match req {
+            DndAll::Pause { minutes, vips } => {
+                let dialog = self.account.pause.as_ref().is_some_and(|d| d.saving);
+                self.spawn(move |s| {
+                    let res = save(s, minutes, vips);
+                    Event::Account(if dialog { crate::account::Ev::Pause(Ev::Saved(res)) } else { crate::account::Ev::DndSaved(res) })
+                });
+            }
+            DndAll::Resume => self.resume_notifications(),
+        }
     }
 
     pub(crate) fn pause_key(&mut self, k: KeyEvent) {

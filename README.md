@@ -84,7 +84,7 @@ The script ([install.sh](install.sh)) downloads the latest
 (built on Ubuntu 24.04, so glibc 2.39 or newer), checks its SHA-256 and puts
 `slick` in `~/.local/bin`, without sudo. It warns when that folder is not on
 your `PATH`. `SLICK_INSTALL_DIR` changes the folder and
-`SLICK_VERSION=v0.2.0` picks a version. Installed this way, slick updates itself
+`SLICK_VERSION=v0.3.0` picks a version. Installed this way, slick updates itself
 (see below).
 
 ### Windows
@@ -102,7 +102,7 @@ irm https://slick.leonavas.com/install.ps1 | iex
 
 The script ([install.ps1](install.ps1)) downloads the latest release, checks its
 SHA-256, puts `slick.exe` in `%LOCALAPPDATA%\Programs\slick` and adds that folder
-to your user `PATH`, without admin rights (`$env:SLICK_VERSION = 'v0.2.0'` picks
+to your user `PATH`, without admin rights (`$env:SLICK_VERSION = 'v0.3.0'` picks
 a version). Open a new terminal and run `slick`. Only x86_64 for now.
 
 ### From source
@@ -167,7 +167,10 @@ for creating that app with the scopes slick uses.
 | `Shift+J` / `Shift+K` | move a section up or down |
 | `m` or right click | menu for a conversation or message |
 | `PgUp` `PgDn` / mouse wheel | scroll (older messages load at the top) |
-| `Enter` / `Shift+Enter` | send / new line |
+| `Enter` / `Shift+Enter` | send / new line (in a quote or list, the next line keeps its `> ` or `- `) |
+| `*bold*` `_italic_` `~strike~` `` `code` `` ```` ``` ```` `> ` `- ` `1. ` | Slack's formatting, styled as you type and sent as rich text; `Enter` inside an open ```` ``` ```` block adds a line |
+| `Ctrl+B` `Ctrl+I` | bold, italic (`Alt+B` too; in a thread `Ctrl+B` stays "also send to the channel") |
+| `Ctrl+Shift+X` `Ctrl+Shift+C` `Ctrl+Shift+9` | strikethrough, code, quote (`Alt+X`, `Alt+C` where the terminal takes the `Ctrl+Shift` ones) |
 | `:` | emoji autocomplete |
 | `Ctrl+U` / `Ctrl+W` | clear the message box / delete a word |
 | `↑` in an empty message box | pick a message |

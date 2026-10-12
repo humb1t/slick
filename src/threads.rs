@@ -2,8 +2,8 @@
 //! replied to, were mentioned in or followed. A row on top of the sidebar
 //! opens them in place of the conversation, one card each; a reply in one
 //! counts as unread there and is announced like a new message (`events`).
-//! Opening a thread in the panel, or reading it there as replies come, marks
-//! it read in Slack.
+//! Opening a thread in the panel, reading it there as replies come, or
+//! seeing its new replies on a card of the view marks it read in Slack.
 
 use crate::app::{App, Event, Focus};
 use crate::i18n::{self, tr};
@@ -35,6 +35,8 @@ const SOON: Duration = Duration::from_millis(700);
 const PREVIEW: usize = 5;
 /// How long the card the pill jumped to stays lit.
 const FLASH: Duration = Duration::from_millis(1800);
+/// After a thread is read here, how long Slack's counts may still be from before it.
+const SETTLE: Duration = Duration::from_secs(15);
 
 /// A thread you follow, as the view lists it.
 #[derive(Clone)]
@@ -77,9 +79,11 @@ fn key(chan: &str, ts: &str) -> String {
     format!("{chan}:{ts}")
 }
 
-/// Unread first, then the newest activity first, as Slack lists them.
-fn order(list: &mut [Sub]) {
-    list.sort_by(|a, b| b.unread().cmp(&a.unread()).then_with(|| b.activity().cmp(a.activity())));
+/// Unread first (and those read while the view showed them, which keep
+/// their place), then the newest activity first, as Slack lists them.
+fn order(list: &mut [Sub], kept: &HashMap<String, String>) {
+    let fresh = |s: &Sub| s.unread() || kept.contains_key(&key(&s.chan, &s.root.ts));
+    list.sort_by(|a, b| fresh(b).cmp(&fresh(a)).then_with(|| b.activity().cmp(a.activity())));
 }
 
 pub enum Ev {
@@ -136,6 +140,32 @@ pub struct Threads {
     dismissed: HashSet<String>,
     /// The card the pill jumped to, lit for a moment.
     flash: Option<(String, Instant)>,
+    /// Cards read while the view was open, and up to where they had been
+    /// read before: their "New" line and their place stay until it opens again.
+    kept: HashMap<String, String>,
+    /// When a thread was last read here: Slack's counts may lag for a moment.
+    read_at: Option<Instant>,
+    /// Set by the last draw: unread cards whose new replies are on screen.
+    in_view: Vec<(String, String, String)>,
+}
+
+impl Threads {
+    /// Unread, or read while the view showed it: it keeps its "New" line.
+    fn fresh(&self, s: &Sub) -> bool {
+        s.unread() || self.kept.contains_key(&key(&s.chan, &s.root.ts))
+    }
+
+    /// A thread was read here a moment ago, and Slack may not count it yet.
+    fn settling(&self) -> bool {
+        self.read_at.is_some_and(|t| t.elapsed() < SETTLE)
+    }
+
+    /// What the list says: any thread unread, and the unread replies that mention you.
+    fn local_counts(&self, me: &str) -> (bool, u64) {
+        let unread = self.list.iter().any(Sub::unread);
+        let mentions = self.list.iter().map(|s| s.unread_replies().filter(|m| crate::events::mentions(m, me)).count() as u64).sum();
+        (unread, mentions)
+    }
 }
 
 /// Where the last draw put the cards, for the mouse.
@@ -216,6 +246,19 @@ impl App {
             self.threads.soon = None;
             self.fetch_threads();
         }
+        self.read_in_view();
+    }
+
+    /// Cards whose new replies the last draw showed are read, as Slack's view
+    /// does: only with the window focused.
+    fn read_in_view(&mut self) {
+        let seen = std::mem::take(&mut self.threads.in_view);
+        if !self.threads.open || !self.focused {
+            return;
+        }
+        for (chan, ts, latest) in seen {
+            self.read_thread(&chan, &ts, &latest, true);
+        }
     }
 
     fn fetch_threads(&mut self) {
@@ -229,7 +272,15 @@ impl App {
 
     pub(crate) fn on_threads(&mut self, ev: Ev) {
         match ev {
-            Ev::Counts((unread, mentions)) => {
+            Ev::Counts((mut unread, mut mentions)) => {
+                // Right after a read here, Slack's counts may be from before it:
+                // they don't bring back what the list says was read.
+                if self.threads.settling() {
+                    let me = self.me.as_ref().map(|m| m.user_id.clone()).unwrap_or_default();
+                    let (any, local) = self.threads.local_counts(&me);
+                    unread &= any;
+                    mentions = mentions.min(local);
+                }
                 let changed = (unread, mentions) != (self.threads.unread, self.threads.mentions);
                 (self.threads.unread, self.threads.mentions) = (unread, mentions);
                 // The first counts, a change, or (with the websocket down,
@@ -270,10 +321,21 @@ impl App {
             Err(e) => return self.threads.error = Some(e),
         };
         self.threads.error = None;
-        // Read here, and Slack's list not there yet: it stays read.
+        // Read here, and Slack's list not there yet: it stays read, and its
+        // replies leave Slack's total too. Once Slack has it, Slack decides.
+        let mut gone = 0u64;
         for s in &mut list {
-            if let Some(m) = self.threads.marked.get(&key(&s.chan, &s.root.ts)).filter(|m| **m > s.last_read) {
-                s.last_read = m.clone();
+            let k = key(&s.chan, &s.root.ts);
+            match self.threads.marked.get(&k).cloned() {
+                Some(m) if m > s.last_read => {
+                    let before = s.new_replies();
+                    s.last_read = m;
+                    gone += (before - s.new_replies()) as u64;
+                }
+                Some(_) => {
+                    self.threads.marked.remove(&k);
+                }
+                None => {}
             }
         }
         self.announce(&list);
@@ -287,10 +349,19 @@ impl App {
             self.expand(chan, ts);
         }
         let sel = self.threads.list.get(self.threads.sel).map(|s| key(&s.chan, &s.root.ts));
-        order(&mut list);
+        order(&mut list, &self.threads.kept);
         self.threads.list = list;
         self.threads.loaded = true;
-        self.threads.new = total.max(self.threads.list.iter().map(|s| s.new_replies() as u64).sum());
+        let sum: u64 = self.threads.list.iter().map(|s| s.new_replies() as u64).sum();
+        let slack = total.saturating_sub(gone);
+        // Right after a read here, a total from before it doesn't grow the
+        // badge back; new replies in the list still do.
+        self.threads.new = if self.threads.settling() { slack.min(self.threads.new.max(sum)) } else { slack }.max(sum);
+        // Replies the list has are unread even if counts held back by `settling` said otherwise.
+        let me = self.me.as_ref().map(|m| m.user_id.clone()).unwrap_or_default();
+        let (any, mentions) = self.threads.local_counts(&me);
+        self.threads.unread |= any;
+        self.threads.mentions = self.threads.mentions.max(mentions);
         self.follow_selection(sel);
         // A thread open in the panel that got replies is read at once.
         self.read_open_thread();
@@ -326,7 +397,7 @@ impl App {
                         continue;
                     }
                     let data = json!({ "conversation": conv.clone(), "message": self.message_json(m), "mention": mention, "thread": true });
-                    crate::events::emit("message.new", data);
+                    self.emit("message.new", data);
                 }
             }
             let newest = s.replies.last().map(|m| m.ts.clone()).unwrap_or_default().max(s.latest.clone());
@@ -347,6 +418,10 @@ impl App {
         match self.threads.list.iter_mut().find(|s| s.chan == chan && s.root.ts == ts) {
             Some(s) if s.last_read.as_str() >= upto => return,
             Some(s) => {
+                // Read in front of you: its "New" line and place stay for now.
+                if self.threads.open {
+                    self.threads.kept.entry(k.clone()).or_insert_with(|| s.last_read.clone());
+                }
                 let before = s.new_replies();
                 s.last_read = upto.to_string();
                 let read = before - s.new_replies();
@@ -359,10 +434,10 @@ impl App {
         // The row and the badge follow at once; Slack's counts confirm them.
         let me = self.me.as_ref().map(|m| m.user_id.clone()).unwrap_or_default();
         let t = &mut self.threads;
-        t.unread = t.list.iter().any(Sub::unread);
-        t.mentions = t.list.iter().map(|s| s.unread_replies().filter(|m| crate::events::mentions(m, &me)).count() as u64).sum();
+        (t.unread, t.mentions) = t.local_counts(&me);
+        t.read_at = Some(Instant::now());
         let sel = t.list.get(t.sel).map(|s| key(&s.chan, &s.root.ts));
-        order(&mut t.list);
+        order(&mut t.list, &t.kept);
         self.follow_selection(sel);
         let (chan, ts, upto) = (chan.to_string(), ts.to_string(), upto.to_string());
         self.spawn(move |s| Event::Threads(Ev::Marked(s.mark_thread(&chan, &ts, &upto))));
@@ -403,6 +478,10 @@ impl App {
         self.edit.forget_thread();
         self.filter.clear();
         self.threads.open = true;
+        // Cards read last time take their place among the read ones.
+        self.threads.kept.clear();
+        let t = &mut self.threads;
+        order(&mut t.list, &t.kept);
         (self.threads.sel, self.threads.top) = (0, 0);
         self.focus = Focus::Input;
         self.fetch_threads();
@@ -615,7 +694,7 @@ impl App {
         };
         let now = keys(new);
         for (chan, ts) in keys(old).into_iter().filter(|k| !now.contains(k)) {
-            crate::events::emit("thread.read", json!({ "conversation": self.conv_json(&chan), "ts": ts }));
+            self.emit("thread.read", json!({ "conversation": self.conv_json(&chan), "ts": ts }));
         }
     }
 }
@@ -705,7 +784,8 @@ fn title(app: &App, chan: &str, bold: bool) -> Line<'static> {
 /// rendering, but without its day lines and links into threads.
 /// Also the line of "N more replies", when there is one. `full` is every
 /// reply, once the card was expanded.
-fn card_lines(app: &App, s: &Sub, full: Option<&[Message]>, loading: bool, width: usize, font: Option<(u16, u16)>) -> (Rendered, Option<usize>) {
+/// `read_to` is where the "New" line goes; also the line it is on, when there is one.
+fn card_lines(app: &App, s: &Sub, read_to: &str, full: Option<&[Message]>, loading: bool, width: usize, font: Option<(u16, u16)>) -> (Rendered, Option<usize>, Option<usize>) {
     let names = app.names();
     let plain = |m: &Message| {
         let mut m = m.clone();
@@ -733,16 +813,18 @@ fn card_lines(app: &App, s: &Sub, full: Option<&[Message]>, loading: bool, width
         more_at = Some(r.lines.len());
         r.lines.push(Line::from(vec![Span::raw(" ".repeat(gutter)), Span::styled(more, Style::new().fg(Color::Cyan).bold())]));
     }
-    let (read, unread): (Vec<Message>, Vec<Message>) = replies.iter().map(plain).partition(|m| m.ts <= s.last_read);
+    let (read, unread): (Vec<Message>, Vec<Message>) = replies.iter().map(plain).partition(|m| m.ts.as_str() <= read_to);
     if !read.is_empty() {
         let mut more = message_lines(&read, None, &names, app, width, font);
         more.drop_front(2);
         r.append(more);
     }
+    let mut new_at = None;
     if !unread.is_empty() {
         // Slack's "New" line before the first unread reply.
         let label = tr(" New", " Novas");
         r.lines.push(Line::from(""));
+        new_at = Some(r.lines.len());
         r.lines.push(Line::from(vec![
             Span::styled("─".repeat(width.saturating_sub(label.width())), Style::new().fg(Color::Red)),
             Span::styled(label, Style::new().fg(Color::Red).bold()),
@@ -753,7 +835,7 @@ fn card_lines(app: &App, s: &Sub, full: Option<&[Message]>, loading: bool, width
     }
     r.retime(ago);
     r.inert();
-    (r, more_at)
+    (r, more_at, new_at)
 }
 
 /// The sidebar's top row: bold with unread replies, a blue badge with how
@@ -851,9 +933,11 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     // "N more replies" lines, in list lines.
     let mut more: Vec<(usize, usize)> = Vec::new();
     let mut input: Option<Input> = None;
+    // Unread cards: where their new replies start and where the card ends, in list lines.
+    let mut news: Vec<(usize, usize, usize)> = Vec::new();
     let mut caught_up = false;
     for (i, s) in app.threads.list.iter().enumerate() {
-        if !s.unread() && !caught_up {
+        if !app.threads.fresh(s) && !caught_up {
             caught_up = true;
             // Slack's "You're up to date" between the unread and the rest.
             let label = tr(" You're up to date ", " Você está em dia ");
@@ -895,8 +979,10 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
         lines.push(Line::from(Span::styled(format!("╭{}╮", "─".repeat(width.saturating_sub(2))), border)));
         let k = key(&s.chan, &s.root.ts);
         let full = app.threads.expanded.get(&k).map(Vec::as_slice);
-        let (r, more_at) = card_lines(app, s, full, app.threads.expanding.contains(&k), inner_w, font);
+        let read_to = app.threads.kept.get(&k).unwrap_or(&s.last_read);
+        let (r, more_at, new_at) = card_lines(app, s, read_to, full, app.threads.expanding.contains(&k), inner_w, font);
         more.extend(more_at.map(|m| (lines.len() + m, i)));
+        let new_y = new_at.map(|m| lines.len() + m);
         pieces.push((lines.len(), r));
         let n = pieces.last().map_or(0, |p| p.1.lines.len());
         lines.extend((0..n).map(|_| side(Line::from(""))));
@@ -941,6 +1027,9 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
         }
         lines.push(Line::from(Span::styled(format!("╰{}╯", "─".repeat(width.saturating_sub(2))), border)));
         cards.push((i, y0, lines.len(), reply_y));
+        if s.unread() {
+            news.push((i, new_y.unwrap_or(y0), lines.len()));
+        }
         lines.push(Line::from(""));
     }
 
@@ -970,6 +1059,13 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
             place(f, app, Rect::new(body.x + 2, row(a), inner_w as u16, (b - a) as u16), r, scroll, false);
         }
     }
+    // Unread cards with their new replies on screen are read next tick (`read_in_view`).
+    app.threads.in_view = news
+        .iter()
+        .filter(|&&(_, a, b)| a < end && b > top)
+        .filter_map(|&(i, _, _)| app.threads.list.get(i))
+        .map(|s| (s.chan.clone(), s.root.ts.clone(), s.latest.clone()))
+        .collect();
     for &(y, i) in more.iter().filter(|(y, _)| (top..end).contains(y)) {
         app.areas.threads.more.push((Rect::new(body.x + 2, row(y), inner_w as u16, 1), i));
     }

@@ -62,12 +62,12 @@ impl Slack {
 
     /// A reply in the thread `ts`; `broadcast` also shows it in the channel.
     pub fn reply(&self, chan: &str, ts: &str, text: &str, broadcast: bool) -> Res<Message> {
-        let text = escape(text);
-        let mut p = vec![("channel", chan), ("thread_ts", ts), ("text", text.as_str())];
+        let escaped = escape(text);
+        let mut p = vec![("channel", chan), ("thread_ts", ts), ("text", escaped.as_str())];
         if broadcast {
             p.push(("reply_broadcast", "true"));
         }
-        let v = self.call("chat.postMessage", &p)?;
+        let v = self.call_rich("chat.postMessage", &p, text)?;
         let mut m = parse_message(&v["message"]);
         if m.ts.is_empty() {
             m.ts = v["ts"].as_str().unwrap_or("").to_string();
@@ -267,8 +267,8 @@ impl App {
         let e = &mut t.editor;
         match k.code {
             KeyCode::Esc => self.focus = Focus::Input,
-            KeyCode::Enter if newline => e.insert("\n"),
-            KeyCode::Char('j') if ctrl => e.insert("\n"),
+            KeyCode::Enter if newline || e.in_code() => e.newline(),
+            KeyCode::Char('j') if ctrl => e.newline(),
             KeyCode::Char('d') if ctrl => e.set(String::new()),
             KeyCode::Enter => self.send_reply(),
             KeyCode::Char('b') if ctrl => t.broadcast = !t.broadcast,

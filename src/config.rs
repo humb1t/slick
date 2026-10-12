@@ -92,16 +92,6 @@ pub fn workspace() -> Option<String> {
     value("workspace")
 }
 
-pub fn load() -> Option<Creds> {
-    let mut token = std::env::var("SLACK_TOKEN").ok();
-    let mut cookie = std::env::var("SLACK_COOKIE").ok();
-    if token.is_none() {
-        token = value("token");
-        cookie = value("cookie");
-    }
-    Some(Creds { token: token.filter(|t| !t.is_empty())?, cookie: cookie.filter(|c| !c.is_empty()) })
-}
-
 /// Sidebar width and whether it shows photos; `None` when never changed.
 pub fn sidebar_width() -> Option<u16> {
     value("sidebar_width")?.parse().ok()
@@ -127,11 +117,143 @@ pub fn sidebar_avatars() -> Option<bool> {
     value("sidebar_avatars")?.parse().ok()
 }
 
-pub fn save(creds: &Creds, workspace: &str) -> std::io::Result<()> {
-    let mut v = vec![("token", creds.token.clone()), ("cookie", creds.cookie.clone().unwrap_or_default())];
-    if !workspace.is_empty() {
-        v.push(("workspace", workspace.to_string()));
+/// One signed-in workspace, as the config has it.
+#[allow(dead_code)]
+#[derive(Clone)]
+pub struct WsConf {
+    /// `None` until the first `auth.test` writes it (a config from before multi-workspace).
+    pub team_id: Option<String>,
+    /// The `acme` in acme.slack.com.
+    pub domain: Option<String>,
+    pub creds: Creds,
+}
+
+/// The legacy workspace's id (`team`): its session lives in the plain
+/// `token`/`cookie`/`workspace` keys, the others' in `token.<id>`…
+#[allow(dead_code)]
+pub fn team() -> Option<String> {
+    value("team")
+}
+
+/// The last workspace on screen, reopened at start.
+#[allow(dead_code)]
+pub fn active() -> Option<String> {
+    value("active")
+}
+
+#[allow(dead_code)]
+pub fn set_active(id: &str) -> std::io::Result<()> {
+    set(&[("active", id.to_string())])
+}
+
+/// The `workspaces` list, in the order they were added.
+fn ids() -> Vec<String> {
+    value("workspaces").map(|v| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()).unwrap_or_default()
+}
+
+/// Every workspace signed in to, in the order they were added (Ctrl+1..9).
+/// `SLACK_TOKEN` in the environment means that one alone; a config without
+/// `workspaces` is the single legacy one.
+#[allow(dead_code)]
+pub fn workspaces() -> Vec<WsConf> {
+    if let Some(token) = std::env::var("SLACK_TOKEN").ok().filter(|t| !t.is_empty()) {
+        let cookie = std::env::var("SLACK_COOKIE").ok().filter(|c| !c.is_empty());
+        return vec![WsConf { team_id: None, domain: workspace(), creds: Creds { token, cookie } }];
     }
+    let (legacy, shared) = (team(), value("cookie"));
+    let mut ids = ids();
+    // The legacy one comes first unless the list puts it elsewhere.
+    if value("token").is_some() && !legacy.as_ref().is_some_and(|t| ids.contains(t)) {
+        ids.insert(0, legacy.clone().unwrap_or_default());
+    }
+    ids.into_iter()
+        .filter_map(|id| {
+            let is_legacy = id.is_empty() || legacy.as_deref() == Some(id.as_str());
+            let key = |k: &str| if is_legacy { k.to_string() } else { format!("{k}.{id}") };
+            let token = value(&key("token"))?;
+            let cookie = value(&key("cookie")).or_else(|| shared.clone());
+            let team_id = (!id.is_empty()).then_some(id.clone());
+            Some(WsConf { team_id, domain: value(&key("workspace")), creds: Creds { token, cookie } })
+        })
+        .collect()
+}
+
+/// Saves a workspace's session after `auth.test`: the legacy one (or the
+/// first ever) in the plain keys, any other in `token.<id>`… and the list.
+/// Its cookie is only written apart when it isn't the shared one.
+#[allow(dead_code)]
+pub fn save_workspace(me: &crate::slack::AuthInfo, creds: &Creds) -> std::io::Result<()> {
+    let id = me.team_id.as_str();
+    let legacy = team();
+    let legacy_token = value("token");
+    // Without `team` yet (a config from before), the plain keys are this
+    // workspace's when they hold its token or its address: a new session
+    // for the same workspace replaces them instead of adding it twice.
+    let is_legacy = match &legacy {
+        Some(t) => t == id,
+        None => {
+            legacy_token.is_none() || legacy_token.as_deref() == Some(creds.token.as_str()) || workspace().as_deref() == Some(me.domain.as_str())
+        }
+    };
+    let mut ids = ids();
+    let mut v = Vec::new();
+    if is_legacy {
+        v.push(("token".to_string(), creds.token.clone()));
+        v.push(("cookie".to_string(), creds.cookie.clone().unwrap_or_default()));
+        v.push(("workspace".to_string(), me.domain.clone()));
+        v.push(("team".to_string(), id.to_string()));
+    } else {
+        let own = creds.cookie.clone().filter(|c| value("cookie").as_ref() != Some(c)).unwrap_or_default();
+        v.push((format!("token.{id}"), creds.token.clone()));
+        v.push((format!("cookie.{id}"), own));
+        v.push((format!("workspace.{id}"), me.domain.clone()));
+        // The first other one starts the list, with the legacy one ahead of it.
+        if ids.is_empty() {
+            ids.extend(legacy.filter(|_| legacy_token.is_some()));
+        }
+    }
+    if !ids.is_empty() || !is_legacy {
+        if !ids.iter().any(|i| i == id) {
+            ids.push(id.to_string());
+        }
+        v.push(("workspaces".to_string(), ids.join(", ")));
+    }
+    let v: Vec<(&str, String)> = v.iter().map(|(k, val)| (k.as_str(), val.clone())).collect();
+    set(&v)
+}
+
+/// A workspace keeps this cookie as its own (`cookie.<id>`): the shared
+/// one changed with a new sign-in and Slack refused it here. The legacy
+/// workspace has no key of its own; it always follows the shared one.
+#[allow(dead_code)]
+pub fn pin_cookie(id: &str, cookie: &str) -> std::io::Result<()> {
+    if team().as_deref() == Some(id) {
+        return Ok(());
+    }
+    set(&[(format!("cookie.{id}").as_str(), cookie.to_string())])
+}
+
+/// Signing out of one workspace: its session goes, the others stay. The
+/// shared cookie and the domain go with the last one only, like `logout`.
+#[allow(dead_code)]
+pub fn remove_workspace(id: &str) -> std::io::Result<()> {
+    let ids: Vec<String> = ids().into_iter().filter(|i| i != id).collect();
+    let mut v = vec![("workspaces".to_string(), ids.join(", "))];
+    if team().as_deref() == Some(id) {
+        v.push(("token".to_string(), String::new()));
+        v.push(("team".to_string(), String::new()));
+        if ids.is_empty() {
+            v.push(("cookie".to_string(), String::new()));
+        }
+    } else {
+        for k in ["token", "cookie", "workspace"] {
+            v.push((format!("{k}.{id}"), String::new()));
+        }
+    }
+    if active().as_deref() == Some(id) {
+        v.push(("active".to_string(), String::new()));
+    }
+    let v: Vec<(&str, String)> = v.iter().map(|(k, val)| (k.as_str(), val.clone())).collect();
     set(&v)
 }
 

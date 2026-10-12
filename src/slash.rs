@@ -347,7 +347,7 @@ impl App {
             "/dnd" => {
                 let off = matches!(args.to_lowercase().as_str(), "off" | "end" | "stop" | "desligar" | "parar");
                 if off || (args.is_empty() && self.account.paused.is_some()) {
-                    self.resume_notifications();
+                    self.resume_everywhere();
                     self.brief(tr("Notifications resumed", "Notificações retomadas").to_string(), 4);
                 } else if let Some(m) = minutes(args).filter(|m| *m > 0) {
                     self.pause_notifications(m);

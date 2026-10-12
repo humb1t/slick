@@ -189,34 +189,41 @@ pub(crate) fn mentions(m: &Message, me: &str) -> bool {
     (!me.is_empty() && m.text.contains(&format!("<@{me}>"))) || ["<!here", "<!channel", "<!everyone"].iter().any(|t| m.text.contains(t))
 }
 
-/// Custom emoji saved for the widgets: name → whether its file is there
-/// (false while it downloads, or when that failed).
+/// Custom emoji saved for the widgets: `team:name` → whether its file is
+/// there (false while it downloads, or when that failed).
 fn emoji_files() -> &'static Mutex<HashMap<String, bool>> {
     static FILES: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
     FILES.get_or_init(Default::default)
 }
 
-/// A custom emoji's picture in `emoji/<name>.<ext>` next to the snapshot,
-/// when it is there. The first ask downloads it in the background: the
-/// snapshot picks it up once it lands.
-fn emoji_file(name: &str, url: &str) -> Option<String> {
-    let safe: String = name.chars().map(|c| if c.is_alphanumeric() || "-_+".contains(c) { c } else { '_' }).collect();
+/// A custom emoji's picture in `emoji/<team_id>/<name>.<ext>` next to the
+/// snapshot, when it is there: two workspaces can each have their own
+/// `:party:`. The first ask downloads it in the background: the snapshot
+/// picks it up once it lands.
+fn emoji_file(team: &str, name: &str, url: &str) -> Option<String> {
+    let clean = |s: &str| -> String { s.chars().map(|c| if c.is_alphanumeric() || "-_+".contains(c) { c } else { '_' }).collect() };
+    let safe = clean(name);
     let ext = url.rsplit('/').next().and_then(|f| f.rsplit_once('.')).map(|(_, e)| e).filter(|e| e.len() <= 4).unwrap_or("png");
-    let path = crate::ipc::dir().join("emoji").join(format!("{safe}.{ext}"));
+    let mut dir = crate::ipc::dir().join("emoji");
+    if !team.is_empty() {
+        dir = dir.join(clean(team));
+    }
+    let path = dir.join(format!("{safe}.{ext}"));
     let shown = path.to_string_lossy().into_owned();
+    let key = format!("{team}:{name}");
     let mut files = emoji_files().lock().ok()?;
-    match files.get(name) {
+    match files.get(&key) {
         Some(true) => return Some(shown),
         Some(false) => return None,
         None => {}
     }
     // Left by an earlier run in the same session.
     if path.is_file() {
-        files.insert(name.to_string(), true);
+        files.insert(key, true);
         return Some(shown);
     }
-    files.insert(name.to_string(), false);
-    let (name, url) = (name.to_string(), url.to_string());
+    files.insert(key.clone(), false);
+    let url = url.to_string();
     std::thread::spawn(move || {
         let saved = (|| -> Option<()> {
             let resp = ureq::get(&url).call().ok()?;
@@ -230,7 +237,7 @@ fn emoji_file(name: &str, url: &str) -> Option<String> {
         })();
         if saved.is_some() {
             if let Ok(mut files) = emoji_files().lock() {
-                files.insert(name, true);
+                files.insert(key, true);
             }
         }
     });
@@ -238,6 +245,37 @@ fn emoji_file(name: &str, url: &str) -> Option<String> {
 }
 
 impl App {
+    /// This workspace's id (`T0AAA`); empty before `auth.test`.
+    fn team_id(&self) -> String {
+        self.me.as_ref().map(|m| m.team_id.clone()).unwrap_or_default()
+    }
+
+    /// The workspace every event and snapshot item is tagged with.
+    pub(crate) fn team_json(&self) -> Value {
+        match &self.me {
+            Some(m) => json!({ "id": m.team_id, "domain": m.domain, "name": m.team }),
+            None => Value::Null,
+        }
+    }
+
+    /// This workspace's pause, as the snapshot has it (`null` when notifications are on).
+    fn dnd_json(&self) -> Value {
+        self.account.paused.map_or(Value::Null, |p| json!({ "paused": true, "until": p.until, "snooze": p.snooze }))
+    }
+
+    /// An event from this workspace: its `data` says which one (`team`). A
+    /// new message also carries the workspace's own pause (`dnd`), so a hook
+    /// can keep quiet for the paused ones, on screen or not.
+    pub(crate) fn emit(&self, name: &str, mut data: Value) {
+        if data.is_object() {
+            data["team"] = self.team_json();
+            if name == "message.new" {
+                data["dnd"] = self.dnd_json();
+            }
+        }
+        emit(name, data);
+    }
+
     pub(crate) fn refresh_prefs(&self) {
         self.spawn(|s| Event::NotifyPrefs(prefs(s)));
     }
@@ -271,7 +309,7 @@ impl App {
     }
 
     /// A channel muted or set to mentions only. DMs never are: they always count.
-    fn quiet(&self, c: &crate::slack::Conversation) -> bool {
+    pub(crate) fn quiet(&self, c: &crate::slack::Conversation) -> bool {
         !matches!(c.kind, Kind::Direct | Kind::Group) && self.events.prefs.get(&c.id).is_some_and(Pref::quiet)
     }
 
@@ -361,7 +399,7 @@ impl App {
             for m in fresh {
                 let mut data = json!({ "conversation": conv.clone(), "message": self.message_json(m) });
                 data["mention"] = json!(mentions(m, &me));
-                emit("message.new", data);
+                self.emit("message.new", data);
             }
         }
         if let Some(last) = msgs.last() {
@@ -433,7 +471,7 @@ impl App {
             let name_len = after.find(|c: char| !(c.is_ascii_alphanumeric() || "_-+'".contains(c))).unwrap_or(after.len());
             let name = &after[..name_len];
             let file = (after[name_len..].starts_with(':') && !name.is_empty())
-                .then(|| self.emoji.custom.get(name).and_then(|url| emoji_file(name, url)))
+                .then(|| self.emoji.custom.get(name).and_then(|url| emoji_file(&self.team_id(), name, url)))
                 .flatten();
             match file {
                 Some(f) => {
@@ -461,7 +499,7 @@ impl App {
     fn emoji_json(&self, name: &str) -> Value {
         let char = crate::emoji::standard(name).or_else(|| self.emoji.unicode.get(name).cloned());
         let url = if char.is_none() { self.emoji.custom.get(name).cloned() } else { None };
-        let file = url.as_deref().and_then(|u| emoji_file(name, u));
+        let file = url.as_deref().and_then(|u| emoji_file(&self.team_id(), name, u));
         json!({ "name": name, "char": char, "url": url, "file": file })
     }
 
@@ -499,7 +537,7 @@ impl App {
             self.events.reactions.truncate(REACTIONS);
         }
         let data = json!({ "conversation": conv, "message": message, "reaction": name, "emoji": emoji, "user": who, "mine": mine, "by_me": by_me });
-        emit(if added { "reaction.added" } else { "reaction.removed" }, data);
+        self.emit(if added { "reaction.added" } else { "reaction.removed" }, data);
     }
 
     /// The people whose presence is followed: the sidebar's DMs, and you.
@@ -512,7 +550,7 @@ impl App {
             return;
         }
         self.presence.retain(|u, _| set.contains(u));
-        crate::rtm::subscribe(set.iter().cloned().collect());
+        self.slack().subscribe(set.iter().cloned().collect());
         self.events.watched = set;
     }
 
@@ -532,22 +570,24 @@ impl App {
             let was = self.presence.insert(uid.clone(), active);
             if was.is_some_and(|w| w != active) && self.speaking() {
                 let dm = self.convs.iter().find(|c| matches!(c.kind, Kind::Direct) && c.user.as_deref() == Some(uid.as_str())).map(|c| c.id.clone());
-                emit("presence.changed", json!({ "user": self.person(&uid), "active": active, "dm": dm, "me": mine }));
+                self.emit("presence.changed", json!({ "user": self.person(&uid), "active": active, "dm": dm, "me": mine }));
             }
         }
         self.dirty = true;
     }
 
-    /// Writes the snapshot when something in it changed, and tells the
-    /// subscribers what: counts, conversations read, a pause.
-    pub fn publish(&mut self) {
+    /// The snapshot's part from this workspace (`publish_all` puts them
+    /// together), and the events of what changed in it since the last part:
+    /// conversations and threads read, a pause. `None` while it has nothing
+    /// to say: signed out, or before its counts and preferences are in.
+    pub fn snapshot_part(&mut self) -> Option<Value> {
         if !self.events.on || self.login.is_some() || self.me.is_none() {
-            return;
+            return None;
         }
         // Nothing until the counts and the preferences are in: a snapshot
         // before them would show badges that are not the real ones yet.
         if !self.events.primed || !self.events.prefs_loaded {
-            return;
+            return None;
         }
         // Reactions stop being news after a day, or once their conversation
         // is read: open in front of you, or no longer unread (`conversation.read`).
@@ -567,6 +607,7 @@ impl App {
             .collect();
         let now = chrono::Local::now().timestamp();
         self.events.reactions.retain(|r| now - r.at < REACTION_SECS && !seen.contains(&r.chan));
+        let team = self.team_json();
         let reactions: Vec<Value> = self
             .events
             .reactions
@@ -576,6 +617,7 @@ impl App {
                 // Again each time: a custom emoji's file shows up once downloaded.
                 v["emoji"] = self.emoji_json(&r.name);
                 v["at"] = json!(r.at);
+                v["team"] = team.clone();
                 v
             })
             .collect();
@@ -622,22 +664,22 @@ impl App {
             v["muted"] = json!(pref.muted);
             v["notify"] = json!(pref.desktop.as_deref().unwrap_or("default"));
             v["quiet"] = json!(self.quiet(c));
+            v["team"] = team.clone();
             convs.push((latest.unwrap_or(&c.id), v));
         }
         convs.sort_by(|a, b| b.0.cmp(a.0));
-        let dnd = self.account.paused.map(|p| json!({ "paused": true, "until": p.until, "snooze": p.snooze }));
         // Threads you follow with unread replies (`threads`).
-        let (threads, threads_attention) = self.threads_json();
+        let (mut threads, threads_attention) = self.threads_json();
+        for t in threads["list"].as_array_mut().into_iter().flatten() {
+            t["team"] = team.clone();
+        }
         let me = self.me.as_ref().expect("checked above");
-        let snapshot = json!({
-            "v": VERSION,
-            "running": true,
-            "pid": std::process::id(),
-            "version": env!("CARGO_PKG_VERSION"),
+        let part = json!({
+            "id": me.team_id,
             "team": me.team,
             "domain": me.domain,
             "user": me.user,
-            "dnd": dnd,
+            "dnd": self.dnd_json(),
             "attention": dms + groups + channels_mentioned + threads_attention,
             "totals": {
                 "mentions": mentions, "dms": dms, "groups": groups, "channels": channels, "channels_mentioned": channels_mentioned, "channels_quiet": channels_quiet,
@@ -650,32 +692,24 @@ impl App {
             "reactions": reactions,
             "threads": threads,
         });
-        if self.events.last.as_ref() == Some(&snapshot) {
-            return;
+        if self.events.last.as_ref() == Some(&part) {
+            return Some(part);
         }
-        match self.events.last.take() {
-            None => emit("app.started", json!({ "pid": std::process::id(), "version": env!("CARGO_PKG_VERSION"), "team": me.team })),
-            Some(old) => {
-                if old["totals"] != snapshot["totals"] {
-                    emit("counts.changed", json!({ "attention": snapshot["attention"], "totals": snapshot["totals"] }));
-                }
-                let ids = |v: &Value| -> HashSet<String> {
-                    v["conversations"].as_array().into_iter().flatten().filter_map(|c| c["id"].as_str().map(String::from)).collect()
-                };
-                let now = ids(&snapshot);
-                for id in ids(&old).difference(&now) {
-                    emit("conversation.read", json!({ "conversation": self.conv_json(id) }));
-                }
-                self.threads_read(&old, &snapshot);
-                if old["dnd"] != snapshot["dnd"] {
-                    emit("dnd.changed", if snapshot["dnd"].is_null() { json!({ "paused": false }) } else { snapshot["dnd"].clone() });
-                }
+        if let Some(old) = self.events.last.take() {
+            let ids = |v: &Value| -> HashSet<String> {
+                v["conversations"].as_array().into_iter().flatten().filter_map(|c| c["id"].as_str().map(String::from)).collect()
+            };
+            let now = ids(&part);
+            for id in ids(&old).difference(&now) {
+                self.emit("conversation.read", json!({ "conversation": self.conv_json(id) }));
+            }
+            self.threads_read(&old, &part);
+            if old["dnd"] != part["dnd"] {
+                self.emit("dnd.changed", if part["dnd"].is_null() { json!({ "paused": false }) } else { part["dnd"].clone() });
             }
         }
-        let mut text = snapshot.clone();
-        text["updated"] = json!(chrono::Local::now().timestamp());
-        let _ = worker().send(Job::State(text.to_string()));
-        self.events.last = Some(snapshot);
+        self.events.last = Some(part.clone());
+        Some(part)
     }
 
     /// On the way in: a snapshot left by a slick that died without its
@@ -686,14 +720,112 @@ impl App {
             write_state(&json!({ "v": VERSION, "running": false, "pid": std::process::id(), "updated": chrono::Local::now().timestamp() }).to_string());
         }
     }
+}
 
-    /// On the way out: the snapshot says so, and the subscribers hear it.
-    /// Done here and now, since the process ends right after.
-    pub fn unpublish(&mut self) {
-        if !self.events.on || self.events.last.is_none() {
-            return;
-        }
-        write_state(&json!({ "v": VERSION, "running": false, "pid": std::process::id(), "updated": chrono::Local::now().timestamp() }).to_string());
-        deliver("app.stopped", &envelope("app.stopped", json!({ "pid": std::process::id() })));
+/// The last snapshot written (without its time), to write only what changed
+/// and to say `app.started` once per process.
+fn last_snapshot() -> &'static Mutex<Option<Value>> {
+    static LAST: OnceLock<Mutex<Option<Value>>> = OnceLock::new();
+    LAST.get_or_init(Default::default)
+}
+
+/// Adds up the numbers of two `totals`, key by key.
+fn add_totals(sum: &mut Value, more: &Value) {
+    for (k, v) in more.as_object().into_iter().flatten() {
+        let n = sum[k].as_u64().unwrap_or(0) + v.as_u64().unwrap_or(0);
+        sum[k] = json!(n);
     }
+}
+
+/// Every workspace's part (`App::snapshot_part`) in one snapshot, written
+/// when it changed. `parts` is in the workspaces' order, `Value::Null` for
+/// one without a part yet; `active` is the one on screen. `team`, `domain`,
+/// `user` and `dnd` are the active one's (the first with a part while it has
+/// none); `attention` and `totals` add up all of them; the lists are merged,
+/// newest first, each item with its `team`; `workspaces` lists them all.
+/// Also says `app.started` the first time and `counts.changed` after.
+pub fn publish_all(parts: &[Value], active: usize) {
+    let ready: Vec<(usize, &Value)> = parts.iter().enumerate().filter(|(_, p)| p.is_object()).collect();
+    let Some(&(_, base)) = ready.iter().find(|(i, _)| *i == active).or(ready.first()) else { return };
+    let mut totals = json!({});
+    let mut attention = 0u64;
+    let (mut convs, mut reactions, mut threads) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut t_unread, mut t_new, mut t_mentions) = (false, 0u64, 0u64);
+    let mut workspaces = Vec::new();
+    for &(i, p) in &ready {
+        add_totals(&mut totals, &p["totals"]);
+        attention += p["attention"].as_u64().unwrap_or(0);
+        convs.extend(p["conversations"].as_array().into_iter().flatten().cloned());
+        reactions.extend(p["reactions"].as_array().into_iter().flatten().cloned());
+        let t = &p["threads"];
+        threads.extend(t["list"].as_array().into_iter().flatten().cloned());
+        t_unread |= t["unread"] == true;
+        t_new += t["new"].as_u64().unwrap_or(0);
+        t_mentions += t["mentions"].as_u64().unwrap_or(0);
+        workspaces.push(json!({
+            "id": p["id"], "team": p["team"], "domain": p["domain"], "user": p["user"], "active": i == active,
+            "attention": p["attention"], "totals": p["totals"], "dnd": p["dnd"],
+        }));
+    }
+    // Newest first, as each part has them; a conversation without `latest` by its id, as before.
+    let key = |c: &Value, k: &str| c[k].as_str().or(c["id"].as_str()).unwrap_or("").to_string();
+    convs.sort_by_key(|c| std::cmp::Reverse(key(c, "latest")));
+    threads.sort_by_key(|t| std::cmp::Reverse(t["latest"].as_str().unwrap_or("").to_string()));
+    reactions.sort_by_key(|r| std::cmp::Reverse(r["at"].as_i64().unwrap_or(0)));
+    let snapshot = json!({
+        "v": VERSION,
+        "running": true,
+        "pid": std::process::id(),
+        "version": env!("CARGO_PKG_VERSION"),
+        "team": base["team"],
+        "domain": base["domain"],
+        "user": base["user"],
+        "dnd": base["dnd"],
+        "attention": attention,
+        "totals": totals,
+        "conversations": convs,
+        "reactions": reactions,
+        "threads": { "unread": t_unread, "new": t_new, "mentions": t_mentions, "list": threads },
+        "workspaces": workspaces,
+    });
+    let Ok(mut last) = last_snapshot().lock() else { return };
+    if last.as_ref() == Some(&snapshot) {
+        return;
+    }
+    match last.as_ref() {
+        None => emit(
+            "app.started",
+            json!({ "pid": std::process::id(), "version": env!("CARGO_PKG_VERSION"), "team": snapshot["team"], "workspaces": snapshot["workspaces"] }),
+        ),
+        Some(old) => {
+            // Which workspace moved: the first whose own counts changed.
+            let moved = snapshot["workspaces"].as_array().into_iter().flatten().find(|w| {
+                let before = old["workspaces"].as_array().into_iter().flatten().find(|o| o["id"] == w["id"]);
+                before.is_none_or(|o| o["totals"] != w["totals"] || o["attention"] != w["attention"])
+            });
+            if old["totals"] != snapshot["totals"] || old["attention"] != snapshot["attention"] {
+                let team = moved.map_or(Value::Null, |w| json!({ "id": w["id"], "domain": w["domain"], "name": w["team"] }));
+                emit(
+                    "counts.changed",
+                    json!({ "attention": snapshot["attention"], "totals": snapshot["totals"], "team": team, "workspaces": snapshot["workspaces"] }),
+                );
+            }
+        }
+    }
+    let mut text = snapshot.clone();
+    text["updated"] = json!(chrono::Local::now().timestamp());
+    let _ = worker().send(Job::State(text.to_string()));
+    *last = Some(snapshot);
+}
+
+/// On the way out, once: the snapshot says slick stopped, and the
+/// subscribers hear `app.stopped`. Done here and now, since the process
+/// ends right after. Nothing when nothing was ever published.
+pub fn unpublish_all() {
+    let Ok(mut last) = last_snapshot().lock() else { return };
+    if last.take().is_none() {
+        return;
+    }
+    write_state(&json!({ "v": VERSION, "running": false, "pid": std::process::id(), "updated": chrono::Local::now().timestamp() }).to_string());
+    deliver("app.stopped", &envelope("app.stopped", json!({ "pid": std::process::id() })));
 }

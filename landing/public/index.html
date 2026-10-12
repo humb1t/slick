@@ -459,7 +459,7 @@ td:first-child, td:first-child * { color: var(--yellow); font-weight: 700; }
       <button class="hdr unread" aria-expanded="true"><span class="arr">▾</span> <span data-i18n="gDms">Direct messages</span></button>
       <ul>
         <li><button class="row unread" data-ch="dm"><span class="ico on" aria-label="online">●</span><span class="name">slick</span><span class="badge">1</span></button></li>
-        <li><button class="row unread" data-ch="requests"><span class="ico on" aria-label="online">●</span><span class="name">feature-requests</span><span class="badge"></span></button></li>
+        <li><button class="row unread" data-ch="requests"><span class="ico on" aria-label="online">●</span><span class="name">feature-bugfix-requests</span><span class="badge"></span></button></li>
         <li><button class="row unread" data-ch="advanced"><span class="ico on" aria-label="online">●</span><span class="name">advanced-setup</span><span class="badge"></span></button></li>
       </ul>
     </div>
@@ -576,6 +576,7 @@ td:first-child, td:first-child * { color: var(--yellow); font-weight: 700; }
                 <tr><td data-i18n="k_menuKey">m · right click</td><td data-i18n="k_menu">Menu for a conversation or a message</td></tr>
                 <tr><td>Enter · Shift+Enter</td><td data-i18n="k_nl">Send · new line</td></tr>
                 <tr><td>:</td><td data-i18n="k_emoji">Emoji autocomplete</td></tr>
+                <tr><td>Ctrl+B · Ctrl+I</td><td data-i18n="k_fmt">Bold · italic; Ctrl+Shift+X strike, Ctrl+Shift+C code, Ctrl+Shift+9 quote</td></tr>
                 <tr><td data-i18n="k_pickKey">↑ in an empty box</td><td data-i18n="k_pick">Pick a message</td></tr>
                 <tr><td>E R T F A U L Del</td><td data-i18n="k_act">On a picked message: edit, react, reply in thread, forward, save, mark unread, copy link, delete</td></tr>
                 <tr><td>Ctrl+C</td><td data-i18n="k_copy">Copy the picked or selected messages</td></tr>
@@ -711,7 +712,7 @@ omarchy plugin enable leonavas.slack --section right</pre><button class="btn" da
                 <li><span data-i18n="r6"><span class="tag">[planned]</span> <b>Panes and tabs, tmux style.</b> Split the screen and keep conversations side by side, open each one in its own tab, and move between them with the keyboard.</span></li>
                 <li><span data-i18n="r4"><span class="tag">[planned]</span> <b>Plugins.</b> Scripting to extend it with your own commands.</span></li>
               </ul>
-              <p data-i18n="r5">Want one of these sooner, or something else? Tell me in <button class="chl" data-open="requests">● feature-requests</button>.</p>
+              <p data-i18n="r5">Want one of these sooner, or something else? Tell me in <button class="chl" data-open="requests">● feature-bugfix-requests</button>.</p>
             </div>
           </div>
         </article>
@@ -795,16 +796,16 @@ omarchy plugin enable leonavas.slack --section right</pre><button class="btn" da
           <div>
             <div><span class="who">slick</span><span class="app"> APP</span><span class="time">11:30</span></div>
             <div class="body">
-              <p data-i18n="cph"><b class="ver">slick 0.2.0</b> is out.</p>
+              <p data-i18n="cph"><b class="ver">slick 0.3.0</b> is out.</p>
               <ul class="dash">
-                <li><span data-i18n="cp0">Threads: a row at the top of the sidebar with a badge for new replies, and a Threads view with every thread you follow, the unread ones first, to read and reply in place. Replies notify like any message.</span></li>
-                <li><span data-i18n="cp1">Channel details: click the channel name or press <kbd>Alt</kbd>+<kbd>I</kbd> to star it, pick what notifies you, edit the name, topic and description, see and invite members, leave, make it private or archive it.</span></li>
-                <li><span data-i18n="cp2">Slash commands: type <kbd>/</kbd> for your workspace's commands and apps, with their usage. Replies only you can see show up in the conversation.</span></li>
-                <li><span data-i18n="cp3">Archived channels are found by the search, marked as archived, and read-only until you unarchive them.</span></li>
-                <li><span data-i18n="cp4">Statuses change live, custom emoji included, and a DM shows the other person's status in the message box.</span></li>
-                <li><span data-i18n="cp5">Deactivated accounts say so in their profile and next to their name. Custom sidebar sections keep all their channels.</span></li>
-                <li><span data-i18n="cp6">A "More unreads" pill in the sidebar, a softer selection in the autocomplete lists, and "Jot something down" in your own DM.</span></li>
-                <li><span data-i18n="cp7">For your scripts: thread activity in the state file and events, with the count of new replies.</span></li>
+                <li><span data-i18n="cp0">Several workspaces: add one from the workspace menu, switch with <kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>9</kbd>, and see what is waiting in each. The logo stacks up and shows a badge when another workspace needs you. They all keep notifying, and pausing pauses them all.</span></li>
+                <li><span data-i18n="cp1">Formatting: <code>*bold*</code>, <code>_italic_</code>, <code>~strike~</code>, <code>`code`</code>, <code>```</code> blocks, quotes and lists, styled as you type and sent as rich text, like the official app. <kbd>Ctrl</kbd>+<kbd>B</kbd>, <kbd>Ctrl</kbd>+<kbd>I</kbd>, <kbd>Alt</kbd>+<kbd>X</kbd> and <kbd>Alt</kbd>+<kbd>C</kbd> for the markers.</span></li>
+                <li><span data-i18n="cp2">Code blocks come in a box of their own, spaces and blank lines kept, with a button to copy them.</span></li>
+                <li><span data-i18n="cp3">Invite people to your workspace from the account menu, by email, with a message and the channels to join.</span></li>
+                <li><span data-i18n="cp4">Pause notifications until next week, or until the day and time you pick, letting your VIPs through if you want.</span></li>
+                <li><span data-i18n="cp5">Delete a channel from its settings, after a confirmation.</span></li>
+                <li><span data-i18n="cp6">Topic changes, joins and renames read in the app's language. The Threads view marks threads read as you see them, and the search box looks like one.</span></li>
+                <li><span data-i18n="cp7">For your scripts: every event and item says its workspace, the state file lists them and adds up the counts, and <code>slick open</code> takes a Slack link or <code>--team</code>.</span></li>
               </ul>
             </div>
           </div>
@@ -813,7 +814,7 @@ omarchy plugin enable leonavas.slack --section right</pre><button class="btn" da
 
       <!-- DM: feature requests; Enter in the box opens a prefilled GitHub issue -->
       <section class="chan" id="ch-requests" data-topic="tReq">
-        <div class="chd"><span class="n">● feature-requests</span><span class="t" data-topic-of="tReq"></span></div>
+        <div class="chd"><span class="n">● feature-bugfix-requests</span><span class="t" data-topic-of="tReq"></span></div>
         <div class="day" data-day="2026-10-12"></div>
         <article class="msg">
           <span class="av" aria-hidden="true">s</span>
@@ -1018,6 +1019,7 @@ cookie = xoxd-…</pre></div>
     k_scrollKey: "PgUp PgDn · roda",
     k_scroll: "Rolar; no topo, carrega mensagens antigas",
     k_clear: "Limpar o campo · apagar uma palavra",
+    k_fmt: "Negrito · itálico; Ctrl+Shift+X riscado, Ctrl+Shift+C código, Ctrl+Shift+9 citação",
     k_new: "Nova mensagem ou canal",
     k_acct: "Sua conta, status e perfil",
     k_reload: "Recarregar canais e usuários",
@@ -1053,7 +1055,7 @@ cookie = xoxd-…</pre></div>
     r10: '<span class="tag">[planejado]</span> <b>Mais tarde.</b> As mensagens que você salvou para depois e os seus lembretes numa lista só, como a aba Mais tarde do Slack, para concluir ou abrir direto na conversa.',
     r6: '<span class="tag">[planejado]</span> <b>Painéis e abas, no estilo tmux.</b> Divida a tela e deixe conversas lado a lado, abra cada uma numa aba própria e alterne entre elas pelo teclado.',
     r4: '<span class="tag">[planejado]</span> <b>Plugins.</b> Scripts para estender o app com os seus próprios comandos.',
-    r5: 'Quer algum desses antes, ou outra coisa? Me conta em <button class="chl" data-open="requests">● feature-requests</button>.',
+    r5: 'Quer algum desses antes, ou outra coisa? Me conta em <button class="chl" data-open="requests">● feature-bugfix-requests</button>.',
     rq1: "Sentiu falta de algo? Conta o que o slick deveria fazer: threads, reações, um tema, um atalho sem o qual você não vive.",
     rq2: "Escreva sua proposta na caixa abaixo e aperte <kbd>Enter</kbd>. Depois de uma verificação rápida de que você é humano e da confirmação por e-mail, ela é enviada.",
     o0: "<b>O slick se encaixa direitinho no Omarchy.</b>",
@@ -1102,15 +1104,15 @@ cookie = xoxd-…</pre></div>
     co2: "O \"(você)\" ao lado do seu nome fica mais apagado que o nome.",
     co3: "\"E-mail copiado\" e todo outro \"copiado\" somem da tela em 2 segundos.",
     co4: "Para os seus scripts: as prévias das mensagens também vêm em HTML, com os emojis do seu workspace, até 5 por conversa, e a preferência de notificação de cada canal. O arquivo de estado espera as contagens reais, então nada de badges velhos ao abrir.",
-    cph: '<b class="ver">slick 0.2.0</b> saiu.',
-    cp0: "Threads: uma linha no topo da barra lateral com badge das respostas novas, e uma tela com todas as threads que você segue, as não lidas primeiro, para ler e responder ali mesmo. Respostas notificam como qualquer mensagem.",
-    cp1: "Detalhes do canal: clique no nome do canal ou aperte <kbd>Alt</kbd>+<kbd>I</kbd> para favoritar, escolher o que notifica, editar nome, tópico e descrição, ver e convidar membros, sair, tornar privado ou arquivar.",
-    cp2: "Comandos com barra: digite <kbd>/</kbd> para ver os comandos e apps do seu workspace, com o jeito de usar. Respostas que só você vê aparecem na conversa.",
-    cp3: "Canais arquivados aparecem na busca, marcados como arquivados, e ficam só para leitura até você desarquivar.",
-    cp4: "Status mudam na hora, inclusive com emoji customizado, e a DM mostra o status da pessoa na caixa de mensagem.",
-    cp5: "Contas desativadas avisam isso no perfil e ao lado do nome. Seções personalizadas da barra lateral mostram todos os canais delas.",
-    cp6: "Um aviso \"Mais não lidas\" na barra lateral, seleção mais suave nas listas de autocompletar e \"Anote alguma coisa\" na sua própria DM.",
-    cp7: "Para os seus scripts: atividade das threads no arquivo de estado e nos eventos, com o número de respostas novas.",
+    cph: '<b class="ver">slick 0.3.0</b> saiu.',
+    cp0: "Vários workspaces: adicione pelo menu do workspace, troque com <kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>9</kbd> e veja o que espera em cada um. O logo fica empilhado e ganha badge quando outro workspace precisa de você. Todos continuam notificando, e pausar pausa todos.",
+    cp1: "Formatação: <code>*negrito*</code>, <code>_itálico_</code>, <code>~riscado~</code>, <code>`código`</code>, blocos <code>```</code>, citações e listas, com o estilo aparecendo enquanto você digita e enviados como texto rico, igual ao app oficial. <kbd>Ctrl</kbd>+<kbd>B</kbd>, <kbd>Ctrl</kbd>+<kbd>I</kbd>, <kbd>Alt</kbd>+<kbd>X</kbd> e <kbd>Alt</kbd>+<kbd>C</kbd> para os marcadores.",
+    cp2: "Blocos de código ganham uma caixa própria, com espaços e linhas em branco preservados, e um botão para copiar.",
+    cp3: "Convide pessoas para o workspace pelo menu da conta, por e-mail, com uma mensagem e os canais em que vão entrar.",
+    cp4: "Pause as notificações até a próxima semana, ou até o dia e a hora que escolher, deixando passar os seus VIPs se quiser.",
+    cp5: "Apague um canal pelas configurações dele, depois de uma confirmação.",
+    cp6: "Mudanças de tópico, entradas e renomeações aparecem no idioma do app. A tela de Threads marca como lidas as threads que você vê, e a busca tem cara de campo de busca.",
+    cp7: "Para os seus scripts: todo evento e item diz o seu workspace, o arquivo de estado lista os workspaces e soma as contagens, e o <code>slick open</code> aceita link do Slack ou <code>--team</code>.",
     hints: "j k · Alt+↑↓ canais · ^K procurar · t tema",
     themeWord: "tema",
   };
@@ -1299,7 +1301,7 @@ cookie = xoxd-…</pre></div>
   }
 
   // Direct messages are named after who you talk to, not the channel id.
-  const DMS = { dm: "slick", requests: "feature-requests", advanced: "advanced-setup" };
+  const DMS = { dm: "slick", requests: "feature-bugfix-requests", advanced: "advanced-setup" };
   const label = id => DMS[id] || "#" + id;
   function renderHeader() {
     const sec = $(`#ch-${current}`);
@@ -1326,6 +1328,7 @@ cookie = xoxd-…</pre></div>
   // Reaching a channel marks it read, like conversations.mark in the app.
   function setCurrent(id) {
     if (id === current) return;
+    const prev = current;
     current = id;
     $$(".side .row").forEach(r => r.classList.toggle("current", r.dataset.ch === id));
     const r = $(`.side .row[data-ch="${id}"]`);
@@ -1337,6 +1340,7 @@ cookie = xoxd-…</pre></div>
     if (!side.contains(document.activeElement)) markSel(id, false);
     renderHeader();
     if (id === "requests" && box.value.trim() === INSTALL) { box.value = ""; grow(); }
+    else if (prev === "requests" && !box.value.trim()) { box.value = INSTALL; grow(); }
     updateHint();
     history.replaceState(null, "", location.pathname + location.search + (id === "welcome" ? "" : "#" + id));
   }

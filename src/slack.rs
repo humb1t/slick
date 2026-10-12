@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 pub type Res<T> = Result<T, String>;
@@ -22,6 +22,8 @@ pub struct Creds {
 pub struct Slack {
     agent: ureq::Agent,
     creds: Arc<RwLock<Creds>>,
+    /// The people whose presence this workspace's socket reports (`rtm`).
+    wanted: Arc<Mutex<Vec<String>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -161,6 +163,9 @@ pub struct Conversation {
     /// An archived channel: out of the sidebar, found by searching, read-only.
     #[serde(default)]
     pub archived: bool,
+    /// The workspace's default channel (#general), opened when nothing else is.
+    #[serde(default)]
+    pub general: bool,
 }
 
 /// A sidebar section as the user arranged it in Slack.
@@ -308,11 +313,26 @@ impl Slack {
             .timeout(Duration::from_secs(20))
             .user_agent(concat!("slick/", env!("CARGO_PKG_VERSION")))
             .build();
-        Self { agent, creds: Arc::new(RwLock::new(creds)) }
+        Self { agent, creds: Arc::new(RwLock::new(creds)), wanted: Default::default() }
     }
 
-    fn creds(&self) -> Creds {
+    /// The session in use (`config::save_workspace` after `auth.test`, the cookie check).
+    pub(crate) fn creds(&self) -> Creds {
         self.creds.read().map(|c| c.clone()).unwrap_or_default()
+    }
+
+    /// Whose presence to hear about. The socket sends it within seconds, and only when it changed.
+    pub fn subscribe(&self, mut ids: Vec<String>) {
+        ids.sort();
+        ids.dedup();
+        if let Ok(mut w) = self.wanted.lock() {
+            *w = ids;
+        }
+    }
+
+    /// The presence list as last set; each connection subscribes to it (again) after `hello`.
+    pub fn wanted(&self) -> Vec<String> {
+        self.wanted.lock().map(|w| w.clone()).unwrap_or_default()
     }
 
     /// The real-time websocket's address, and the session cookie it also wants.
@@ -398,6 +418,19 @@ impl Slack {
             }
         }
         Err(format!("{method}: rate limited"))
+    }
+
+    /// A message sent with its markup as `rich_text` blocks, like the official
+    /// clients; `text` stays as the notifications' fallback. Should Slack
+    /// refuse the blocks, it goes again as text alone.
+    pub(crate) fn call_rich(&self, method: &str, params: &[(&str, &str)], typed: &str) -> Res<Value> {
+        let blocks = crate::markup::blocks(typed).to_string();
+        let mut p = params.to_vec();
+        p.push(("blocks", &blocks));
+        match self.call(method, &p) {
+            Err(e) if ["invalid_blocks", "invalid_blocks_format", "invalid_arguments"].iter().any(|c| e.ends_with(c)) => self.call(method, params),
+            res => res,
+        }
     }
 
     pub(crate) fn paginate(&self, method: &str, params: &[(&str, &str)], key: &str) -> Res<Vec<Value>> {
@@ -737,7 +770,7 @@ impl Slack {
     }
 
     pub fn post(&self, chan: &str, text: &str) -> Res<Message> {
-        let v = self.call("chat.postMessage", &[("channel", chan), ("text", &escape(text))])?;
+        let v = self.call_rich("chat.postMessage", &[("channel", chan), ("text", &escape(text))], text)?;
         let mut m = parse_message(&v["message"]);
         if m.ts.is_empty() {
             m.ts = str_of(&v["ts"]);
@@ -818,6 +851,7 @@ fn parse_conversation(c: &Value) -> Conversation {
         user: c["user"].as_str().map(String::from),
         ext_shared: c["is_ext_shared"].as_bool() == Some(true),
         archived: c["is_archived"].as_bool() == Some(true),
+        general: c["is_general"].as_bool() == Some(true),
     }
 }
 
