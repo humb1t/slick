@@ -85,6 +85,11 @@ your `PATH` or WebKitGTK is missing. `SLICK_INSTALL_DIR` changes the folder and
 
 ### Windows
 
+> [!WARNING]
+> The Windows build is untested. It compiles and ships with each release, but it
+> hasn't been run on a real Windows machine yet. Expect rough edges, and please
+> [open an issue](https://github.com/leonavas/slick/issues) if something breaks.
+
 In PowerShell:
 
 ```powershell
