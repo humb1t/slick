@@ -36,6 +36,8 @@ pub enum Ev {
     Counts,
     /// Your pause was set or ended.
     Dnd,
+    /// Your notification preferences changed: a channel muted, or set to mentions only.
+    Prefs,
     /// You were added to a conversation or one was created.
     Convs,
 }
@@ -175,6 +177,7 @@ fn classify(v: &Value) -> Option<Ev> {
         "user_typing" if v["thread_ts"].is_null() => Ev::Typing { chan: s("channel")?, user: s("user")? },
         "channel_marked" | "group_marked" | "im_marked" | "mpim_marked" | "badge_counts_updated" | "thread_marked" => Ev::Counts,
         "dnd_updated" => Ev::Dnd,
+        "pref_change" if matches!(v["name"].as_str(), Some("all_notifications_prefs" | "muted_channels")) => Ev::Prefs,
         "channel_joined" | "group_joined" | "im_created" | "mpim_joined" | "mpim_open" | "im_open" | "group_open" | "channel_created" => Ev::Convs,
         _ => return None,
     })

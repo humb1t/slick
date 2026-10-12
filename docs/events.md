@@ -37,12 +37,13 @@ touches the disk on Linux: `$XDG_RUNTIME_DIR` is a tmpfs.
   "updated": 1760000000,
   "dnd": { "paused": true, "until": 1760003600, "snooze": true },
   "attention": 4,
-  "totals": { "mentions": 2, "dms": 2, "groups": 1, "channels": 5, "channels_mentioned": 1,
+  "totals": { "mentions": 2, "dms": 2, "groups": 1, "channels": 5, "channels_mentioned": 1, "channels_quiet": 2,
               "direct_messages": 3, "channel_mentions": 1, "reactions": 1 },
   "conversations": [
     {
       "id": "D0123", "kind": "dm", "name": "Bruno Lima", "user": "U0456",
       "unread": true, "mentions": 1, "latest": "1760000000.000100",
+      "muted": false, "notify": "default", "quiet": false,
       "messages": [
         { "ts": "1760000000.000100", "user": "U0456", "author": "Bruno Lima",
           "text": "Can you look at the deploy?", "html": "Can you look at the <b>deploy</b>?",
@@ -69,10 +70,17 @@ touches the disk on Linux: `$XDG_RUNTIME_DIR` is a tmpfs.
   those three characters. Escape it before showing it as HTML or markup
   (`notify-send` bodies, Qt rich text, a web page). `html` is the same text
   ready for that: escaped, with only the message's own bold (`<b>`), italic
-  (`<i>`) and strikethrough (`<s>`) as tags.
+  (`<i>`) and strikethrough (`<s>`) as tags, and the workspace's own emoji as
+  `<img src="file://…" alt=":name:">` of their saved pictures (GIFs as they
+  are; `:name:` until the picture is downloaded).
+- `muted` and `notify` are the conversation's own notification preference in
+  Slack: `notify` is `everything`, `mentions_dms`, `nothing` or `default`
+  (following the global one). `quiet` is a channel that is muted or set to
+  mentions only (or nothing); DMs are never quiet. `totals.channels_quiet`
+  counts the quiet ones among `totals.channels`.
 - `conversations` holds the unread ones, newest first. `messages` are the
-  newest unread ones, up to 3, oldest first. They fill in a moment after the
-  conversation appears, and channels with neither a mention nor a DM only get
+  newest unread ones, up to 5, oldest first. They fill in a moment after the
+  conversation appears, and quiet channels (below) without a mention only get
   them for the 8 most recent.
 - `attention` is what slick's own tray counts: unread DMs and group DMs plus
   channels that mention you. `totals.channels` counts the other unread channels.

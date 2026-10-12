@@ -92,6 +92,8 @@ pub enum Event {
     Joined(Res<Conversation>),
     /// A conversation's unread messages, for the preview other programs see (`events`).
     Preview { chan: String, latest: String, res: Res<Vec<Message>> },
+    /// Each channel's notification preference: muted, and its desktop level.
+    NotifyPrefs(Res<HashMap<String, crate::events::Pref>>),
     /// A pasted picture read from the clipboard, or pictures sent (`attach`).
     Attach(crate::attach::Ev),
     /// A person or channel a message mentioned: the name, and whether it's private.
@@ -630,6 +632,7 @@ impl App {
         self.spawn(|s| Event::TeamIcon(s.team_icon()));
         self.spawn(|s| Event::Emoji(emoji::Ev::List(emoji::fetch(s))));
         self.refresh_account(true);
+        self.refresh_prefs();
         self.spawn(|s| Event::Edit(crate::edit::Ev::Saved(s.saved())));
     }
 
@@ -1665,6 +1668,7 @@ impl App {
             Event::Quit => self.quit = true,
             Event::Remote(cmd) => self.on_remote(cmd),
             Event::Preview { chan, latest, res } => self.on_preview(chan, latest, res),
+            Event::NotifyPrefs(res) => self.on_prefs(res),
             Event::Attach(e) => self.on_attach(e),
             Event::Joined(Ok(c)) => {
                 if !self.convs.iter().any(|x| x.id == c.id) {
@@ -1801,6 +1805,7 @@ impl App {
                 self.live = true;
                 // Whatever happened while it was down.
                 self.counts_soon();
+                self.refresh_prefs();
                 self.last_poll = Instant::now() - POLL_EVERY;
             }
             Ev::Down => {
@@ -1842,6 +1847,7 @@ impl App {
             }
             Ev::Counts => self.counts_soon(),
             Ev::Dnd => self.refresh_dnd(),
+            Ev::Prefs => self.refresh_prefs(),
             Ev::Convs => self.spawn(|s| Event::Convs(s.conversations())),
         }
     }

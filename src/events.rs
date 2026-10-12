@@ -15,7 +15,7 @@ use std::sync::{Mutex, OnceLock};
 /// Bumped when a field changes meaning or goes away; new fields don't bump it.
 const VERSION: u32 = 1;
 /// Unread messages kept per conversation for the preview.
-const PREVIEW: usize = 3;
+const PREVIEW: usize = 5;
 /// Unread channels without a mention that get a preview, the most recent first.
 const QUIET_CHANNELS: usize = 8;
 
@@ -40,6 +40,37 @@ pub struct State {
     watched: HashSet<String>,
     /// Reactions other people put on your messages, newest first.
     reactions: Vec<Reacted>,
+    /// Each conversation's own notification preference, as Slack keeps it.
+    prefs: HashMap<String, Pref>,
+}
+
+/// A conversation's notification preference: muted, and the desktop level
+/// set for it (`everything`, `mentions_dms`, `nothing`), `None` following
+/// the global one.
+#[derive(Clone, Default, PartialEq)]
+pub struct Pref {
+    pub muted: bool,
+    pub desktop: Option<String>,
+}
+
+impl Pref {
+    /// Muted, or set to notify of mentions only (or nothing): such a channel
+    /// waits quietly, out of the badges and the preview's rows.
+    fn quiet(&self) -> bool {
+        self.muted || matches!(self.desktop.as_deref(), Some("mentions" | "mentions_dms" | "nothing"))
+    }
+}
+
+/// Every conversation's own preference, from `all_notifications_prefs`.
+fn prefs(s: &crate::slack::Slack) -> Res<HashMap<String, Pref>> {
+    let v = s.call("users.prefs.get", &[])?;
+    let all: Value = serde_json::from_str(v["prefs"]["all_notifications_prefs"].as_str().unwrap_or("{}")).unwrap_or_default();
+    let mut out = HashMap::new();
+    for (id, p) in all["channels"].as_object().into_iter().flatten() {
+        let desktop = p["desktop"].as_str().filter(|d| !d.is_empty() && *d != "default").map(String::from);
+        out.insert(id.clone(), Pref { muted: p["muted"] == true, desktop });
+    }
+    Ok(out)
 }
 
 /// Reactions kept for the snapshot, and for how long.
@@ -203,24 +234,26 @@ fn emoji_file(name: &str, url: &str) -> Option<String> {
     None
 }
 
-
-/// `text` as HTML (`text::body_html`): escaped, with the message's own bold,
-/// italic and strikethrough. Cut like `text`, never inside a tag or an entity.
-fn preview_html(m: &Message, names: &crate::text::Names) -> String {
-    let mut html = crate::text::body_html(m, names).lines().map(|l| l.trim_start_matches('▎').trim_start()).collect::<Vec<_>>().join("\n");
-    if html.trim().is_empty() && !m.files.is_empty() {
-        html = m.files.iter().map(|f| format!("📎 {}", crate::text::escape(&f.name))).collect::<Vec<_>>().join("\n");
-    }
-    if html.chars().count() > 1000 {
-        html = html.chars().take(1000).collect();
-        if let Some(i) = html.rfind(['<', '&']).filter(|&i| !html[i..].contains(['>', ';'])) {
-            html.truncate(i);
-        }
-        html.push('…');
-    }
-    html
-}
 impl App {
+    pub(crate) fn refresh_prefs(&self) {
+        self.spawn(|s| Event::NotifyPrefs(prefs(s)));
+    }
+
+    /// New preferences: channels that stopped being quiet get their preview.
+    pub(crate) fn on_prefs(&mut self, res: Res<HashMap<String, Pref>>) {
+        let Ok(p) = res else { return };
+        if p != self.events.prefs {
+            self.events.prefs = p;
+            self.on_counts(self.counts.clone());
+            self.dirty = true;
+        }
+    }
+
+    /// A channel muted or set to mentions only. DMs never are: they always count.
+    fn quiet(&self, c: &crate::slack::Conversation) -> bool {
+        !matches!(c.kind, Kind::Direct | Kind::Group) && self.events.prefs.get(&c.id).is_some_and(Pref::quiet)
+    }
+
     /// The new counts: conversations whose newest message moved get their
     /// unread messages fetched for the preview.
     pub(crate) fn on_counts(&mut self, counts: HashMap<String, Count>) {
@@ -267,7 +300,7 @@ impl App {
             if !self.unread(&c.id).0 {
                 continue;
             }
-            if matches!(c.kind, Kind::Direct | Kind::Group) || n.mentions > 0 {
+            if matches!(c.kind, Kind::Direct | Kind::Group) || n.mentions > 0 || !self.quiet(c) {
                 want.push((c.id.clone(), n.last_read.clone()));
             } else {
                 quiet.push((&c.id, n));
@@ -337,9 +370,58 @@ impl App {
             "user": m.user,
             "author": crate::ui::author(m, &names),
             "text": text,
-            "html": preview_html(m, &names),
+            "html": self.message_html(m, &names),
             "thread_ts": m.thread_ts.as_ref().filter(|t| **t != m.ts),
         })
+    }
+
+    /// `text` as HTML (`text::body_html`): escaped, with the message's own
+    /// bold, italic and strikethrough, and the workspace's emoji as `<img>`
+    /// of their saved pictures (`:name:` until one is downloaded). Cut like
+    /// `text`, never inside a tag or an entity.
+    fn message_html(&self, m: &Message, names: &crate::text::Names) -> String {
+        let mut html = crate::text::body_html(m, names).lines().map(|l| l.trim_start_matches('▎').trim_start()).collect::<Vec<_>>().join("\n");
+        if html.trim().is_empty() && !m.files.is_empty() {
+            html = m.files.iter().map(|f| format!("📎 {}", crate::text::escape(&f.name))).collect::<Vec<_>>().join("\n");
+        }
+        let html = self.emoji_images(&html);
+        let mut html: String = html;
+        if html.chars().count() > 1500 {
+            html = html.chars().take(1500).collect();
+            if let Some(i) = html.rfind(['<', '&']).filter(|&i| !html[i..].contains(['>', ';'])) {
+                html.truncate(i);
+            }
+            html.push('…');
+        }
+        html
+    }
+
+    /// `:name:` of the workspace's own emoji → `<img>` of its saved picture.
+    fn emoji_images(&self, html: &str) -> String {
+        let mut out = String::with_capacity(html.len());
+        let mut rest = html;
+        while let Some(i) = rest.find(':') {
+            out.push_str(&rest[..i]);
+            let after = &rest[i + 1..];
+            let name_len = after.find(|c: char| !(c.is_ascii_alphanumeric() || "_-+'".contains(c))).unwrap_or(after.len());
+            let name = &after[..name_len];
+            let file = (after[name_len..].starts_with(':') && !name.is_empty())
+                .then(|| self.emoji.custom.get(name).and_then(|url| emoji_file(name, url)))
+                .flatten();
+            match file {
+                Some(f) => {
+                    let src = crate::text::escape(&format!("file://{f}"));
+                    out.push_str(&format!("<img src=\"{src}\" alt=\":{name}:\">"));
+                    rest = &after[name_len + 1..];
+                }
+                None => {
+                    out.push(':');
+                    rest = after;
+                }
+            }
+        }
+        out.push_str(rest);
+        out
     }
 
     /// Someone, by id and name.
@@ -466,7 +548,7 @@ impl App {
             })
             .collect();
         let mut convs: Vec<(&String, Value)> = Vec::new();
-        let (mut mentions, mut dms, mut groups, mut channels, mut channels_mentioned) = (0u64, 0, 0, 0, 0);
+        let (mut mentions, mut dms, mut groups, mut channels, mut channels_mentioned, mut channels_quiet) = (0u64, 0, 0, 0, 0, 0);
         // Messages rather than conversations: in a DM every unread message counts
         // as a mention, so this is how many wait there; in channels, the mentions.
         let (mut direct_messages, mut channel_mentions) = (0u64, 0u64);
@@ -485,7 +567,12 @@ impl App {
                 Kind::Direct => dms += 1,
                 Kind::Group => groups += 1,
                 _ if m > 0 => channels_mentioned += 1,
-                _ => channels += 1,
+                _ => {
+                    channels += 1;
+                    if self.quiet(c) {
+                        channels_quiet += 1;
+                    }
+                }
             }
             let latest = self.counts.get(&c.id).map(|n| &n.latest);
             let messages: Vec<Value> = self
@@ -499,6 +586,10 @@ impl App {
             v["mentions"] = json!(m);
             v["latest"] = json!(latest);
             v["messages"] = json!(messages);
+            let pref = self.events.prefs.get(&c.id).cloned().unwrap_or_default();
+            v["muted"] = json!(pref.muted);
+            v["notify"] = json!(pref.desktop.as_deref().unwrap_or("default"));
+            v["quiet"] = json!(self.quiet(c));
             convs.push((latest.unwrap_or(&c.id), v));
         }
         convs.sort_by(|a, b| b.0.cmp(a.0));
@@ -515,7 +606,7 @@ impl App {
             "dnd": dnd,
             "attention": dms + groups + channels_mentioned,
             "totals": {
-                "mentions": mentions, "dms": dms, "groups": groups, "channels": channels, "channels_mentioned": channels_mentioned,
+                "mentions": mentions, "dms": dms, "groups": groups, "channels": channels, "channels_mentioned": channels_mentioned, "channels_quiet": channels_quiet,
                 "direct_messages": direct_messages, "channel_mentions": channel_mentions,
                 "reactions": reactions.len(),
             },
