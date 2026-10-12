@@ -1,6 +1,6 @@
 //! The interface language: en-US by default, pt-BR as an option. Picked by
 //! `SLICK_LANG`, else `language` in the config, and switchable at run time
-//! from the account menu.
+//! from the settings dialog.
 
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -35,15 +35,7 @@ impl Lang {
         }
     }
 
-    /// Next to "Language" in the account menu.
-    pub fn name(self) -> &'static str {
-        match self {
-            Lang::En => "English",
-            Lang::Pt => "Português",
-        }
-    }
-
-    /// In the language submenu.
+    /// In the settings dialog.
     pub fn label(self) -> &'static str {
         match self {
             Lang::En => "English (US)",

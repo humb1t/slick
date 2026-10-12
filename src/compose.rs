@@ -342,6 +342,32 @@ impl App {
             }
         };
         let id = c.id.clone();
+        self.adopt(c);
+        if let Some(w) = warning {
+            self.error = Some(trf!("channel created, but the description wasn't saved: {w}", "canal criado, mas a descrição não foi salva: {w}"));
+        }
+        if self.dialog.take().is_some() {
+            self.open(id);
+        }
+        self.dirty = true;
+    }
+
+    /// The DM a click on a mention asked for: into the sidebar and open.
+    pub fn dm_opened(&mut self, res: Res<Conversation>) {
+        match res {
+            Ok(c) => {
+                let id = c.id.clone();
+                self.adopt(c);
+                self.open(id);
+            }
+            Err(e) => self.error = Some(friendly(&e)),
+        }
+        self.dirty = true;
+    }
+
+    /// A conversation just opened or created, kept in the sidebar.
+    fn adopt(&mut self, c: Conversation) {
+        let id = c.id.clone();
         // conversations.open also opens it in Slack's sidebar.
         if matches!(c.kind, Kind::Direct | Kind::Group) {
             if let Some(b) = self.boot.as_mut() {
@@ -355,13 +381,6 @@ impl App {
             self.convs.push(c);
             self.resort();
         }
-        if let Some(w) = warning {
-            self.error = Some(trf!("channel created, but the description wasn't saved: {w}", "canal criado, mas a descrição não foi salva: {w}"));
-        }
-        if self.dialog.take().is_some() {
-            self.open(id);
-        }
-        self.dirty = true;
     }
 
     /// Hover and clicks on the button and the dialogs; true when handled.

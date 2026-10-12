@@ -260,6 +260,8 @@ b, strong { color: var(--bright); }
     width: min(42cqi, 670px); pointer-events: none;
   }
 }
+.shot { margin: .75rem 0; max-width: 900px; }
+.shot img { width: 100%; height: auto; display: block; border: 1px solid var(--line); border-radius: 8px; }
 .shots img {
   width: 100%; height: auto; display: block;
   border: 1px solid var(--line); border-radius: 8px;
@@ -547,7 +549,8 @@ td:first-child, td:first-child * { color: var(--yellow); font-weight: 700; }
                 <li><span data-i18n="s17">A tray icon that lights up with unread DMs and mentions.</span></li>
                 <li><span data-i18n="s18">Updates itself from the GitHub releases, with one click.</span></li>
                 <li><span data-i18n="s9">Your terminal's own colors. Press <kbd>t</kbd> to see what that means.</span></li>
-                <li><span data-i18n="s19">In English or Brazilian Portuguese, switched from the account menu.</span></li>
+                <li><span data-i18n="s19">In English or Brazilian Portuguese, switched in Settings.</span></li>
+                <li><span data-i18n="s20">Slack events for your system: new messages, mentions, reactions, presence, unread counts and pauses as a stream of JSON events, as hooks and as a state file, so any script, bar or notifier can react to them. Commands too: <code>slick open</code>, <code>slick status</code>, <code>slick dnd</code>.</span></li>
               </ul>
             </div>
           </div>
@@ -669,9 +672,23 @@ cache on disk    13 MB    800 MB</pre></div>
               <p class="om-head"><svg class="om big" viewBox="0 0 1024 1024" aria-hidden="true" focusable="false"><path fill="currentColor" d="M70 954H549V1024H0V0H1024V1024H626V954H954V70H70ZM884 884H140V140H551V210H210V814H814V210H736V140H884ZM471 884H549V954H471ZM473 70H551V140H473ZM0 473H210V551H0Z"/></svg><span data-i18n="o0"><b>slick fits right into Omarchy.</b></span></p>
               <p data-i18n="o1">It opens like any other Omarchy TUI app: from the launcher, in its own window, with its own icon. And it follows your Omarchy theme: slick draws with your terminal's colors, so when you switch themes, slick switches with them.</p>
               <ul class="quote">
-                <li><span data-i18n="o2"><b>In your bar today.</b> slick's tray icon lights up with unread DMs and mentions, and a click brings its window to the front. <span class="tag">[soon]</span> An Omarchy bar plugin where you decide how it behaves: what the icon shows, what a click does, when it notifies you.</span></li>
-                <li><span data-i18n="o3"><span class="tag">[soon]</span> <b>Slack events in Omarchy.</b> Everything slick receives (new messages, mentions, reactions, presence) is passed on to Omarchy, so your own plugins and scripts can react to it and do whatever you want.</span></li>
+                <li><span data-i18n="o2"><b>Slack in your bar.</b> The <code>leonavas.slack</code> plugin for the Omarchy bar runs on slick and shows what's waiting without opening anything.</span></li>
+                <li><span data-i18n="o3"><b>Slack events in Omarchy.</b> What slick receives (new messages, mentions, reactions, presence, unread counts, pauses) is passed on as events, hooks and a state file, so your own plugins and scripts can react to it and do whatever you want. The bar plugin is built on it.</span></li>
               </ul>
+              <ul class="quote">
+                <li><span data-i18n="o6"><b>Badges.</b> Red counts unread DMs and group DMs, blue counts channel mentions. Or one combined badge, or a dot without numbers.</span></li>
+                <li><span data-i18n="o7"><b>Hover.</b> The unread conversations with their last message, mention counts and how long ago, plus the reactions to your messages. Click one to jump straight to it in slick.</span></li>
+                <li><span data-i18n="o8"><b>Reactions float up.</b> When someone reacts to your message, the emoji rises out of the icon, the workspace's own emoji included.</span></li>
+                <li><span data-i18n="o9"><b>Click to show or hide.</b> slick lives in Omarchy's scratchpad (<kbd>Super</kbd>+<kbd>S</kbd>) and keeps running and counting while hidden. Middle click quits it.</span></li>
+                <li><span data-i18n="o10"><b>Right click.</b> Launch on Login, Launch in Foreground, Open in Scratchpad, Group notifications, Show reactions, and pause notifications for 30 minutes, 1 or 2 hours, until tomorrow or until a date and time. The pause is Slack's own do-not-disturb, so it follows you to every client.</span></li>
+                <li><span data-i18n="o11"><b>Yours to tune.</b> Icon style, badge colors, what the blue badge counts, how many rows the preview shows, all in the bar's widget settings.</span></li>
+              </ul>
+              <figure class="shot"><img src="screens/omarchy-slack.webp" alt="The Slack plugin in the Omarchy bar: badges, the hover list, the right-click menu and reactions floating up" width="1800" height="980" loading="lazy"></figure>
+              <p data-i18n="o4">Install the plugin:</p>
+              <div class="block"><pre>omarchy plugin add https://github.com/leonavas/omarchy-slack.git
+omarchy plugin enable leonavas.slack --section right</pre><button class="btn" data-copy="plugin">[Copy]</button></div>
+              <p data-i18n="o12">Code, settings and details: <a href="https://github.com/leonavas/omarchy-slack" target="_blank" rel="noopener">github.com/leonavas/omarchy-slack</a></p>
+              <p data-i18n="o5"><span class="tag">[soon]</span> In Omarchy's plugin list, a click away.</p>
             </div>
           </div>
         </article>
@@ -689,9 +706,10 @@ cache on disk    13 MB    800 MB</pre></div>
               <ul class="quote">
                 <li><span data-i18n="r2"><span class="tag">[planned]</span> <b>Themes.</b> Colors and layout in a config file, beyond your terminal palette.</span></li>
                 <li><span data-i18n="r7"><span class="tag">[planned]</span> <b>Multiple workspaces.</b> Sign in to several Slack workspaces and switch between them without leaving the app, with unread counts for each one.</span></li>
+                <li><span data-i18n="r9"><span class="tag">[planned]</span> <b>Desktop notifications.</b> New DMs and mentions pop up on your desktop, following the notification level you set in Slack, and a click takes you to the conversation.</span></li>
+                <li><span data-i18n="r10"><span class="tag">[planned]</span> <b>Later.</b> The messages you saved for later and your reminders in one list, like Slack's Later tab, to mark done or open right in the conversation.</span></li>
                 <li><span data-i18n="r6"><span class="tag">[planned]</span> <b>Panes and tabs, tmux style.</b> Split the screen and keep conversations side by side, open each one in its own tab, and move between them with the keyboard.</span></li>
-                <li><span data-i18n="r8"><span class="tag">[planned]</span> <b>Slack events for your system.</b> New messages, mentions, reactions and presence exposed as a stream of events and as hooks, so any script, bar or notifier can react to them and you can extend and customize slick however you like.</span></li>
-                <li><span data-i18n="r4"><span class="tag">[planned]</span> <b>Plugins.</b> Hooks and scripting to extend it with your own commands.</span></li>
+                <li><span data-i18n="r4"><span class="tag">[planned]</span> <b>Plugins.</b> Scripting to extend it with your own commands.</span></li>
               </ul>
               <p data-i18n="r5">Want one of these sooner, or something else? Tell me in <button class="chl" data-open="requests">● feature-requests</button>.</p>
             </div>
@@ -717,6 +735,40 @@ cache on disk    13 MB    800 MB</pre></div>
                 <li><span data-i18n="cl5">Opens from a local cache, refreshes the open conversation every 3 seconds and marks it read.</span></li>
                 <li><span data-i18n="cl6">Sign in on Slack's own page in a small window: <code>slick login [workspace]</code> or <kbd>Ctrl</kbd>+<kbd>L</kbd> in the app. A token in the config file or environment variables work too.</span></li>
                 <li><span data-i18n="cl7">Your account and status, a tray icon for unread messages, and one-click updates from the GitHub releases.</span></li>
+              </ul>
+            </div>
+          </div>
+        </article>
+        <article class="msg">
+          <span class="av" aria-hidden="true">s</span>
+          <div>
+            <div><span class="who">slick</span><span class="app"> APP</span><span class="time">02:33</span></div>
+            <div class="body">
+              <p data-i18n="cmh"><b class="ver">slick 0.1.2</b> is out.</p>
+              <ul class="dash">
+                <li><span data-i18n="cm0">On Linux the sign-in window is a small helper slick unpacks once and keeps, so slick starts even without WebKitGTK installed.</span></li>
+                <li><span data-i18n="cm1">A bolder tray icon, easier to spot in the bar.</span></li>
+                <li><span data-i18n="cm2">"slick is up to date" leaves the status bar after 10 seconds.</span></li>
+              </ul>
+            </div>
+          </div>
+        </article>
+        <article class="msg">
+          <span class="av" aria-hidden="true">s</span>
+          <div>
+            <div><span class="who">slick</span><span class="app"> APP</span><span class="time">04:30</span></div>
+            <div class="body">
+              <p data-i18n="cnh"><b class="ver">slick 0.1.3</b> is out.</p>
+              <ul class="dash">
+                <li><span data-i18n="cn0">Real time: new messages, reactions and read state arrive through Slack's websocket the moment they happen. Polling stays as the fallback.</span></li>
+                <li><span data-i18n="cn1">Who is typing: dots in the sidebar in place of the avatar, and a line under the message box.</span></li>
+                <li><span data-i18n="cn2">The message box shows emoji as emoji, your workspace's animated ones included, and <kbd>@</kbd> and <kbd>#</kbd> complete people and channels into real mentions.</span></li>
+                <li><span data-i18n="cn3">Mentions and channel links in messages look like Slack's. Click one to open the channel or the DM.</span></li>
+                <li><span data-i18n="cn4">Paste a screenshot with <kbd>Ctrl</kbd>+<kbd>V</kbd>: it shows as a thumbnail in the box and goes out with your message.</span></li>
+                <li><span data-i18n="cn5">An "Unread mentions" pill in the sidebar points to mentions scrolled out of view.</span></li>
+                <li><span data-i18n="cn6">For your scripts: a state file, <code>slick events</code>, hooks, and <code>slick open</code>, <code>mark-read</code>, <code>dnd</code> and <code>status</code>. Events for new messages, reactions, presence, unread counts and pauses.</span></li>
+                <li><span data-i18n="cn7">One slick per session: running it again brings the open one to the front. The Omarchy bar widget is built on all of this.</span></li>
+                <li><span data-i18n="cn8">Copying an ID or e-mail from a profile now says it was copied.</span></li>
               </ul>
             </div>
           </div>
@@ -821,7 +873,7 @@ cookie = xoxd-…</pre></div>
 (() => {
   const INSTALL = "curl -fsSL https://slick.leonavas.com/install.sh | sh";
   const SOURCE = "cargo install --locked --git https://github.com/leonavas/slick";
-  const COPY = { install: INSTALL, windows: "irm https://slick.leonavas.com/install.ps1 | iex", source: SOURCE, login: "slick login", run: "slick" };
+  const COPY = { install: INSTALL, windows: "irm https://slick.leonavas.com/install.ps1 | iex", source: SOURCE, login: "slick login", run: "slick", plugin: "omarchy plugin add https://github.com/leonavas/omarchy-slack.git && omarchy plugin enable leonavas.slack --section right" };
   const THEMES = [
     ["slick", "slick"], ["terminal", "Terminal"], ["solarized-light", "Solarized Light"],
     ["nord", "Nord"], ["catppuccin-latte", "Catppuccin Latte"],
@@ -955,21 +1007,32 @@ cookie = xoxd-…</pre></div>
     s17: "Um ícone na bandeja do sistema que acende com DMs não lidas e menções.",
     s18: "Se atualiza sozinho pelas releases do GitHub, com um clique.",
     s9: "As cores do seu próprio terminal. Aperte <kbd>t</kbd> para ver o que isso quer dizer.",
-    s19: "Em inglês ou português, com a troca no menu da conta.",
+    s19: "Em inglês ou português, com a troca nas Configurações.",
+    s20: 'Eventos do Slack para o seu sistema: mensagens novas, menções, reações, presença, contagem de não lidas e pausas como um fluxo de eventos JSON, como hooks e como um arquivo de estado, para qualquer script, barra ou notificador reagir a eles. E comandos: <code>slick open</code>, <code>slick status</code>, <code>slick dnd</code>.',
     s10: 'Atalhos para tudo: <kbd>Ctrl</kbd>+<kbd>K</kbd> para pular para qualquer conversa, <kbd>j</kbd> <kbd>k</kbd> para navegar, <kbd>Tab</kbd> para escrever, <kbd>Shift</kbd>+<kbd>J</kbd> <kbd>K</kbd> para reordenar seções. Lista completa em <button class="chl" data-open="hotkeys">#hotkeys</button>.',
     r1: "Nada neste canal funciona ainda. É para cá que o slick está indo:",
     r2: '<span class="tag">[planejado]</span> <b>Temas.</b> Cores e layout em um arquivo de configuração, além da paleta do terminal.',
     r7: '<span class="tag">[planejado]</span> <b>Vários workspaces.</b> Entre em vários workspaces do Slack e alterne entre eles sem sair do app, com as não lidas de cada um.',
+    r9: '<span class="tag">[planejado]</span> <b>Notificações no desktop.</b> DMs novas e menções aparecem no seu desktop, seguindo o nível de notificação que você definiu no Slack, e um clique leva você à conversa.',
+    r10: '<span class="tag">[planejado]</span> <b>Mais tarde.</b> As mensagens que você salvou para depois e os seus lembretes numa lista só, como a aba Mais tarde do Slack, para concluir ou abrir direto na conversa.',
     r6: '<span class="tag">[planejado]</span> <b>Painéis e abas, no estilo tmux.</b> Divida a tela e deixe conversas lado a lado, abra cada uma numa aba própria e alterne entre elas pelo teclado.',
-    r8: '<span class="tag">[planejado]</span> <b>Eventos do Slack para o seu sistema.</b> Mensagens novas, menções, reações e presença expostas como um fluxo de eventos e como hooks, para qualquer script, barra ou notificador reagir a elas e você estender e customizar o slick do jeito que quiser.',
-    r4: '<span class="tag">[planejado]</span> <b>Plugins.</b> Hooks e scripts para estender o app com os seus próprios comandos.',
+    r4: '<span class="tag">[planejado]</span> <b>Plugins.</b> Scripts para estender o app com os seus próprios comandos.',
     r5: 'Quer algum desses antes, ou outra coisa? Me conta em <button class="chl" data-open="requests">● feature-requests</button>.',
     rq1: "Sentiu falta de algo? Conta o que o slick deveria fazer: threads, reações, um tema, um atalho sem o qual você não vive.",
     rq2: "Escreva sua proposta na caixa abaixo e aperte <kbd>Enter</kbd>. Depois de uma verificação rápida de que você é humano e da confirmação por e-mail, ela é enviada.",
     o0: "<b>O slick se encaixa direitinho no Omarchy.</b>",
     o1: "Ele abre como qualquer app TUI do Omarchy: pelo launcher, na própria janela, com o próprio ícone. E segue o tema do Omarchy: o slick usa as cores do seu terminal, então quando você troca de tema, ele troca junto.",
-    o2: '<b>Na sua barra, já hoje.</b> O ícone do slick na bandeja acende com DMs não lidas e menções, e um clique traz a janela para a frente. <span class="tag">[em breve]</span> Um plugin para a barra do Omarchy onde você decide como ele se comporta: o que o ícone mostra, o que o clique faz, quando ele te avisa.',
-    o3: '<span class="tag">[em breve]</span> <b>Eventos do Slack no Omarchy.</b> Tudo o que o slick recebe (mensagens novas, menções, reações, presença) é repassado ao Omarchy, para os seus próprios plugins e scripts reagirem e fazerem o que você quiser.',
+    o2: '<b>O Slack na sua barra.</b> O plugin <code>leonavas.slack</code> para a barra do Omarchy roda em cima do slick e mostra o que está esperando sem abrir nada.',
+    o4: "Instale o plugin:",
+    o6: '<b>Badges.</b> O vermelho conta as DMs e DMs em grupo não lidas, o azul conta as menções em canais. Ou um badge só, somado, ou um ponto sem números.',
+    o7: '<b>Hover.</b> As conversas não lidas com a última mensagem, as menções e há quanto tempo, mais as reações às suas mensagens. Clique em uma para ir direto a ela no slick.',
+    o8: '<b>Reações sobem.</b> Quando alguém reage a uma mensagem sua, o emoji sobe do ícone, incluindo os emojis da própria workspace.',
+    o9: '<b>Clique para mostrar ou esconder.</b> O slick fica no scratchpad do Omarchy (<kbd>Super</kbd>+<kbd>S</kbd>) e continua rodando e contando enquanto escondido. O clique do meio fecha.',
+    o10: '<b>Botão direito.</b> Abrir no login, abrir em primeiro plano, abrir no scratchpad, agrupar notificações, mostrar reações e pausar as notificações por 30 minutos, 1 ou 2 horas, até amanhã ou até uma data e hora. A pausa é o “não perturbe” do próprio Slack, então vale em todos os clientes.',
+    o11: '<b>Do seu jeito.</b> Estilo do ícone, cores dos badges, o que o badge azul conta, quantas linhas a prévia mostra, tudo nas configurações do widget na barra.',
+    o12: 'Código, configurações e detalhes: <a href="https://github.com/leonavas/omarchy-slack" target="_blank" rel="noopener">github.com/leonavas/omarchy-slack</a>',
+    o5: '<span class="tag">[em breve]</span> Na lista de plugins do Omarchy, a um clique.',
+    o3: '<b>Eventos do Slack no Omarchy.</b> O que o slick recebe (mensagens novas, menções, reações, presença, contagem de não lidas, pausas) é repassado como eventos, hooks e um arquivo de estado, para os seus próprios plugins e scripts reagirem e fazerem o que você quiser. O plugin da barra é feito em cima disso.',
     d1: "O app desktop do Slack não para de crescer no seu disco. O slick, não.",
     d2: "<b>Só o que é útil vai para o cache.</b> Usuários, canais, suas 8 conversas mais recentes e as últimas 50 mensagens de cada uma, num único arquivo.",
     d3: "<b>Imagens antigas vão embora.</b> Fotos, avatares e emojis que você não vê há 7 dias são apagados quando o slick abre. O que você continua vendo fica.",
@@ -982,6 +1045,20 @@ cookie = xoxd-…</pre></div>
     cl5: "Abre a partir de um cache local, atualiza a conversa aberta a cada 3 segundos e marca como lida.",
     cl6: "Login na própria página do Slack, numa janelinha: <code>slick login [workspace]</code> ou <kbd>Ctrl</kbd>+<kbd>L</kbd> no app. Token no arquivo de config ou variáveis de ambiente também funcionam.",
     cl7: "Sua conta e status, ícone na bandeja para as não lidas e atualização com um clique pelas releases do GitHub.",
+    cmh: '<b class="ver">slick 0.1.2</b> saiu.',
+    cm0: "No Linux a janela de login é um pequeno auxiliar que o slick extrai uma vez e guarda, então o slick abre mesmo sem o WebKitGTK instalado.",
+    cm1: "Ícone da bandeja mais forte, fácil de achar na barra.",
+    cm2: "\"slick está atualizado\" some da barra de status em 10 segundos.",
+    cnh: '<b class="ver">slick 0.1.3</b> saiu.',
+    cn0: "Tempo real: mensagens novas, reações e leituras chegam pelo websocket do Slack na hora. O polling fica como reserva.",
+    cn1: "Quem está digitando: pontinhos na barra lateral no lugar do avatar e uma linha embaixo da caixa de mensagem.",
+    cn2: "A caixa de mensagem mostra emoji como emoji, inclusive os animados do seu workspace, e <kbd>@</kbd> e <kbd>#</kbd> completam pessoas e canais como menções de verdade.",
+    cn3: "Menções e links de canal nas mensagens ficam como no Slack. Um clique abre o canal ou a DM.",
+    cn4: "Cole um print com <kbd>Ctrl</kbd>+<kbd>V</kbd>: ele aparece em miniatura na caixa e vai junto com a mensagem.",
+    cn5: "Um aviso \"Menções não lidas\" na barra lateral aponta para menções fora da tela.",
+    cn6: "Para os seus scripts: um arquivo de estado, <code>slick events</code>, hooks e <code>slick open</code>, <code>mark-read</code>, <code>dnd</code> e <code>status</code>. Eventos de mensagens novas, reações, presença, não lidas e pausas.",
+    cn7: "Um slick por sessão: abrir de novo traz o aberto para a frente. O widget da barra do Omarchy é feito em cima disso tudo.",
+    cn8: "Copiar um ID ou e-mail no perfil agora avisa que foi copiado.",
     hints: "j k · Alt+↑↓ canais · ^K procurar · t tema",
     themeWord: "tema",
   };

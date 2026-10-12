@@ -2,19 +2,25 @@
 mod i18n;
 mod account;
 mod app;
+mod attach;
 mod blocks;
 mod cache;
+mod cli;
 mod compose;
 mod config;
 mod edit;
 mod editor;
 mod icons;
+mod ipc;
 mod emoji;
+mod events;
 mod files;
 mod login;
+mod mention;
 #[cfg(not(target_os = "linux"))]
 mod login_window;
 mod pins;
+mod rtm;
 mod selection;
 mod slack;
 mod text;
@@ -25,7 +31,8 @@ mod ui;
 mod update;
 
 use crossterm::event::{
-    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event as TermEvent,
+    self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste, EnableFocusChange,
+    EnableMouseCapture, Event as TermEvent,
     KeyEventKind, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use std::sync::mpsc;
@@ -84,17 +91,35 @@ fn usage() -> &'static str {
     i18n::tr(
         "\
 usage:
-  slick                    open slick
+  slick                    open slick, or bring the open one to the front
+  slick --new-instance     open another slick alongside the running one
   slick login [workspace]  sign in to Slack through the sign-in window
   slick update             look for and install a new version
   slick --version          show the version
+
+talking to the running slick (see docs/events.md):
+  slick open <conversation> [ts] [--thread <ts>] [--background]
+  slick mark-read <conversation>
+  slick dnd pause <minutes> | resume | status
+  slick quit
+  slick status [--json]    what is unread, as JSON for scripts
+  slick events             follow new messages, counts and pauses (JSON lines)
 ",
         "\
 uso:
-  slick                    abre o slick
+  slick                    abre o slick, ou traz pra frente o que já está aberto
+  slick --new-instance     abre outro slick além do que já está rodando
   slick login [workspace]  entra no Slack pela janela de login
   slick update             procura e instala a versão nova
   slick --version          mostra a versão
+
+falando com o slick aberto (veja docs/events.md):
+  slick open <conversa> [ts] [--thread <ts>] [--background]
+  slick mark-read <conversa>
+  slick dnd pause <minutos> | resume | status
+  slick quit
+  slick status [--json]    o que não foi lido, em JSON para scripts
+  slick events             acompanha mensagens novas, contagens e pausas (linhas JSON)
 ",
     )
 }
@@ -115,6 +140,7 @@ fn main() {
         Some(login::ARG) => login_window::run(),
         Some("-V" | "--version") => return println!("{}", version()),
         Some("-h" | "--help") => return print!("{}", usage()),
+        Some("--new-instance") => {}
         Some(a) if a.starts_with('-') => {
             eprint!("{}{}", trf!("slick: unknown option {a}\n", "slick: opção desconhecida {a}\n"), usage());
             std::process::exit(2);
@@ -130,6 +156,32 @@ fn main() {
     if std::env::args().nth(1).as_deref() == Some("update") {
         std::process::exit(update::cli());
     }
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let start = match cli::run(&args) {
+        Some(cli::Next::Exit(code)) => std::process::exit(code),
+        Some(cli::Next::Start(cmd)) => Some(cmd),
+        None => None,
+    };
+    // A slick already running is brought to the front instead of starting
+    // another; this one doesn't even need a terminal for that.
+    let new_instance = args.first().map(String::as_str) == Some("--new-instance");
+    let server = match if new_instance { None } else { ipc::claim() } {
+        Some(ipc::Claim::Owner(s)) => Some(s),
+        Some(ipc::Claim::Running) => {
+            if let Err(e) = ipc::send(&serde_json::json!({ "cmd": "focus" })) {
+                eprintln!("{}", trf!("slick is already running, but didn't answer: {e}", "o slick já está rodando, mas não respondeu: {e}"));
+                std::process::exit(1);
+            }
+            // Only Hyprland lets us bring the other window up; elsewhere, say where it is.
+            if !cfg!(target_os = "linux") || std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none() {
+                eprintln!("{}", i18n::tr("slick is already open in another window", "o slick já está aberto em outra janela"));
+            }
+            return;
+        }
+        None => None,
+    };
+    // The one that owns the socket speaks for slick; a second one keeps quiet.
+    let owner = server.is_some();
     {
         use std::io::IsTerminal;
         if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
@@ -155,23 +207,45 @@ fn main() {
         PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
     );
     let _ = crossterm::execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste);
+    // Whether the window has the keyboard: the open conversation only counts as read then.
+    let _ = crossterm::execute!(std::io::stdout(), EnableFocusChange);
 
     update::background(tx.clone());
+    if let Some(s) = server {
+        s.serve(tx.clone());
+    }
+    if let Some(cmd) = start {
+        let _ = tx.send(app::Event::Remote(cmd));
+    }
     #[cfg(target_os = "linux")]
-    let mut tray = config::tray().then(|| tray::Tray::start(tx.clone()));
+    let (tray_tx, mut tray) = (tx.clone(), None::<tray::Tray>);
     let logged_in = creds.is_some();
     let mut app = app::App::new(slack::Slack::new(creds.unwrap_or_default()), tx, cache::load(), picker, logged_in);
+    app.events.on = owner;
+    #[cfg(target_os = "linux")]
+    {
+        app.account.tray = config::tray();
+    }
     while !app.quit {
         if app.dirty {
             app.dirty = false;
+            // Turned on or off in the settings: dropping it takes it off the bar.
+            #[cfg(target_os = "linux")]
+            if app.account.tray != tray.is_some() {
+                tray = app.account.tray.then(|| tray::Tray::start(tray_tx.clone()));
+            }
             #[cfg(target_os = "linux")]
             if let Some(t) = &mut tray {
-                t.set(app.attention());
+                // A pause you set dims it, like the widget; the night schedule doesn't.
+                let snoozed = app.account.paused.is_some_and(|p| p.snooze);
+                t.set(if snoozed { (0, 0) } else { app.attention() });
             }
+            app.publish();
             if terminal.draw(|f| ui::draw(f, &mut app)).is_err() {
                 break;
             }
             app.request_images();
+            app.request_names();
         }
         while let Ok(ev) = rx.try_recv() {
             app.handle(ev);
@@ -191,10 +265,18 @@ fn main() {
             None => Duration::from_millis(50),
         };
         if event::poll(wait).unwrap_or(false) {
-            match event::read() {
+            let ev = event::read();
+            // Typing or clicking means the window is seen, also in terminals
+            // that never report focus.
+            if matches!(ev, Ok(TermEvent::Key(_) | TermEvent::Mouse(_) | TermEvent::Paste(_))) {
+                app.set_focused(true);
+            }
+            match ev {
                 Ok(TermEvent::Key(k)) if k.kind != KeyEventKind::Release => app.on_key(k),
                 Ok(TermEvent::Mouse(m)) => app.on_mouse(m),
                 Ok(TermEvent::Paste(s)) => app.on_paste(&s),
+                Ok(TermEvent::FocusGained) => app.set_focused(true),
+                Ok(TermEvent::FocusLost) => app.set_focused(false),
                 Ok(TermEvent::Resize(..)) => {
                     app.protocols.clear();
                     app.dirty = true;
@@ -204,8 +286,9 @@ fn main() {
         }
     }
     let _ = crossterm::execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
-    let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste);
+    let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste, DisableFocusChange);
     ratatui::restore();
+    app.unpublish();
     cache::save(app.to_cache());
     if app.restart {
         eprintln!("{}", trf!("didn't restart: {}", "não reiniciou: {}", update::restart()));

@@ -40,6 +40,9 @@ pub struct Users {
     pub names: HashMap<String, String>,
     /// handle → id, to name the people in group DMs.
     pub handles: HashMap<String, String>,
+    /// id → full name, shown beside the display name in the `@` autocomplete.
+    #[serde(default)]
+    pub real: HashMap<String, String>,
     /// Apps and Slackbot: their DMs stay out of "Mensagens diretas".
     #[serde(default)]
     pub bots: HashSet<String>,
@@ -88,6 +91,9 @@ pub struct Section {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Count {
     pub latest: String,
+    /// Up to where it was read; what comes after is unread.
+    #[serde(default)]
+    pub last_read: String,
     pub unread: bool,
     pub mentions: u64,
 }
@@ -207,6 +213,13 @@ impl Slack {
 
     fn creds(&self) -> Creds {
         self.creds.read().map(|c| c.clone()).unwrap_or_default()
+    }
+
+    /// The real-time websocket's address, and the session cookie it also wants.
+    pub fn rtm_url(&self) -> Res<(String, Option<String>)> {
+        let v = self.call("rtm.connect", &[])?;
+        let url = v["url"].as_str().filter(|u| !u.is_empty()).ok_or("rtm.connect: no url")?;
+        Ok((url.to_string(), self.creds().cookie))
     }
 
     pub fn set_creds(&self, creds: Creds) {
@@ -392,6 +405,9 @@ impl Slack {
             if (!emoji.is_empty() || !text.is_empty()) && (expires == 0 || expires > now) {
                 users.statuses.insert(id.clone(), (emoji, text));
             }
+            if let Some(real) = p["real_name"].as_str().filter(|r| !r.is_empty()) {
+                users.real.insert(id.clone(), real.to_string());
+            }
             users.handles.insert(str_of(&u["name"]), id.clone());
             users.names.insert(id, name);
         }
@@ -537,6 +553,7 @@ impl Slack {
                     str_of(&c["id"]),
                     Count {
                         latest: str_of(&c["latest"]),
+                        last_read: str_of(&c["last_read"]),
                         unread: c["has_unreads"].as_bool().unwrap_or(false),
                         mentions: c["mention_count"].as_u64().unwrap_or(0),
                     },
@@ -734,7 +751,45 @@ fn str_of(v: &Value) -> String {
     v.as_str().unwrap_or("").to_string()
 }
 
-/// Slack wants &, < and > escaped in outgoing text.
+/// Slack wants &, < and > escaped in outgoing text. Mentions and channel
+/// links the message box put in (`<@U1>`, `<#C1>`, `<!here>`) go as they
+/// are, or they would arrive as plain text.
 pub(crate) fn escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find(['&', '<', '>']) {
+        out.push_str(&rest[..i]);
+        let tail = &rest[i..];
+        if let Some(n) = slack_ref(tail) {
+            out.push_str(&tail[..n]);
+            rest = &tail[n..];
+            continue;
+        }
+        out.push_str(match tail.as_bytes()[0] {
+            b'&' => "&amp;",
+            b'<' => "&lt;",
+            _ => "&gt;",
+        });
+        rest = &tail[1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The length of a `<@U1>`, `<#C1|general>` or `<!here>` starting `s`.
+pub(crate) fn slack_ref(s: &str) -> Option<usize> {
+    let body = s.strip_prefix('<')?;
+    let end = body.find(['>', '<', '\n'])?;
+    let inner = &body[..end];
+    if !body[end..].starts_with('>') {
+        return None;
+    }
+    let id = inner.split('|').next().unwrap_or(inner);
+    let ok = match id.split_at_checked(1) {
+        // Slack's ids: U…, W…, C…, G…, in capitals.
+        Some(("@" | "#", rest)) => !rest.is_empty() && rest.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()),
+        Some(("!", rest)) => !rest.is_empty() && rest.chars().all(|c| c.is_ascii_alphanumeric() || "^_-.".contains(c)),
+        _ => false,
+    };
+    ok.then_some(end + 2)
 }

@@ -19,6 +19,9 @@ pub struct Cache {
     #[serde(default)]
     pub collapsed: HashSet<String>,
     pub recents: Vec<String>,
+    /// The conversation open at quit, reopened at start like it was left.
+    #[serde(default)]
+    pub current: Option<String>,
     pub messages: HashMap<String, Vec<Message>>,
     #[serde(default)]
     pub boot: Option<Boot>,

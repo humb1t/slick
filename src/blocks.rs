@@ -26,9 +26,13 @@ fn link_style() -> Style {
     Style::new().fg(Color::Blue).underlined()
 }
 
-fn mention() -> Style {
-    Style::new().fg(Color::Yellow).bold()
-}
+/// Slack's mention pills: light blue on a dim blue; yours, and `@here`
+/// and the like, in its yellow highlight.
+const PILL_FG: Color = Color::Rgb(0x6C, 0xC4, 0xF0);
+const PILL_BG: Color = Color::Rgb(0x15, 0x34, 0x4B);
+const PILL_MINE_FG: Color = Color::Rgb(0xF2, 0xC7, 0x44);
+const PILL_MINE_BG: Color = Color::Rgb(0x4A, 0x3E, 0x12);
+const LOCK: &str = "\u{f023}";
 
 fn code() -> Style {
     Style::new().fg(Color::Red)
@@ -46,6 +50,8 @@ pub struct Seg {
     pub url: Option<String>,
     /// A custom emoji drawn over the two cells of `text`.
     pub emoji: Option<ImgRef>,
+    /// Where a click on a mention goes.
+    pub target: Option<Target>,
 }
 
 impl Seg {
@@ -120,6 +126,9 @@ pub enum Piece {
 pub enum Target {
     Link(String),
     Button(Button),
+    /// A mentioned person: opens the DM.
+    User(String),
+    Channel(String),
 }
 
 /// Where an image goes, in cells from the top left of the laid-out text.
@@ -253,7 +262,7 @@ fn blocks(bs: &[Value], n: &Names, ts: &str) -> Vec<Piece> {
             }
             "video" => {
                 let url = b["title_url"].as_str().or(b["video_url"].as_str()).map(String::from);
-                let seg = Seg { text: format!("▶ {}", plain(&b["title"], n)), style: link_style(), url, emoji: None };
+                let seg = Seg { text: format!("▶ {}", plain(&b["title"], n)), style: link_style(), url, ..Default::default() };
                 out.push(Piece::Text(vec![Para::plain(vec![seg])], None));
             }
             "file" => out.push(Piece::Text(vec![Para::plain(vec![Seg::new(tr("📎 file", "📎 arquivo"), dim())])], None)),
@@ -359,7 +368,7 @@ fn attachment(a: &Value, n: &Names, ts: &str) -> Vec<Piece> {
     }
     if let Some(t) = get("title") {
         let seg = match get("title_link") {
-            Some(u) => Seg { text: t.to_string(), style: link_style().bold(), url: Some(u.to_string()), emoji: None },
+            Some(u) => Seg { text: t.to_string(), style: link_style().bold(), url: Some(u.to_string()), ..Default::default() },
             None => Seg::new(t, Style::new().bold()),
         };
         inner.push(line(vec![seg]));
@@ -486,7 +495,7 @@ fn inline(s: &str, style: Style, n: &Names, out: &mut Vec<Seg>) {
         let found = match c {
             '<' => rest.find('>').map(|j| {
                 flush(&mut buf, out);
-                out.push(link(&rest[..j], style, n));
+                push(out, link(&rest[..j], style, n));
                 j
             }),
             '`' => rest.find('`').filter(|&j| j > 0).map(|j| {
@@ -524,7 +533,7 @@ fn inline(s: &str, style: Style, n: &Names, out: &mut Vec<Seg>) {
 /// Two cells the custom emoji's picture is drawn over; an ideographic space
 /// is one "word" two cells wide, so wrapping keeps it whole.
 fn custom_emoji(name: &str, url: &str, style: Style) -> Seg {
-    Seg { text: "\u{3000}".into(), style, url: None, emoji: Some(crate::emoji::img(name, url)) }
+    Seg { text: "\u{3000}".into(), style, emoji: Some(crate::emoji::img(name, url)), ..Default::default() }
 }
 
 /// Text with the workspace's `:name:` emoji split out as pictures.
@@ -579,13 +588,55 @@ fn closing(s: &str, mark: char) -> Option<usize> {
 }
 
 fn link(inner: &str, style: Style, n: &Names) -> Seg {
-    if inner.starts_with(['@', '#', '!']) {
-        // No-break spaces keep a name on one line and in one highlight.
-        return Seg::new(text::link(inner, n).replace(' ', "\u{a0}"), style.patch(mention()));
-    }
     let (target, label) = inner.split_once('|').unwrap_or((inner, ""));
+    if let Some(id) = target.strip_prefix('@') {
+        return user(id, &unescape(label), style, n);
+    }
+    if let Some(id) = target.strip_prefix('#') {
+        return channel(id, &unescape(label), style, n);
+    }
+    if let Some(special) = target.strip_prefix('!') {
+        let shown = text::link(inner, n);
+        return match special.split('^').next().unwrap_or("") {
+            "here" | "channel" | "everyone" => mention(shown, style, true, None),
+            "subteam" => mention(shown, style, false, None),
+            // Dates and the like: just their text.
+            _ => Seg::new(shown, style),
+        };
+    }
     let shown = if label.is_empty() { target.strip_prefix("mailto:").unwrap_or(target).to_string() } else { unescape(label) };
-    Seg { text: text::shortcodes(&shown), style: style.patch(link_style()), url: Some(unescape(target)), emoji: None }
+    Seg { text: text::shortcodes(&shown), style: style.patch(link_style()), url: Some(unescape(target)), ..Default::default() }
+}
+
+/// A mention as Slack draws it; no-break spaces keep it one word, so it
+/// wraps whole and stays in one highlight.
+fn mention(shown: String, style: Style, mine: bool, target: Option<Target>) -> Seg {
+    let (fg, bg) = if mine { (PILL_MINE_FG, PILL_MINE_BG) } else { (PILL_FG, PILL_BG) };
+    Seg { text: shown.replace(' ', "\u{a0}"), style: style.fg(fg).bg(bg), target, ..Default::default() }
+}
+
+/// `label` is what the message itself calls them, for people we can't name.
+fn user(id: &str, label: &str, style: Style, n: &Names) -> Seg {
+    let name = n.user(id).or(Some(label).filter(|l| !l.is_empty())).unwrap_or(id);
+    mention(format!("@{}", name.trim_start_matches('@')), style, id == n.me, Some(Target::User(id.into())))
+}
+
+fn channel(id: &str, label: &str, style: Style, n: &Names) -> Seg {
+    let name = n.chan(id).or(Some(label).filter(|l| !l.is_empty())).unwrap_or(id);
+    let sign = if n.private.contains(id) { format!("{LOCK}\u{a0}") } else { "#".into() };
+    mention(format!("{sign}{name}"), style, false, Some(Target::Channel(id.into())))
+}
+
+fn is_pill(s: &Seg) -> bool {
+    s.style.bg.is_some_and(|b| b == PILL_BG || b == PILL_MINE_BG)
+}
+
+/// Mentions side by side get a space between them, to read as two.
+fn push(out: &mut Vec<Seg>, seg: Seg) {
+    if is_pill(&seg) && out.last().is_some_and(is_pill) {
+        out.push(Seg::new(" ", Style::new()));
+    }
+    out.push(seg);
 }
 
 fn unescape(s: &str) -> String {
@@ -647,21 +698,18 @@ fn rich_inline(e: &Value, base: Style, n: &Names, out: &mut Vec<Seg>) {
     if st["code"] == true {
         style = style.patch(code());
     }
-    let name = |prefix: &str, map: &std::collections::HashMap<String, String>, id: &str| {
-        Seg::new(format!("{prefix}{}", map.get(id).map(String::as_str).unwrap_or(id)).replace(' ', "\u{a0}"), style.patch(mention()))
-    };
     let seg = match s("type") {
         "text" => Seg::new(s("text"), style),
         "link" => Seg {
             text: if s("text").is_empty() { s("url") } else { s("text") }.to_string(),
             style: style.patch(link_style()),
             url: Some(s("url").to_string()),
-            emoji: None,
+            ..Default::default()
         },
-        "user" => name("@", n.users, s("user_id")),
-        "channel" => name("#", n.chans, s("channel_id")),
-        "usergroup" => Seg::new(tr("@group", "@grupo"), style.patch(mention())),
-        "broadcast" => Seg::new(format!("@{}", s("range")), style.patch(mention())),
+        "user" => user(s("user_id"), "", style, n),
+        "channel" => channel(s("channel_id"), "", style, n),
+        "usergroup" => mention(tr("@group", "@grupo").into(), style, false, None),
+        "broadcast" => mention(format!("@{}", s("range")), style, true, None),
         "emoji" => match (text::emoji(s("unicode")), n.emoji.get(s("name"))) {
             (Some(u), _) => Seg::new(u, style),
             (None, Some(url)) => custom_emoji(s("name"), url, style),
@@ -671,7 +719,7 @@ fn rich_inline(e: &Value, base: Style, n: &Names, out: &mut Vec<Seg>) {
         "color" => Seg::new(s("value"), style),
         _ => return,
     };
-    out.push(seg);
+    push(out, seg);
 }
 
 // ---- layout ----------------------------------------------------------------
@@ -781,7 +829,7 @@ fn jumbo_items(paras: &[Para]) -> Option<Vec<Big>> {
                 n += 1;
                 continue;
             }
-            if s.url.is_some() {
+            if s.url.is_some() || s.target.is_some() {
                 return None;
             }
             for (j, line) in s.text.split('\n').enumerate() {
@@ -1043,7 +1091,7 @@ fn wrap(segs: &[Seg], width: usize, base: Style) -> Vec<Row> {
     }
     let width = width.max(1);
     let style = |s: &Seg| base.patch(s.style);
-    let target = |s: &Seg| s.url.clone().map(Target::Link);
+    let target = |s: &Seg| s.target.clone().or_else(|| s.url.clone().map(Target::Link));
     let mut rows = Vec::new();
     let mut row = Row::default();
     let mut spaces: Vec<&Seg> = Vec::new();

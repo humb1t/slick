@@ -10,7 +10,7 @@ use crate::i18n::{self, tr};
 use crate::slack::{File, Kind, Message};
 use crate::text::Names;
 use chrono::{Datelike, Local, TimeZone};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
@@ -52,7 +52,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     let input_width = right.width.saturating_sub(4) as usize;
     app.input_width = input_width;
-    let input_rows = app.editor.rows(input_width).len().clamp(1, MAX_INPUT_ROWS) as u16;
+    let input_rows = app.editor.rows(input_width).len().clamp(1, MAX_INPUT_ROWS) as u16 + crate::attach::rows(app, false);
     let paused = paused_peer(app);
     // The header: the name, a blank line, the tabs and a border.
     let [header, msgs, notice, input] = Layout::vertical([
@@ -71,10 +71,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         paused_notice(f, app, &name, notice);
     }
     input_box(f, app, input);
-    emoji_popup(f, app);
     status_line(f, app, status);
     profile(f, app, panel);
     crate::thread::draw(f, app, panel);
+    // After the thread panel: they may sit over its reply box.
+    emoji_popup(f, app);
+    crate::mention::draw(f, app);
     team_popup(f, app);
     menu(f, app);
     crate::account::draw(f, app);
@@ -320,6 +322,11 @@ fn login(f: &mut Frame, app: &mut App) {
 // ---- sidebar -----------------------------------------------------------
 
 fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
+    // The typing dots move: come back for their next step.
+    if !app.typing.is_empty() {
+        let at = Instant::now() + TYPING_STEP;
+        app.next_frame = Some(app.next_frame.map_or(at, |t| t.min(at)));
+    }
     let block = Block::new().borders(Borders::RIGHT).border_style(dim());
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -405,12 +412,25 @@ fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
         f.render_stateful_widget(list, list_area, &mut app.list);
     }
 
+    // Like Slack: a pill over the list's edge for each side with a mention
+    // scrolled out of sight. The rows under it skip their photo and dot.
+    app.areas.mention_pills.clear();
+    let (up, down) = offscreen_mentions(app, &rows, app.list.offset(), h);
+    let under = |n: usize, offset: usize| (up.is_some() && n == offset) || (down.is_some() && n + 1 == offset + h);
+
     // Photos go over the blank cells the rows left for them.
     if photos {
         let offset = app.list.offset();
         for (n, row) in rows.iter().enumerate().skip(offset).take(list_area.height as usize) {
             let Row::Conv(i) = row else { continue };
+            if under(n, offset) {
+                continue;
+            }
             let c = &app.convs[*i];
+            // "•••" takes the photo's place while someone types (`sidebar_row`).
+            if !app.typing_in(&c.id).is_empty() {
+                continue;
+            }
             let rect = Rect::new(list_area.x + 3, list_area.y + (n - offset) as u16, 2, 1);
             if c.kind == Kind::Group {
                 // Drawn as a picture so the number sits in the middle of its two cells.
@@ -435,12 +455,62 @@ fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
         let x = list_area.x + if photos { 6 } else { 3 };
         for (n, row) in rows.iter().enumerate().skip(offset).take(list_area.height as usize) {
             let Row::Conv(i) = row else { continue };
+            if under(n, offset) {
+                continue;
+            }
             let c = &app.convs[*i];
             let Some(uid) = c.user.clone().filter(|u| c.kind == Kind::Direct && !app.users.bots.contains(u)) else { continue };
+            if !app.typing_in(&c.id).is_empty() {
+                continue;
+            }
             let p = presence_of(app, &uid);
             draw_presence(f, app, p, x, list_area.y + (n - offset) as u16);
         }
     }
+    if let Some(n) = up {
+        mentions_pill(f, app, list_area, true, &rows[n]);
+    }
+    if let Some(n) = down {
+        mentions_pill(f, app, list_area, false, &rows[n]);
+    }
+}
+
+/// The nearest rows with a mention badge above and below what the list
+/// shows. Rows in collapsed sections are not in the list, and their header
+/// shows no badge, so they don't count; neither does a search.
+fn offscreen_mentions(app: &App, rows: &[Row], offset: usize, height: usize) -> (Option<usize>, Option<usize>) {
+    if !app.filter.is_empty() || height < 2 {
+        return (None, None);
+    }
+    let mention = |n: &usize| matches!(rows[*n], Row::Conv(i) if app.unread(&app.convs[i].id).1 > 0);
+    let up = (0..offset.min(rows.len())).rev().find(mention);
+    let down = (offset + height..rows.len()).find(mention);
+    (up, down)
+}
+
+/// Slack's "↑ Unread mentions": a red pill, like the mention badge, over
+/// the list's top (or bottom) row; a click brings `row` into view.
+fn mentions_pill(f: &mut Frame, app: &mut App, area: Rect, up: bool, row: &Row) {
+    let Row::Conv(i) = row else { return };
+    let text = if up {
+        tr(" ↑ Unread mentions ", " ↑ Menções não lidas ")
+    } else {
+        tr(" ↓ Unread mentions ", " ↓ Menções não lidas ")
+    };
+    let w = text.width() as u16 + 2;
+    if area.width < w {
+        return;
+    }
+    let y = if up { area.y } else { area.bottom() - 1 };
+    let rect = Rect::new(area.x + (area.width - w) / 2, y, w, 1);
+    let pill = Line::from(vec![
+        Span::styled(blocks::CAP_L, Style::new().fg(Color::Red)),
+        Span::styled(text, Style::new().fg(Color::White).bg(Color::Red).bold()),
+        Span::styled(blocks::CAP_R, Style::new().fg(Color::Red)),
+    ]);
+    f.render_widget(Clear, rect);
+    f.render_widget(Paragraph::new(pill), rect);
+    app.areas.mention_pills.push((rect, app.convs[*i].id.clone()));
 }
 
 /// The emoji of someone's status, as Slack shows it next to their name;
@@ -468,7 +538,12 @@ fn sidebar_row<'a>(app: &App, row: &Row, width: usize, photos: bool) -> ListItem
             let uid = c.user.as_deref().unwrap_or("");
             let bot = app.users.bots.contains(uid);
             let dot = presence_span(app, presence_of(app, uid));
+            // Like Slack: a DM or group where someone is typing shows "•••"
+            // where the photo (or presence) goes.
+            let typing = matches!(c.kind, Kind::Direct | Kind::Group) && !app.typing_in(&c.id).is_empty();
             let icon = match c.kind {
+                // Sized here, drawn below (`typing_dots`).
+                _ if typing => Span::raw(if photos { "•••" } else { "•" }),
                 Kind::Channel => Span::styled("#", dim()),
                 Kind::Private => Span::styled(LOCK, dim()),
                 // The photo is drawn over the first two cells; presence goes after a gap.
@@ -500,7 +575,13 @@ fn sidebar_row<'a>(app: &App, row: &Row, width: usize, photos: bool) -> ListItem
             } else {
                 Style::new().fg(Color::Gray)
             };
-            let mut spans = vec![Span::raw("   "), icon, Span::raw(pad)];
+            let mut spans = vec![Span::raw("   ")];
+            if typing {
+                spans.extend(typing_dots(app, photos));
+            } else {
+                spans.push(icon);
+            }
+            spans.push(Span::raw(pad));
             // Like Slack: what the search matched, in bold.
             // Ranges come from the whole name; a cut name keeps its first chars.
             match crate::text::search(&app.label(c), &app.filter).filter(|_| !app.filter.is_empty()) {
@@ -708,7 +789,7 @@ fn messages(f: &mut Frame, app: &mut App, area: Rect) {
     };
 
     let intro = if app.no_older.contains(&chan) { intro(app, &chan) } else { None };
-    let names = Names { users: &app.users.names, chans: &app.chans, emoji: &app.emoji.custom };
+    let names = app.names();
     let font = app.picker.as_ref().map(|p| p.font_size()).map(|s| (s.width, s.height));
     let mut rendered = message_lines(msgs, intro, &names, app, inner.width as usize, font);
     // Coming from "Fixados": show the message picked there, a third down.
@@ -882,6 +963,14 @@ pub(crate) fn place(f: &mut Frame, app: &mut App, inner: Rect, r: Rendered, scro
         }
     }
     for h in buttons.into_iter().filter(|h| h.line >= start && h.line < end) {
+        let named = match &h.target {
+            blocks::Target::User(id) => app.users.names.contains_key(id) || app.others.contains_key(id),
+            blocks::Target::Channel(id) => app.chans.contains_key(id) || app.others.contains_key(id),
+            _ => true,
+        };
+        if !named {
+            app.unnamed.push(h.target.clone());
+        }
         let rect = Rect::new(inner.x + h.x, inner.y + (pad + h.line - start) as u16, h.w, 1).intersection(inner);
         app.areas.buttons.push((rect, h.target));
     }
@@ -1140,11 +1229,11 @@ fn team_popup(f: &mut Frame, app: &mut App) {
     let url = app.team_url().unwrap_or_default();
     let shown = url.trim_start_matches("https://").to_string();
     let id = format!("ID {}", me.team_id);
-    let copy = tr("  ⧉ copy", "  ⧉ copiar");
+    let (copy, copy_style) = copy_hint(app, "team");
     let lines = vec![
         Line::from(me.team.clone()).bold(),
         Line::from(vec![Span::styled(shown.clone(), Style::new().fg(Color::Cyan).italic().underlined()), Span::styled("  ↗", dim())]),
-        Line::from(vec![Span::styled(id.clone(), dim()), Span::styled(copy, Style::new().fg(Color::Cyan))]),
+        Line::from(vec![Span::styled(id.clone(), dim()), Span::styled(copy, copy_style)]),
         Line::from(""),
         Line::from(crate::account::version()).style(dim()),
     ];
@@ -1299,8 +1388,8 @@ fn profile(f: &mut Frame, app: &mut App, area: Rect) {
     lines.push(Line::from(""));
     let id_row = lines.len() as u16;
     let id_text = format!("ID {uid}");
-    let copy = tr("  ⧉ copy", "  ⧉ copiar");
-    lines.push(Line::from(vec![Span::styled(id_text.clone(), dim()), Span::styled(copy, Style::new().fg(Color::Cyan))]));
+    let (copy, copy_style) = copy_hint(app, "id");
+    lines.push(Line::from(vec![Span::styled(id_text.clone(), dim()), Span::styled(copy, copy_style)]));
     let n = lines.len() as u16;
     if y + id_row < bottom {
         app.areas.profile_id = Rect::new(inner.x, y + id_row, (id_text.width() + copy.width()) as u16, 1).intersection(inner);
@@ -1358,9 +1447,15 @@ fn profile(f: &mut Frame, app: &mut App, area: Rect) {
     if !p.email.is_empty() {
         contact.push(Line::from(tr("Email address", "Endereço de e-mail")).style(dim()));
         // Click to copy; its row is known once the header lines are in.
-        let email = truncate(&p.email, w);
+        let done = app.copied.is_some_and(|(what, _)| what == "email");
+        let (note, note_style) = copy_hint(app, "email");
+        let email = truncate(&p.email, if done { w.saturating_sub(note.width()) } else { w });
         email_at = Some((contact.len() as u16, email.width() as u16));
-        contact.push(Line::from(Span::styled(email, Style::new().fg(Color::Blue).underlined())));
+        let mut spans = vec![Span::styled(email, Style::new().fg(Color::Blue).underlined())];
+        if done {
+            spans.push(Span::styled(note, note_style));
+        }
+        contact.push(Line::from(spans));
     }
     if !p.phone.is_empty() {
         contact.push(Line::from(tr("Phone", "Telefone")).style(dim()));
@@ -1735,6 +1830,39 @@ pub(crate) fn truncate(s: &str, width: usize) -> String {
 
 // ---- input and status --------------------------------------------------
 
+/// How often the typing dots take a step.
+const TYPING_STEP: Duration = Duration::from_millis(250);
+
+/// The typing dots at this moment. Only their brightness moves, as a wave:
+/// the lit dot, the one it just left fading, the other dark. Without photos
+/// the one dot in the presence cell pulses instead.
+fn typing_dots(app: &App, photos: bool) -> Vec<Span<'static>> {
+    const LEVELS: [Color; 3] = [Color::DarkGray, Color::Gray, Color::White];
+    let step = (app.clock.elapsed().as_millis() / TYPING_STEP.as_millis()) as usize;
+    if !photos {
+        // Dark, mid, lit, mid: a pulse.
+        let level = [0, 1, 2, 1][step % 4];
+        return vec![Span::styled("•", Style::new().fg(LEVELS[level]).bold())];
+    }
+    let lit = step % 3;
+    (0..3)
+        .map(|i| {
+            let level = if i == lit { 2 } else if (i + 1) % 3 == lit { 1 } else { 0 };
+            Span::styled("•", Style::new().fg(LEVELS[level]).bold())
+        })
+        .collect()
+}
+
+/// "Ana is typing", "Ana and Bruno are typing", "Several people are typing".
+fn typing_text(who: &[String]) -> Option<String> {
+    Some(match who {
+        [] => return None,
+        [a] => trf!("{a} is typing", "{a} está digitando"),
+        [a, b] => trf!("{a} and {b} are typing", "{a} e {b} estão digitando"),
+        _ => tr("Several people are typing", "Várias pessoas estão digitando").into(),
+    })
+}
+
 fn input_box(f: &mut Frame, app: &mut App, area: Rect) {
     app.areas.input = area;
     let focused = app.focus == Focus::Input;
@@ -1749,6 +1877,8 @@ fn input_box(f: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
     let inner = inner.inner(ratatui::layout::Margin { horizontal: 1, vertical: 0 });
+    let (inner, cards) = crate::attach::split(app, inner, false);
+    crate::attach::draw(f, app, cards, false);
     let Some(c) = app.current.as_ref().and_then(|id| app.convs.iter().find(|c| &c.id == id)) else {
         return;
     };
@@ -1764,19 +1894,11 @@ fn input_box(f: &mut Frame, app: &mut App, area: Rect) {
         }
         return;
     }
-    let rows = app.editor.rows(inner.width as usize);
-    let (cr, cc) = app.editor.position(&rows);
-    let h = inner.height as usize;
-    let top = (cr + 1).saturating_sub(h);
-    let lines: Vec<Line> = rows[top..].iter().take(h).map(|r| Line::from(r.chars.iter().collect::<String>())).collect();
-    f.render_widget(Paragraph::new(lines), inner);
-    if focused {
-        f.set_cursor_position((inner.x + cc as u16, inner.y + (cr - top) as u16));
-    }
+    crate::editor::draw(f, app, false, inner, focused);
 }
 
 fn status_line(f: &mut Frame, app: &App, area: Rect) {
-    let hints = crate::edit::hint(app).unwrap_or_else(|| {
+    let hints = crate::edit::hint(app).or_else(|| crate::attach::hint(app)).unwrap_or_else(|| {
         match app.focus {
             Focus::Sidebar => tr(
                 "Enter open · m or right-click menu · drag to move · / search · q quit",
@@ -1798,8 +1920,20 @@ fn status_line(f: &mut Frame, app: &App, area: Rect) {
         Some(e) => Span::styled(format!(" ✗ {e}"), Style::new().fg(Color::Red)),
         None => Span::styled(format!(" {}", app.status), dim()),
     };
-    let room = (area.width as usize).saturating_sub(left.content.width() + hints.width() + 1);
-    let line = Line::from(vec![left, Span::raw(" ".repeat(room)), Span::styled(hints, dim())]);
+    // Like Slack, under the message box: "Ana is typing", lined up with the box's text.
+    let typing = app.current.as_deref().and_then(|c| typing_text(&app.typing_in(c)));
+    let mut spans = vec![left];
+    if let Some(t) = typing {
+        let at = (app.areas.input.x + 2).saturating_sub(area.x) as usize;
+        let gap = at.saturating_sub(spans[0].content.width()).max(1);
+        spans.push(Span::raw(" ".repeat(gap)));
+        spans.push(Span::styled(t, dim().italic()));
+    }
+    let used: usize = spans.iter().map(|s| s.content.width()).sum();
+    let room = (area.width as usize).saturating_sub(used + hints.width() + 1);
+    spans.push(Span::raw(" ".repeat(room)));
+    spans.push(Span::styled(hints, dim()));
+    let line = Line::from(spans);
     f.render_widget(Paragraph::new(line), area);
 }
 
@@ -1876,6 +2010,15 @@ fn reaction_lines(
 }
 
 /// One row of the autocomplete or the picker: the emoji, then `:name:`.
+/// The "copy" link beside an ID or e-mail, or the confirmation for a
+/// moment after a click.
+fn copy_hint(app: &App, what: &str) -> (&'static str, Style) {
+    match app.copied {
+        Some((w, _)) if w == what => (tr("  ✓ copied to clipboard", "  ✓ copiado"), Style::new().fg(Color::Green)),
+        _ => (tr("  ⧉ copy", "  ⧉ copiar"), Style::new().fg(Color::Cyan)),
+    }
+}
+
 pub(crate) fn emoji_row(f: &mut Frame, app: &mut App, rect: Rect, name: &str, glyph: &emoji::Glyph, selected: bool) {
     let shown = match glyph {
         emoji::Glyph::Text(e) => format!("{e}{}", " ".repeat(2usize.saturating_sub(e.width()))),
@@ -1894,7 +2037,7 @@ pub(crate) fn emoji_row(f: &mut Frame, app: &mut App, rect: Rect, name: &str, gl
 fn emoji_popup(f: &mut Frame, app: &mut App) {
     app.areas.emoji_rows.clear();
     let Some(hits) = app.completions() else { return };
-    let input = app.areas.input;
+    let input = app.typing_area();
     let w = (hits.iter().map(|(n, _)| n.width()).max().unwrap_or(0) as u16 + 9).max(24).min(input.width.saturating_sub(2));
     let h = hits.len() as u16 + 2;
     if input.y < h || w < 10 {

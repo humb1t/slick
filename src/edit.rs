@@ -3,7 +3,7 @@
 //! reminders, forwarding and deleting.
 
 use crate::app::{Action, App, Event, Focus, Menu};
-use crate::editor::Editor;
+use crate::editor::{Editor, Lookup};
 use crate::i18n::tr;
 use crate::slack::{escape, parse_message, Edited, Kind, Message, Res, Slack};
 use crate::text::{self, Names};
@@ -49,10 +49,8 @@ pub struct Editing {
     pub chan: String,
     pub ts: String,
     pub thread: bool,
-    /// Mentions and channels as typed and as Slack writes them, put back on save.
-    refs: Vec<(String, String)>,
     /// What the box held before, given back when the edit ends.
-    draft: String,
+    draft: Editor,
 }
 
 /// The dialog that sends a message's link to another conversation.
@@ -158,11 +156,9 @@ impl Slack {
 }
 
 /// Slack's text back to what was typed: `<@U1>` → `@Ana`, `<#C1|geral>` →
-/// `#geral`, `<url|label>` → `url`, entities decoded. Also the mentions and
-/// channels as (typed, Slack's), to put back on save.
-pub fn typed(s: &str, n: &Names) -> (String, Vec<(String, String)>) {
+/// `#geral`, `<url|label>` → `url`, entities decoded.
+pub fn typed(s: &str, n: &Names) -> String {
     let mut out = String::new();
-    let mut refs = Vec::new();
     let mut rest = s;
     while let Some(i) = rest.find('<') {
         let Some(j) = rest[i..].find('>') else { break };
@@ -170,29 +166,13 @@ pub fn typed(s: &str, n: &Names) -> (String, Vec<(String, String)>) {
         let inner = &rest[i + 1..i + j];
         let target = inner.split('|').next().unwrap_or(inner);
         if target.starts_with(['@', '#', '!']) {
-            let shown = text::link(inner, n);
-            refs.push((shown.clone(), format!("<{inner}>")));
-            out.push_str(&shown);
+            out.push_str(&text::link(inner, n));
         } else {
             out.push_str(&text::link(target, n));
         }
         rest = &rest[i + j + 1..];
     }
     out.push_str(&text::mrkdwn(rest, n));
-    (out, refs)
-}
-
-/// The typed text as Slack wants it: escaped like a new message, with the
-/// mentions and channels it had put back. Longest first, so `@Ana Paula`
-/// is not taken for `@Ana`.
-fn slack_text(typed: &str, refs: &[(String, String)]) -> String {
-    let mut refs = refs.to_vec();
-    refs.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then(a.cmp(b)));
-    refs.dedup();
-    let mut out = escape(typed);
-    for (shown, raw) in refs {
-        out = out.replace(&escape(&shown), &raw);
-    }
     out
 }
 
@@ -518,8 +498,8 @@ impl App {
                 self.status = tr("link copied", "link copiado").into();
             }
             Act::CopyText => {
-                let names = Names { users: &self.users.names, chans: &self.chans, emoji: &self.emoji.custom };
-                let (text, _) = typed(&m.text, &names);
+                let names = self.names();
+                let text = typed(&m.text, &names);
                 self.copy(&text);
                 self.status = tr("message copied", "mensagem copiada").into();
             }
@@ -546,12 +526,12 @@ impl App {
             return;
         }
         self.cancel_edit();
-        let names = Names { users: &self.users.names, chans: &self.chans, emoji: &self.emoji.custom };
-        let (text, refs) = typed(&m.text, &names);
+        // Mentions, channels and emoji come back as the box's pills and emoji.
+        let mut text = Editor::default();
+        text.load(&m.text, true, &Lookup { users: &self.users, chans: &self.chans, emoji: &self.emoji, pictures: self.picker.is_some() });
         let Some(e) = self.pane_editor(it.thread) else { return };
-        let draft = e.take();
-        e.set(text);
-        self.edit.editing = Some(Editing { chan: it.chan, ts: it.ts, thread: it.thread, refs, draft });
+        let draft = std::mem::replace(e, text);
+        self.edit.editing = Some(Editing { chan: it.chan, ts: it.ts, thread: it.thread, draft });
         self.edit.selected = None;
         self.focus = if it.thread { Focus::Thread } else { Focus::Input };
     }
@@ -560,28 +540,28 @@ impl App {
     fn cancel_edit(&mut self) {
         let Some(e) = self.edit.editing.take() else { return };
         if let Some(ed) = self.pane_editor(e.thread) {
-            ed.set(e.draft);
+            *ed = e.draft;
         }
     }
 
     /// Saves the edit: here at once, then in Slack; undone if Slack refuses.
     fn save_edit(&mut self) {
         let Some(thread) = self.edit.editing.as_ref().map(|e| e.thread) else { return };
-        let typed = self.pane_editor(thread).map(|ed| ed.text.trim().to_string()).unwrap_or_default();
+        let typed = self.pane_editor(thread).map(|ed| ed.wire().trim().to_string()).unwrap_or_default();
         let Some(e) = self.edit.editing.take() else { return };
         // Like Slack: saving it empty deletes the message.
         if typed.is_empty() {
             if let Some(ed) = self.pane_editor(thread) {
-                ed.set(e.draft);
+                *ed = e.draft;
             }
             if let Some(old) = self.message(&e.chan, &e.ts) {
                 self.delete(e.chan, old);
             }
             return;
         }
-        let text = slack_text(&typed, &e.refs);
+        let text = escape(&typed);
         if let Some(ed) = self.pane_editor(thread) {
-            ed.set(e.draft);
+            *ed = e.draft;
         }
         let Some(old) = self.message(&e.chan, &e.ts).filter(|m| m.text != text) else { return };
         let user = self.me.as_ref().map(|m| m.user_id.clone()).unwrap_or_default();

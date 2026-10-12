@@ -2,13 +2,30 @@
 
 use crate::slack::Message;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub struct Names<'a> {
     pub users: &'a HashMap<String, String>,
     pub chans: &'a HashMap<String, String>,
     /// The workspace's custom emoji: name → image URL.
     pub emoji: &'a HashMap<String, String>,
+    /// People and channels outside those lists (other orgs, channels we're
+    /// not in), named once a message mentioned them.
+    pub others: &'a HashMap<String, String>,
+    /// Private channels, linked with a lock instead of `#`.
+    pub private: &'a HashSet<String>,
+    /// Your user id: mentions of you stand out.
+    pub me: &'a str,
+}
+
+impl Names<'_> {
+    pub fn user(&self, id: &str) -> Option<&str> {
+        self.users.get(id).or_else(|| self.others.get(id)).map(String::as_str)
+    }
+
+    pub fn chan(&self, id: &str) -> Option<&str> {
+        self.chans.get(id).or_else(|| self.others.get(id)).map(String::as_str)
+    }
 }
 
 /// The flat text, for copying and previews; the conversation itself
@@ -136,10 +153,10 @@ pub fn link(inner: &str, n: &Names) -> String {
         None => (inner, String::new()),
     };
     if let Some(id) = target.strip_prefix('@') {
-        return format!("@{}", n.users.get(id).cloned().unwrap_or(if label.is_empty() { id.to_string() } else { label }));
+        return format!("@{}", n.user(id).map(String::from).unwrap_or(if label.is_empty() { id.to_string() } else { label }));
     }
     if let Some(id) = target.strip_prefix('#') {
-        return format!("#{}", n.chans.get(id).cloned().unwrap_or(if label.is_empty() { id.to_string() } else { label }));
+        return format!("#{}", n.chan(id).map(String::from).unwrap_or(if label.is_empty() { id.to_string() } else { label }));
     }
     if let Some(special) = target.strip_prefix('!') {
         return match special {
@@ -273,11 +290,11 @@ fn rich_inline(e: &Value, n: &Names, out: &mut String) {
         "link" => out.push_str(if s("text").is_empty() { s("url") } else { s("text") }),
         "user" => {
             out.push('@');
-            out.push_str(n.users.get(s("user_id")).map(String::as_str).unwrap_or(s("user_id")));
+            out.push_str(n.user(s("user_id")).unwrap_or(s("user_id")));
         }
         "channel" => {
             out.push('#');
-            out.push_str(n.chans.get(s("channel_id")).map(String::as_str).unwrap_or(s("channel_id")));
+            out.push_str(n.chan(s("channel_id")).unwrap_or(s("channel_id")));
         }
         "usergroup" => out.push_str(crate::i18n::tr("@group", "@grupo")),
         "broadcast" => {

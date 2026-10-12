@@ -1,7 +1,8 @@
 //! Emoji: the workspace's custom ones, the `:` autocomplete in the message
 //! box, the reaction picker and the reactions themselves.
 
-use crate::app::{App, Event, Focus, ImgRef};
+use crate::app::{App, Event, ImgRef};
+use crate::editor::Lookup;
 use crate::slack::{Res, Slack};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use emojis::SkinTone;
@@ -282,17 +283,11 @@ fn fragment(text: &str, cursor: usize) -> Option<(usize, String)> {
     (frag.chars().count() >= 2).then_some((i - 1, frag))
 }
 
-fn byte(s: &str, c: usize) -> usize {
-    s.char_indices().nth(c).map(|(i, _)| i).unwrap_or(s.len())
-}
-
 impl App {
     /// The autocomplete popup's rows, while a `:fragment` is being typed.
     pub fn completions(&mut self) -> Option<Vec<(String, Glyph)>> {
-        if self.focus != Focus::Input {
-            return None;
-        }
-        let (_, frag) = fragment(&self.editor.text, self.editor.cursor)?;
+        let ed = self.typing_editor()?;
+        let (_, frag) = fragment(&ed.text, ed.cursor)?;
         if self.complete.dismissed.as_deref() == Some(frag.as_str()) {
             return None;
         }
@@ -306,12 +301,13 @@ impl App {
         (!hits.is_empty()).then_some(hits)
     }
 
-    /// Replaces the `:fragment` with the whole `:name: `.
+    /// Replaces the `:fragment` with the emoji and a space.
     fn complete_with(&mut self, name: &str) {
-        let Some((start, _)) = fragment(&self.editor.text, self.editor.cursor) else { return };
-        let (a, b) = (byte(&self.editor.text, start), byte(&self.editor.text, self.editor.cursor));
-        self.editor.text.replace_range(a..b, &format!(":{name}: "));
-        self.editor.cursor = start + name.chars().count() + 3;
+        let look = Lookup { users: &self.users, chans: &self.chans, emoji: &self.emoji, pictures: self.picker.is_some() };
+        let Some(t) = look.emoji(name) else { return };
+        let Some(ed) = self.typing_editor_mut() else { return };
+        let Some((start, _)) = fragment(&ed.text, ed.cursor) else { return };
+        ed.complete(start, t);
     }
 
     /// Keys for the `:` popup; true when it took the key.

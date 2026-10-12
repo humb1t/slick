@@ -4,7 +4,7 @@
 
 use crate::app::App;
 use crate::slack::Message;
-use crate::text::{self, Names};
+use crate::text;
 use crate::ui;
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Position;
@@ -91,7 +91,7 @@ impl App {
         let at = |ts: &str| msgs.iter().position(|m| m.ts == ts);
         let (Some(a), Some(b)) = (at(&s.anchor), at(&s.head)) else { return };
         let (a, b) = (a.min(b), a.max(b));
-        let names = Names { users: &self.users.names, chans: &self.chans, emoji: &self.emoji.custom };
+        let names = self.names();
         let mut out = String::new();
         let mut prev: Option<&Message> = None;
         for (i, m) in msgs.iter().enumerate().take(b + 1).skip(a) {

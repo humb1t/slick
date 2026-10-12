@@ -1,10 +1,9 @@
 //! Threads: a message's replies in the panel on the right, as in Slack.
 
-use crate::app::{App, Event, Focus, POLL_EVERY};
-use crate::editor::Editor;
+use crate::app::{App, Event, Focus};
+use crate::editor::{Editor, Lookup};
 use crate::i18n::tr;
 use crate::slack::{escape, parse_message, Kind, Message, Res, Slack};
-use crate::text::Names;
 use crate::ui::{dim, flash, message_lines, place, select, shade, truncate, MAX_INPUT_ROWS, PROFILE};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
@@ -129,7 +128,15 @@ impl App {
 
     /// From `tick`: the open thread refreshes as often as the conversation.
     pub(crate) fn poll_thread(&mut self) {
-        if self.thread.as_ref().is_some_and(|t| !t.polling && t.last_poll.elapsed() >= POLL_EVERY) {
+        let every = self.poll_every();
+        if self.thread.as_ref().is_some_and(|t| !t.polling && t.last_poll.elapsed() >= every) {
+            self.fetch_thread();
+        }
+    }
+
+    /// Now, for the websocket's news; a fetch already on its way will do.
+    pub(crate) fn refresh_thread(&mut self) {
+        if self.thread.as_ref().is_some_and(|t| !t.polling) {
             self.fetch_thread();
         }
     }
@@ -175,8 +182,9 @@ impl App {
             Ok(m) => m,
             Err(e) => {
                 self.error = Some(e);
-                if let Some(t) = self.open_thread_mut(&chan, &ts).filter(|t| t.editor.is_empty()) {
-                    t.editor.set(text);
+                let look = Lookup { users: &self.users, chans: &self.chans, emoji: &self.emoji, pictures: self.picker.is_some() };
+                if let Some(t) = self.thread.as_mut().filter(|t| t.chan == chan && t.ts == ts && t.editor.is_empty()) {
+                    t.editor.load(&text, false, &look);
                 }
                 return;
             }
@@ -199,6 +207,9 @@ impl App {
     }
 
     fn send_reply(&mut self) {
+        if self.send_files(true) {
+            return;
+        }
         let Some(t) = self.thread.as_mut() else { return };
         if t.editor.is_empty() {
             return;
@@ -222,6 +233,13 @@ impl App {
 
     pub(crate) fn on_thread_key(&mut self, k: KeyEvent, ctrl: bool) {
         let newline = k.modifiers.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT);
+        if ctrl && k.code == KeyCode::Char('v') {
+            return self.paste_clipboard(true);
+        }
+        let empty = self.thread.as_ref().is_some_and(|t| t.editor.text.is_empty());
+        if k.code == KeyCode::Backspace && empty && self.drop_last(true) {
+            return;
+        }
         let Some(t) = self.thread.as_mut() else { return self.focus = Focus::Input };
         let e = &mut t.editor;
         match k.code {
@@ -255,6 +273,9 @@ impl App {
             KeyCode::Char(c) if !ctrl => {
                 let mut b = [0; 4];
                 e.insert(c.encode_utf8(&mut b));
+                if c == ':' {
+                    e.shortcode(&Lookup { users: &self.users, chans: &self.chans, emoji: &self.emoji, pictures: self.picker.is_some() });
+                }
             }
             _ => {}
         }
@@ -304,11 +325,10 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     };
     let input_w = inner.width.saturating_sub(6) as usize;
     let rows = t.editor.rows(input_w);
-    let cursor = t.editor.position(&rows);
     let empty = t.editor.text.is_empty();
     let (broadcast, scroll, loaded) = (t.broadcast, t.scroll, t.loaded);
     let mut list = t.msgs.clone();
-    let input_rows = rows.len().clamp(1, MAX_INPUT_ROWS) as u16;
+    let input_rows = rows.len().clamp(1, MAX_INPUT_ROWS) as u16 + crate::attach::rows(app, true);
     let [header, msgs, input, toggle] =
         Layout::vertical([Constraint::Length(2), Constraint::Min(1), Constraint::Length(input_rows + 2), Constraint::Length(1)])
             .areas(inner);
@@ -338,7 +358,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     }
     let body = msgs.inner(Margin { horizontal: 1, vertical: 0 });
     let width = body.width as usize;
-    let names = Names { users: &app.users.names, chans: &app.chans, emoji: &app.emoji.custom };
+    let names = app.names();
     let font = app.picker.as_ref().map(|p| p.font_size()).map(|s| (s.width, s.height));
     let mut r = message_lines(&list[..list.len().min(1)], None, &names, app, width, font);
     if replies > 0 {
@@ -386,20 +406,15 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     };
     let text_area = block.inner(boxed).inner(Margin { horizontal: 1, vertical: 0 });
     f.render_widget(block, boxed);
+    let (text_area, cards) = crate::attach::split(app, text_area, true);
+    crate::attach::draw(f, app, cards, true);
     if empty {
         f.render_widget(Paragraph::new(tr("Reply…", "Responder…")).style(dim()), text_area);
         if focused {
             f.set_cursor_position((text_area.x, text_area.y));
         }
     } else {
-        let (cr, cc) = cursor;
-        let h = text_area.height as usize;
-        let top = (cr + 1).saturating_sub(h);
-        let lines: Vec<Line> = rows[top..].iter().take(h).map(|r| Line::from(r.chars.iter().collect::<String>())).collect();
-        f.render_widget(Paragraph::new(lines), text_area);
-        if focused {
-            f.set_cursor_position((text_area.x + cc as u16, text_area.y + (cr - top) as u16));
-        }
+        crate::editor::draw(f, app, true, text_area, focused);
     }
 
     // "Também enviar para #canal", a checkbox to click or Ctrl+B.

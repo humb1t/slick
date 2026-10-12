@@ -23,6 +23,9 @@ screen (from a local cache) and refreshes in the background.
 - Channels, DMs and group DMs, with Slack's sidebar sections, starred
   conversations and unread counts; drag to reorder, collapse sections.
 - Fuzzy search over conversations by several words, with the matches highlighted.
+- Real time, over Slack's own websocket: new messages, unread counts and
+  "is typing" (under the message box, and as "•••" in the sidebar) arrive as
+  they happen.
 - Threads in a side panel, with "also send to channel".
 - Reactions and a reaction picker; `:` autocomplete in the message box.
 - Custom workspace emoji, animated ones included (played at the GIF's own pace).
@@ -178,6 +181,48 @@ for creating that app with the scopes slick uses.
 | click on an image | enlarge it (`o` opens it in the system viewer, `d` downloads it) |
 | `q` / `Ctrl+C` | quit |
 
+## Scripts, bars and widgets
+
+slick runs once per session: running `slick` again brings the open one to the
+front (Hyprland). The running slick publishes what is unread, with message
+previews, and takes commands, so other programs can build on it:
+
+```sh
+slick status --json                      # unread conversations, mentions, pause
+slick events                             # new messages, counts, pauses, as JSON lines
+slick open C0123 1760000000.000100       # that conversation, at that message
+slick dnd pause 60                       # pause notifications for an hour
+```
+
+Executables in `~/.config/slick/hooks/<event>.d/` run on each event (a sound
+on a DM, `notify-send` on a mention). The formats are in
+[docs/events.md](docs/events.md).
+
+## Omarchy plugin
+
+![Slack in the Omarchy bar: badges, the hover list, the menu and reactions floating up](landing/public/screens/omarchy-slack.webp)
+
+On [Omarchy](https://omarchy.org), the
+[Slack bar plugin](https://github.com/leonavas/omarchy-slack) (`leonavas.slack`)
+runs on slick and puts Slack in the bar in place of the tray icon:
+
+- red and blue badges for unread DMs and channel mentions;
+- a preview of the unread messages and of the reactions to yours on hover, a
+  click jumps to the conversation;
+- the emoji of a new reaction to your message floats up from the icon;
+- slick parked in the scratchpad (SUPER+S), a click shows or hides it;
+- a right-click menu: Launch on Login, Open in Scratchpad, pause notifications.
+
+```sh
+omarchy plugin add https://github.com/leonavas/omarchy-slack.git
+omarchy plugin enable leonavas.slack --section right
+```
+
+Update it with `omarchy plugin update leonavas.slack`, then
+`omarchy restart shell`. With the plugin in the bar, turn slick's own tray icon
+off in Settings (account menu), or with `tray = false` in the config. It will
+also be in Omarchy's plugin list soon.
+
 ## Config
 
 `~/.config/slick/config` (`$XDG_CONFIG_HOME` is honored; `%APPDATA%\slick\config`
@@ -189,8 +234,8 @@ on Windows), `key = value` per line:
 | `workspace` | the last workspace signed in to |
 | `sidebar_width`, `sidebar_avatars` | the sidebar's width and whether it shows photos, saved from the app |
 | `auto_update` | `false` turns off the update check |
-| `tray` | `false` hides the system tray icon (Linux; lit with unread DMs and mentions, a click focuses the window on Hyprland) |
-| `language` | `en-US` (default) or `pt-BR`; also switchable from the account menu (Language), which saves it here |
+| `tray` | `false` hides the system tray icon (Linux; lit with unread DMs and mentions, a click focuses the window on Hyprland); worth turning off when the Omarchy Slack plugin is in the bar; also in Settings, from the account menu |
+| `language` | `en-US` (default) or `pt-BR`; also switchable in Settings, from the account menu, which saves it here |
 
 The `SLICK_LANG` environment variable (`en-US`, `pt-BR`) takes priority over
 `language` in the config.

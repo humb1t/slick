@@ -3,7 +3,6 @@
 use crate::app::{App, Event, Focus};
 use crate::i18n::tr;
 use crate::slack::{parse_message, Message, Res, Slack};
-use crate::text::Names;
 use crate::ui::{dim, message_lines, place};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Alignment, Position, Rect};
@@ -257,7 +256,7 @@ pub fn draw(f: &mut Frame, app: &mut App, inner: Rect, chan: &str) {
             let empty = Paragraph::new(tr("No pinned messages in this conversation.", "Nenhuma mensagem fixada nesta conversa.")).style(dim()).alignment(Alignment::Center);
             return f.render_widget(empty, middle);
         }
-        let names = Names { users: &app.users.names, chans: &app.chans, emoji: &app.emoji.custom };
+        let names = app.names();
         let font = app.picker.as_ref().map(|p| p.font_size()).map(|s| (s.width, s.height));
         let mut each = pins.iter().map(|p| message_lines(std::slice::from_ref(&p.msg), None, &names, app, inner.width as usize, font));
         let mut r = each.next().expect("not empty");

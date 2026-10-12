@@ -18,7 +18,17 @@ use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
 pub(crate) const POLL_EVERY: Duration = Duration::from_secs(3);
+/// Slack repeats "typing" every few seconds while someone types; this long
+/// after the last one, they stopped.
+const TYPING: Duration = Duration::from_secs(6);
+/// How long "copied to clipboard" stays beside what was copied.
+const COPIED_FOR: Duration = Duration::from_secs(2);
+/// With the websocket up, polls only catch what it might have missed.
+const LIVE_FALLBACK: Duration = Duration::from_secs(60);
+/// Presence polling, for when the websocket can't report it.
 const PRESENCE_EVERY: Duration = Duration::from_secs(60);
+/// How soon a change in the sidebar's DMs reaches the presence subscription.
+const WATCH_EVERY: Duration = Duration::from_secs(5);
 const COUNTS_EVERY: Duration = Duration::from_secs(15);
 const MAX_RECENTS: usize = 8;
 /// How long a message opened from "Fixados" stays highlighted.
@@ -73,8 +83,21 @@ pub enum Event {
     /// A newer release, installed or only announced.
     Update(crate::update::Note),
     /// Quitting from outside the terminal, like the tray's menu.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     Quit,
+    /// A command from another process, through the socket (`ipc`).
+    Remote(crate::ipc::Cmd),
+    /// Slack's websocket: something changed (`rtm`).
+    Live(crate::rtm::Ev),
+    /// A conversation that appeared after the list was loaded (`events::on_counts`).
+    Joined(Res<Conversation>),
+    /// A conversation's unread messages, for the preview other programs see (`events`).
+    Preview { chan: String, latest: String, res: Res<Vec<Message>> },
+    /// A pasted picture read from the clipboard, or pictures sent (`attach`).
+    Attach(crate::attach::Ev),
+    /// A person or channel a message mentioned: the name, and whether it's private.
+    Named { id: String, res: Res<(String, bool)> },
+    /// The DM opened by clicking a mention.
+    Dm(Res<Conversation>),
 }
 
 /// The login screen: the two values copied from a browser session.
@@ -197,7 +220,6 @@ pub enum Action {
     SectionUp(String),
     SectionDown(String),
     Collapse(String),
-    ToggleAvatars,
     NewMessage,
     NewChannel,
     /// The message menu's entries.
@@ -310,6 +332,8 @@ pub struct Areas {
     pub pins: crate::pins::Areas,
     /// "↓ Últimas mensagens", over the bottom of the conversation.
     pub latest: Rect,
+    /// "↑ Unread mentions" over the sidebar's edges, and the conversation each leads to.
+    pub mention_pills: Vec<(Rect, String)>,
     /// The account button, its menu and the status dialog.
     pub account: crate::account::Areas,
 }
@@ -320,6 +344,14 @@ pub struct App {
     pub me: Option<AuthInfo>,
     pub users: Users,
     pub chans: HashMap<String, String>,
+    /// Private channels, which messages link with a lock.
+    pub private: HashSet<String>,
+    /// Names of people and channels outside `users` and `convs`, looked up
+    /// when a message on screen mentions them.
+    pub others: HashMap<String, String>,
+    /// Mentions the last draw could not name; asked for once each.
+    pub unnamed: Vec<crate::blocks::Target>,
+    asked: HashSet<String>,
     pub convs: Vec<Conversation>,
     pub sections: Vec<Section>,
     pub stars: Vec<String>,
@@ -389,6 +421,8 @@ pub struct App {
     pub menu: Option<Menu>,
     pub emoji: emoji::Emoji,
     pub complete: emoji::Complete,
+    /// The `@` and `#` autocomplete over the message box.
+    pub mention: crate::mention::Mention,
     pub react: Option<emoji::ReactPicker>,
     /// The picked message, the edit and the forward dialog.
     pub edit: crate::edit::Edit,
@@ -402,11 +436,16 @@ pub struct App {
     pub compose_hover: bool,
     /// Your presence, pause and status, and the menu over the account button.
     pub account: crate::account::Account,
+    /// Pictures pasted into the message boxes, waiting to be sent.
+    pub attach: crate::attach::Attach,
     /// Whose data the cache holds.
     owner: String,
     pub status: String,
     /// A status that clears itself: the text and when it goes.
     pub status_until: Option<(String, Instant)>,
+    /// What was just copied from a card (`id`, `email`, `team`), shown
+    /// beside it for a moment since the status line sits under the popup.
+    pub copied: Option<(&'static str, Instant)>,
     /// A newer version, shown as the button by your name.
     pub update: Option<crate::update::State>,
     /// Quitting to run the updated binary.
@@ -418,6 +457,24 @@ pub struct App {
     polling: bool,
     last_poll: Instant,
     last_counts: Instant,
+    /// The terminal has the keyboard. While it doesn't, the open
+    /// conversation is not marked read and counts as unread like any other.
+    /// Off until the terminal says so or a key or click arrives: started
+    /// hidden (at login, in a scratchpad) nothing gets read unseen.
+    pub focused: bool,
+    /// What other programs are told: the snapshot and events (`events`).
+    pub events: crate::events::State,
+    /// Slack's websocket is up: polling only covers for it, slowly.
+    live: bool,
+    /// The websocket reported presence since it came up: no need to poll it.
+    presence_live: bool,
+    last_watch: Instant,
+    /// Who is typing where (conversation → person → when last heard), from the websocket.
+    pub typing: HashMap<String, HashMap<String, Instant>>,
+    rtm_started: bool,
+    /// The counts asked for by the websocket, a moment after its first nudge,
+    /// so a burst of messages costs one request.
+    counts_at: Option<Instant>,
     pub dirty: bool,
     pub quit: bool,
 }
@@ -430,6 +487,10 @@ impl App {
             me: None,
             users: cache.users,
             chans: HashMap::new(),
+            private: HashSet::new(),
+            others: HashMap::new(),
+            unnamed: Vec::new(),
+            asked: HashSet::new(),
             convs: cache.convs,
             sections: cache.sections,
             stars: cache.stars,
@@ -474,6 +535,7 @@ impl App {
             menu: None,
             emoji: cache.emoji,
             complete: emoji::Complete::default(),
+            mention: Default::default(),
             react: None,
             edit: Default::default(),
             selection: None,
@@ -483,23 +545,37 @@ impl App {
             dialog: None,
             compose_hover: false,
             account: Default::default(),
+            attach: Default::default(),
             owner: cache.owner,
             status: tr("connecting…", "conectando…").into(),
             update: None,
             restart: false,
             status_until: None,
+            copied: None,
             error: None,
             loading: HashSet::new(),
             no_older: HashSet::new(),
             polling: false,
             last_poll: Instant::now(),
             last_counts: Instant::now(),
+            focused: false,
+            events: Default::default(),
+            live: false,
+            presence_live: false,
+            last_watch: Instant::now(),
+            typing: HashMap::new(),
+            rtm_started: false,
+            counts_at: None,
             dirty: true,
             quit: false,
         };
         app.resort();
         if logged_in {
             app.refresh();
+            // Back where it was left; a `slick open` arriving next replaces it.
+            if let Some(id) = cache.current.filter(|id| app.convs.iter().any(|c| &c.id == id)) {
+                app.open(id);
+            }
         } else {
             app.open_login(None);
         }
@@ -523,6 +599,7 @@ impl App {
             stars: self.stars.clone(),
             collapsed: self.collapsed.clone(),
             recents: self.recents.clone(),
+            current: self.current.clone(),
             messages,
             boot: self.boot.clone(),
             emoji: self.emoji.clone(),
@@ -562,6 +639,17 @@ impl App {
     }
 
     // ---- conversations -------------------------------------------------
+
+    pub fn names(&self) -> crate::text::Names<'_> {
+        crate::text::Names {
+            users: &self.users.names,
+            chans: &self.chans,
+            emoji: &self.emoji.custom,
+            others: &self.others,
+            private: &self.private,
+            me: self.me.as_ref().map(|m| m.user_id.as_str()).unwrap_or(""),
+        }
+    }
 
     pub fn is_me(&self, uid: &str) -> bool {
         self.me.as_ref().is_some_and(|m| m.user_id == uid)
@@ -612,10 +700,11 @@ impl App {
         keyed.sort_by(|a, b| a.0.cmp(&b.0));
         self.convs = keyed.into_iter().map(|k| k.1).collect();
         self.chans = self.convs.iter().map(|c| (c.id.clone(), c.name.clone())).collect();
+        self.private.extend(self.convs.iter().filter(|c| c.kind == Kind::Private).map(|c| c.id.clone()));
     }
 
     pub fn unread(&self, id: &str) -> (bool, u64) {
-        if self.current.as_deref() == Some(id) {
+        if self.focused && self.current.as_deref() == Some(id) {
             return (false, 0);
         }
         self.counts.get(id).map(|c| (c.unread, c.mentions)).unwrap_or((false, 0))
@@ -864,7 +953,9 @@ impl App {
         self.recents.retain(|r| r != &id);
         self.recents.insert(0, id.clone());
         self.recents.truncate(MAX_RECENTS);
-        if let Some(c) = self.counts.get_mut(&id) {
+        // Out of focus (opened from outside) it stays unread until the window
+        // gets the keyboard, which then marks it read (`set_focused`).
+        if let Some(c) = self.counts.get_mut(&id).filter(|_| self.focused) {
             c.unread = false;
             c.mentions = 0;
         }
@@ -892,7 +983,7 @@ impl App {
         }
     }
 
-    fn fetch(&mut self, chan: String, fetch: Fetch) {
+    pub(crate) fn fetch(&mut self, chan: String, fetch: Fetch) {
         let key = format!("{chan}:{}", fetch as u8);
         if !self.loading.insert(key) {
             return;
@@ -945,6 +1036,38 @@ impl App {
         Some((i, now + left.max(Duration::from_millis(20))))
     }
 
+    /// Names who and what the last draw mentioned without knowing; with the
+    /// lists still loading, everyone would look unknown.
+    pub fn request_names(&mut self) {
+        use crate::blocks::Target;
+        for t in std::mem::take(&mut self.unnamed) {
+            let (id, person) = match t {
+                Target::User(id) if !self.users.names.is_empty() => (id, true),
+                Target::Channel(id) if !self.convs.is_empty() => (id, false),
+                _ => continue,
+            };
+            if self.others.contains_key(&id) || !self.asked.insert(id.clone()) {
+                continue;
+            }
+            self.spawn(move |s| {
+                let res = if person {
+                    s.profile(&id).map(|p| (p.name, false))
+                } else {
+                    s.conversation(&id).map(|c| (c.name, c.kind == Kind::Private))
+                };
+                Event::Named { id, res }
+            });
+        }
+    }
+
+    /// A click on a mention: the person's DM, opened in Slack when there's none yet.
+    pub(crate) fn open_dm(&mut self, uid: String) {
+        match self.dm_with(&uid) {
+            Some(id) => self.open(id),
+            None => self.spawn(move |s| Event::Dm(s.open_conversation(&[uid]))),
+        }
+    }
+
     /// Downloads what the last draw asked for; files are kept on disk.
     pub fn request_images(&mut self) {
         for r in std::mem::take(&mut self.wanted) {
@@ -972,10 +1095,9 @@ impl App {
         }
     }
 
-    /// People in the sidebar's DMs, checked one by one to stay under the rate limit.
-    fn refresh_presence(&mut self) {
-        let uids: Vec<String> = self
-            .rows()
+    /// The people in the sidebar's DMs, whose presence is followed.
+    fn presence_uids(&self) -> Vec<String> {
+        self.rows()
             .iter()
             .filter_map(|r| match r {
                 Row::Conv(i) if self.convs[*i].kind == Kind::Direct => self.convs[*i].user.clone(),
@@ -983,8 +1105,15 @@ impl App {
             })
             .filter(|u| !self.users.bots.contains(u))
             .take(40)
-            .collect();
-        if uids.is_empty() {
+            .collect()
+    }
+
+    /// People in the sidebar's DMs, checked one by one to stay under the rate
+    /// limit. Not while the websocket reports their presence itself.
+    fn refresh_presence(&mut self) {
+        let uids = self.presence_uids();
+        self.watch_presence(uids.clone());
+        if uids.is_empty() || (self.live && self.presence_live) {
             return;
         }
         self.spawn(move |s| {
@@ -1216,11 +1345,6 @@ impl App {
     /// The right-click menu for a sidebar row, at a screen position.
     fn open_menu(&mut self, row: usize, x: u16, y: u16) {
         let rows = self.rows();
-        let photos = if self.sidebar_avatars {
-            tr("Hide photos in the list", "Ocultar fotos na lista")
-        } else {
-            tr("Show photos in the list", "Mostrar fotos na lista")
-        };
         let items: Vec<(String, Action)> = match rows.get(row) {
             Some(Row::Conv(i)) => {
                 let c = &self.convs[*i];
@@ -1242,8 +1366,6 @@ impl App {
                     (tr("Copy name", "Copiar nome").to_string(), Action::CopyName(self.label(c))),
                     (tr("Copy link", "Copiar link").to_string(), Action::CopyLink(self.conv_url(&id))),
                     (tr("Open in browser", "Abrir no navegador").to_string(), Action::Browser(self.conv_url(&id))),
-                    ("".to_string(), Action::Separator),
-                    (photos.to_string(), Action::ToggleAvatars),
                 ]);
                 if matches!(c.kind, Kind::Direct | Kind::Group) {
                     items.push(("".to_string(), Action::Separator));
@@ -1255,8 +1377,6 @@ impl App {
                 (tr("Move section up", "Mover seção para cima").to_string(), Action::SectionUp(key.clone())),
                 (tr("Move section down", "Mover seção para baixo").to_string(), Action::SectionDown(key.clone())),
                 ((if *collapsed { tr("Expand", "Expandir") } else { tr("Collapse", "Recolher") }).to_string(), Action::Collapse(key.clone())),
-                ("".to_string(), Action::Separator),
-                (photos.to_string(), Action::ToggleAvatars),
             ],
             _ => return,
         };
@@ -1308,10 +1428,6 @@ impl App {
                 if !self.collapsed.remove(&key) {
                     self.collapsed.insert(key);
                 }
-            }
-            Action::ToggleAvatars => {
-                self.sidebar_avatars = !self.sidebar_avatars;
-                let _ = config::set(&[("sidebar_avatars", self.sidebar_avatars.to_string())]);
             }
             Action::NewMessage => self.dialog = Some(crate::compose::Dialog::Message(Default::default())),
             Action::NewChannel => self.dialog = Some(crate::compose::Dialog::Channel(Default::default())),
@@ -1429,12 +1545,25 @@ impl App {
         if self.last_presence.elapsed() >= PRESENCE_EVERY && !self.convs.is_empty() {
             self.last_presence = Instant::now();
             self.refresh_presence();
+            self.refresh_dnd();
         }
-        if self.last_counts.elapsed() >= COUNTS_EVERY {
+        // A DM that joined or left the sidebar joins or leaves the subscription.
+        if self.live && self.last_watch.elapsed() >= WATCH_EVERY && !self.convs.is_empty() {
+            self.last_watch = Instant::now();
+            let uids = self.presence_uids();
+            self.watch_presence(uids);
+        }
+        let counts_every = if self.live { LIVE_FALLBACK } else { COUNTS_EVERY };
+        if self.counts_at.is_some_and(|t| t <= Instant::now()) || self.last_counts.elapsed() >= counts_every {
+            self.counts_at = None;
             self.last_counts = Instant::now();
             self.spawn(|s| Event::Counts(s.counts()));
         }
         self.poll_thread();
+        if self.copied.is_some_and(|(_, at)| at.elapsed() >= COPIED_FOR) {
+            self.copied = None;
+            self.dirty = true;
+        }
         // Only if nothing replaced it in the meantime.
         if let Some((text, at)) = &self.status_until {
             if Instant::now() >= *at {
@@ -1445,12 +1574,20 @@ impl App {
                 self.status_until = None;
             }
         }
+        let before = self.typing.values().map(HashMap::len).sum::<usize>();
+        self.typing.retain(|_, t| {
+            t.retain(|_, at| at.elapsed() < TYPING);
+            !t.is_empty()
+        });
+        if self.typing.values().map(HashMap::len).sum::<usize>() != before {
+            self.dirty = true;
+        }
         if self.flash.as_ref().is_some_and(|(_, at)| at.elapsed() >= FLASH) {
             self.flash = None;
             self.dirty = true;
         }
         let Some(chan) = self.current.clone() else { return };
-        if self.polling || self.last_poll.elapsed() < POLL_EVERY || !self.messages.contains_key(&chan) {
+        if self.polling || self.last_poll.elapsed() < self.poll_every() || !self.messages.contains_key(&chan) {
             return;
         }
         if self.loading.contains(&format!("{chan}:{}", Fetch::Initial as u8)) {
@@ -1478,6 +1615,10 @@ impl App {
         };
         match ev {
             Event::Auth(Ok(me)) => {
+                if !self.rtm_started {
+                    self.rtm_started = true;
+                    crate::rtm::start(self.slack.clone(), self.tx.clone());
+                }
                 // Another account: nothing cached belongs to it.
                 if !self.owner.is_empty() && self.owner != me.user_id {
                     self.convs.clear();
@@ -1487,7 +1628,11 @@ impl App {
                     self.recents.clear();
                     self.users = Users::default();
                     self.emoji = emoji::Emoji::default();
+                    // The conversation reopened from the cache was the other account's.
                     self.current = None;
+                    self.thread = None;
+                    self.pins = Default::default();
+                    self.focus = Focus::Sidebar;
                 }
                 self.owner = me.user_id.clone();
                 self.status.clear();
@@ -1516,8 +1661,27 @@ impl App {
                 self.error = Some(e);
                 self.spawn(|s| Event::Vips(s.vips()));
             }
-            Event::Counts(Ok(c)) => self.counts = c,
+            Event::Counts(Ok(c)) => self.on_counts(c),
             Event::Quit => self.quit = true,
+            Event::Remote(cmd) => self.on_remote(cmd),
+            Event::Preview { chan, latest, res } => self.on_preview(chan, latest, res),
+            Event::Attach(e) => self.on_attach(e),
+            Event::Joined(Ok(c)) => {
+                if !self.convs.iter().any(|x| x.id == c.id) {
+                    self.convs.push(c);
+                    self.resort();
+                }
+            }
+            Event::Joined(Err(_)) => {}
+            Event::Named { id, res: Ok((name, private)) } => {
+                if private {
+                    self.private.insert(id.clone());
+                }
+                self.others.insert(id, name);
+            }
+            Event::Named { res: Err(_), .. } => {}
+            Event::Dm(res) => self.dm_opened(res),
+            Event::Live(ev) => self.on_live(ev),
             // Sections and counts are session-token only; without them the
             // sidebar falls back to favourites, DMs and channels.
             Event::Sections(Err(_)) | Event::Counts(Err(_)) => {}
@@ -1538,7 +1702,7 @@ impl App {
                 Err(e) => {
                     self.error = Some(e);
                     if self.editor.is_empty() && self.current.as_deref() == Some(chan.as_str()) {
-                        self.editor.set(text);
+                        self.editor.load(&text, false, &crate::editor::Lookup { users: &self.users, chans: &self.chans, emoji: &self.emoji, pictures: self.picker.is_some() });
                     }
                 }
             },
@@ -1550,7 +1714,7 @@ impl App {
                 }
                 self.images.insert(key, res.map(Img::Ready).unwrap_or(Img::Failed));
             }
-            Event::Presence(p) => self.presence.extend(p),
+            Event::Presence(p) => self.on_presence(p.into_iter().collect()),
             Event::Profile { uid, res } => match res {
                 Ok(p) => {
                     if let Some(card) = self.profile.as_mut().filter(|(u, _)| *u == uid) {
@@ -1606,6 +1770,131 @@ impl App {
                 }
                 self.spawn(|s| Event::Sections(s.sections()));
             }
+        }
+    }
+
+    /// How often the open conversation and thread are fetched: often without
+    /// the websocket, rarely with it, since it says when there is news.
+    pub(crate) fn poll_every(&self) -> Duration {
+        if self.live { LIVE_FALLBACK } else { POLL_EVERY }
+    }
+
+    /// Who is typing in a conversation, by name, most recent last.
+    pub fn typing_in(&self, chan: &str) -> Vec<String> {
+        let Some(t) = self.typing.get(chan) else { return Vec::new() };
+        let mut who: Vec<(&String, &Instant)> = t.iter().filter(|(_, at)| at.elapsed() < TYPING).collect();
+        who.sort_by_key(|(_, at)| **at);
+        who.into_iter().map(|(u, _)| self.users.names.get(u).cloned().unwrap_or_else(|| u.clone())).collect()
+    }
+
+    /// Fetches the counts in a moment, sooner than the next poll.
+    fn counts_soon(&mut self) {
+        let at = Instant::now() + Duration::from_millis(250);
+        self.counts_at = Some(self.counts_at.map_or(at, |t| t.min(at)));
+    }
+
+    /// The websocket says something changed: fetch it now.
+    fn on_live(&mut self, ev: crate::rtm::Ev) {
+        use crate::rtm::Ev;
+        match ev {
+            Ev::Up => {
+                self.live = true;
+                // Whatever happened while it was down.
+                self.counts_soon();
+                self.last_poll = Instant::now() - POLL_EVERY;
+            }
+            Ev::Down => {
+                // Polling takes presence back on its next round.
+                self.live = false;
+                self.presence_live = false;
+            }
+            Ev::Reaction { added, chan, ts, name, user, item_user } => {
+                self.on_reaction(added, &chan, &ts, &name, &user, item_user.as_deref());
+                // The conversation shows the new count as before.
+                self.on_live(Ev::Message { chan, thread: None, user: None });
+            }
+            Ev::Presence(p) => {
+                self.presence_live = true;
+                self.on_presence(p);
+            }
+            // Away set by hand somewhere else: the account says which.
+            Ev::MyPresence => self.refresh_account(false),
+            Ev::Typing { chan, user } => {
+                if !self.is_me(&user) {
+                    self.typing.entry(chan).or_default().insert(user, Instant::now());
+                }
+            }
+            Ev::Message { chan, thread, user } => {
+                // The message they were typing arrived.
+                if let (Some(u), Some(t)) = (user, self.typing.get_mut(&chan)) {
+                    t.remove(&u);
+                }
+                self.counts_soon();
+                if self.current.as_deref() == Some(chan.as_str()) && !self.polling && self.messages.contains_key(&chan) {
+                    self.polling = true;
+                    self.last_poll = Instant::now();
+                    self.fetch(chan.clone(), Fetch::Poll);
+                }
+                let open = self.thread.as_ref().is_some_and(|t| t.chan == chan && (thread.is_none() || thread.as_deref() == Some(t.ts.as_str())));
+                if open {
+                    self.refresh_thread();
+                }
+            }
+            Ev::Counts => self.counts_soon(),
+            Ev::Dnd => self.refresh_dnd(),
+            Ev::Convs => self.spawn(|s| Event::Convs(s.conversations())),
+        }
+    }
+
+    /// The terminal got or lost the keyboard. Coming back reads what arrived
+    /// in the open conversation meanwhile.
+    pub fn set_focused(&mut self, focused: bool) {
+        if self.focused == focused {
+            return;
+        }
+        self.focused = focused;
+        self.dirty = true;
+        let Some(chan) = self.current.clone().filter(|_| focused) else { return };
+        if let Some(c) = self.counts.get_mut(&chan).filter(|c| c.unread || c.mentions > 0) {
+            c.unread = false;
+            c.mentions = 0;
+            self.mark_read(&chan);
+        }
+    }
+
+    /// A command from another process (`ipc`).
+    fn on_remote(&mut self, cmd: crate::ipc::Cmd) {
+        use crate::ipc::Cmd;
+        match cmd {
+            Cmd::Focus => focus_window(),
+            Cmd::Open { conv, ts, thread, focus } => {
+                if focus {
+                    focus_window();
+                }
+                if self.login.is_some() {
+                    return;
+                }
+                self.menu = None;
+                self.viewer = None;
+                self.dialog = None;
+                self.open(conv.clone());
+                let Some(ts) = ts else { return };
+                self.flash = Some((ts.clone(), Instant::now()));
+                match thread.filter(|t| *t != ts) {
+                    Some(parent) => {
+                        self.open_thread(parent.clone());
+                        if let Some(t) = self.thread.as_mut() {
+                            t.jump = Some(ts);
+                        }
+                        self.show_message(conv, parent);
+                    }
+                    None => self.show_message(conv, ts),
+                }
+            }
+            Cmd::MarkRead(conv) => self.run_action(Action::MarkRead(conv)),
+            Cmd::Pause(minutes) => self.pause_notifications(minutes),
+            Cmd::Resume => self.resume_notifications(),
+            Cmd::Quit => self.quit = true,
         }
     }
 
@@ -1692,7 +1981,7 @@ impl App {
         merged.extend(old.into_iter().filter(|m| end.as_ref().is_some_and(|e| m.ts > *e)));
         let grew = merged.last().map(|m| &m.ts) != last.as_ref();
         self.messages.insert(chan.to_string(), merged);
-        if grew && self.current.as_deref() == Some(chan) {
+        if grew && self.focused && self.current.as_deref() == Some(chan) {
             self.mark_read(chan);
         }
     }
@@ -1744,7 +2033,7 @@ impl App {
                 present
             }
         };
-        if grew && is_current {
+        if grew && is_current && self.focused {
             self.mark_read(chan);
         }
     }
@@ -1853,6 +2142,9 @@ impl App {
         self.emoji = emoji::Emoji::default();
         self.convs.clear();
         self.chans.clear();
+        self.private.clear();
+        self.others.clear();
+        self.asked.clear();
         self.sections.clear();
         self.stars.clear();
         self.vips.clear();
@@ -1941,6 +2233,8 @@ impl App {
             return self.profile_paste(s);
         }
         match self.focus {
+            // A pasted picture arrives empty: the terminal can't carry it.
+            Focus::Input | Focus::Thread if s.is_empty() => self.paste_clipboard(self.focus == Focus::Thread),
             Focus::Input => self.editor.insert(s),
             Focus::Filter => self.filter.push_str(s.lines().next().unwrap_or("")),
             Focus::Thread => self.thread.iter_mut().for_each(|t| t.editor.insert(s)),
@@ -1979,6 +2273,9 @@ impl App {
         }
         if self.account.about {
             return self.about_key(k);
+        }
+        if self.account.settings.is_some() {
+            return self.settings_key(k);
         }
         if ctrl && k.code == KeyCode::Char('n') {
             self.account.menu = None;
@@ -2023,7 +2320,7 @@ impl App {
         if k.code == KeyCode::Esc && self.selection.take().is_some_and(|s| s.moved) {
             return;
         }
-        if self.focus == Focus::Input && self.emoji_key(k) {
+        if self.emoji_key(k) || self.mention_key(k) {
             return;
         }
         if self.edit_key(k) {
@@ -2155,6 +2452,7 @@ impl App {
             KeyCode::Char('j') if ctrl => self.editor.insert("\n"),
             // Clears the whole box, handy when editing a message.
             KeyCode::Char('d') if ctrl => self.editor.set(String::new()),
+            KeyCode::Char('v') if ctrl => self.paste_clipboard(false),
             KeyCode::Enter => self.send(),
             KeyCode::Left => self.editor.left(),
             KeyCode::Right => self.editor.right(),
@@ -2172,6 +2470,7 @@ impl App {
                     self.scroll_down(1);
                 }
             }
+            KeyCode::Backspace if self.editor.text.is_empty() && self.drop_last(false) => {}
             KeyCode::Backspace if ctrl => self.editor.delete_word(),
             KeyCode::Backspace => self.editor.backspace(),
             KeyCode::Delete => self.editor.delete(),
@@ -2182,6 +2481,9 @@ impl App {
             KeyCode::Char(c) if !ctrl => {
                 let mut b = [0; 4];
                 self.editor.insert(c.encode_utf8(&mut b));
+                if c == ':' {
+                    self.editor.shortcode(&crate::editor::Lookup { users: &self.users, chans: &self.chans, emoji: &self.emoji, pictures: self.picker.is_some() });
+                }
             }
             _ => {}
         }
@@ -2196,10 +2498,13 @@ impl App {
             }
             return;
         }
-        let covered = self.menu.is_some() || self.viewer.is_some() || self.react.is_some() || self.dialog.is_some() || self.account.profile.is_some() || self.account.about;
+        let covered = self.menu.is_some() || self.viewer.is_some() || self.react.is_some() || self.dialog.is_some() || self.account.profile.is_some() || self.account.about || self.account.settings.is_some();
         if m.kind == MouseEventKind::Down(MouseButton::Left) && !covered && self.areas.latest.contains(at) {
             self.to_present();
             self.dirty = true;
+            return;
+        }
+        if !covered && self.account.menu.is_none() && self.edit.forward.is_none() && self.attach_mouse(m) {
             return;
         }
         if self.selection_mouse(m) {
@@ -2257,7 +2562,7 @@ impl App {
             }
             return;
         }
-        if self.emoji_mouse(m) {
+        if self.emoji_mouse(m) || self.mention_mouse(m) {
             return;
         }
         // Dragging the border resizes the sidebar.
@@ -2278,6 +2583,20 @@ impl App {
                 return;
             }
             _ => {}
+        }
+        // "↑ Unread mentions": scrolls to that conversation and selects it, without opening it.
+        if m.kind == MouseEventKind::Down(MouseButton::Left) {
+            if let Some((_, id)) = self.areas.mention_pills.iter().find(|(r, _)| r.contains(at)) {
+                let rows = self.rows();
+                let pos = rows.iter().position(|r| matches!(r, Row::Conv(i) if &self.convs[*i].id == id));
+                if pos.is_some() {
+                    self.sidebar_wheel = false;
+                    self.focus = Focus::Sidebar;
+                    self.list.select(pos);
+                }
+                self.dirty = true;
+                return;
+            }
         }
         // Sidebar rows: a click opens, a drag moves, a right click shows the menu.
         let in_side = self.areas.sidebar.contains(at);
@@ -2335,6 +2654,7 @@ impl App {
                     let id = self.me.as_ref().map(|m| m.team_id.clone()).unwrap_or_default();
                     self.copy(&id);
                     self.status = trf!("ID {id} copied", "ID {id} copiado");
+                    self.copied = Some(("team", Instant::now()));
                 } else if !self.areas.team_popup.contains(at) {
                     self.team_popup = false;
                 }
@@ -2365,12 +2685,14 @@ impl App {
             if self.areas.profile_id.contains(at) {
                 self.copy(&uid);
                 self.status = trf!("ID {uid} copied", "ID {uid} copiado");
+                self.copied = Some(("id", Instant::now()));
                 self.dirty = true;
                 return;
             }
             if let Some(p) = data.as_ref().filter(|p| !p.email.is_empty() && self.areas.profile_email.contains(at)) {
                 self.copy(&p.email);
                 self.status = tr("Email copied", "E-mail copiado").into();
+                self.copied = Some(("email", Instant::now()));
                 self.dirty = true;
                 return;
             }
@@ -2397,6 +2719,9 @@ impl App {
                         Some(u) => u.clone(),
                         None => self.message_url(self.current.as_deref().unwrap_or(""), &b.ts),
                     },
+                    // A channel we're not in opens all the same: its history reads fine.
+                    crate::blocks::Target::Channel(id) => return self.open(id.clone()),
+                    crate::blocks::Target::User(uid) => return self.open_dm(uid.clone()),
                 };
                 self.open_url(&url);
                 return;
@@ -2452,6 +2777,9 @@ impl App {
 
     fn send(&mut self) {
         let Some(chan) = self.current.clone() else { return };
+        if self.send_files(false) {
+            return;
+        }
         if self.editor.is_empty() {
             return;
         }
@@ -2511,4 +2839,10 @@ fn round_corners(img: DynamicImage) -> DynamicImage {
         p[3] = (p[3] as f32 * (r - d + 0.5).clamp(0.0, 1.0)) as u8;
     }
     DynamicImage::ImageRgba8(rgba)
+}
+
+/// Brings the terminal running slick to the front, where we know how (Hyprland).
+fn focus_window() {
+    #[cfg(target_os = "linux")]
+    crate::tray::focus();
 }

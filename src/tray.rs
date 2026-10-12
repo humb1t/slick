@@ -28,9 +28,11 @@ impl Tray {
             let Ok(handle) = item.assume_sni_available(true).spawn() else { return };
             for s in rx {
                 if handle.update(|i| i.state = s).is_none() {
-                    break;
+                    return;
                 }
             }
+            // The app dropped its side: turned off in the settings.
+            handle.shutdown().wait();
         });
         Tray { tx, last: None }
     }
@@ -117,7 +119,7 @@ impl ksni::Tray for Item {
 }
 
 /// Brings the terminal running slick to the front. Hyprland only.
-fn focus() {
+pub fn focus() {
     if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none() {
         return;
     }

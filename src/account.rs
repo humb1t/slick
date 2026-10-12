@@ -1,6 +1,6 @@
 //! The account button at the bottom of the sidebar and its menu, as in
 //! Slack: your status, away or active, pausing notifications, your profile,
-//! Slack's settings pages, the interface language and signing out.
+//! Slack's pages, slick's own settings (language, tray icon) and signing out.
 
 use crate::app::{App, Event};
 use crate::blocks::{CAP_L, CAP_R};
@@ -75,7 +75,6 @@ enum Item {
     Preferences,
     Settings,
     Downloads,
-    Language,
     CheckUpdate,
     About,
     Logout,
@@ -84,11 +83,9 @@ enum Item {
     /// Minutes; 0 is "until tomorrow".
     Pause(i64),
     NotifyPrefs,
-    // The language submenu.
-    Lang(Lang),
 }
 
-const MAIN: [Item; 13] = [
+const MAIN: [Item; 12] = [
     Item::Status,
     Item::Away,
     Item::Notifications,
@@ -97,7 +94,6 @@ const MAIN: [Item; 13] = [
     Item::Preferences,
     Item::Settings,
     Item::Downloads,
-    Item::Language,
     Item::Sep,
     Item::CheckUpdate,
     Item::About,
@@ -106,25 +102,25 @@ const MAIN: [Item; 13] = [
 
 impl Item {
     fn in_sub(self) -> bool {
-        matches!(self, Item::Resume | Item::Pause(_) | Item::NotifyPrefs | Item::Lang(_))
+        matches!(self, Item::Resume | Item::Pause(_) | Item::NotifyPrefs)
     }
 
     /// Opens a submenu beside the menu.
     fn has_sub(self) -> bool {
-        matches!(self, Item::Notifications | Item::Language)
+        self == Item::Notifications
     }
 }
 
 /// Notifications paused until `until`, by a snooze or by the schedule.
 #[derive(Clone, Copy)]
 pub struct Paused {
-    until: i64,
-    snooze: bool,
+    pub until: i64,
+    pub snooze: bool,
 }
 
 pub struct Popup {
     sel: Item,
-    /// The submenu of `sel` (notifications or language), open, with its selected row.
+    /// The notifications submenu, open, with its selected row.
     sub: Option<Item>,
     /// "Sign out" was chosen once; choosing it again signs out.
     confirm: bool,
@@ -162,6 +158,31 @@ pub struct Account {
     pub profile: Option<ProfileDialog>,
     /// "About slick", open.
     pub about: bool,
+    /// The settings dialog, open, with its selected row.
+    pub settings: Option<usize>,
+    /// The tray icon, on; main starts and stops it to match.
+    pub tray: bool,
+}
+
+/// The settings dialog's rows.
+#[derive(Clone, Copy, PartialEq)]
+enum Opt {
+    Lang(Lang),
+    /// Photos instead of presence dots next to DMs in the sidebar.
+    Photos,
+    #[cfg(target_os = "linux")]
+    Tray,
+    /// Slack's own account settings, in the browser.
+    Slack,
+}
+
+fn opts() -> Vec<Opt> {
+    let mut v: Vec<Opt> = Lang::ALL.into_iter().map(Opt::Lang).collect();
+    v.push(Opt::Photos);
+    #[cfg(target_os = "linux")]
+    v.push(Opt::Tray);
+    v.push(Opt::Slack);
+    v
 }
 
 pub struct ProfileDialog {
@@ -221,6 +242,8 @@ pub struct Areas {
     /// The site's and the repository's links in "About slick".
     about_site: Rect,
     about_link: Rect,
+    settings: Rect,
+    settings_rows: Vec<(Rect, usize)>,
     /// The update button by your name.
     update: Rect,
 }
@@ -235,7 +258,7 @@ fn presence(s: &Slack) -> Res<(bool, bool)> {
 }
 
 /// A snooze, or the schedule ("Não perturbe" from 20h to 8h) right now.
-fn dnd(s: &Slack) -> Res<Option<Paused>> {
+pub(crate) fn dnd(s: &Slack) -> Res<Option<Paused>> {
     dnd_of(s, &[])
 }
 
@@ -259,12 +282,12 @@ fn dnd_of(s: &Slack, params: &[(&str, &str)]) -> Res<Option<Paused>> {
 
 /// `num_minutes` must be a valid number: Slack takes anything else as
 /// "no snooze" and ends the current one.
-fn pause(s: &Slack, minutes: i64) -> Res<Option<Paused>> {
+pub(crate) fn pause(s: &Slack, minutes: i64) -> Res<Option<Paused>> {
     s.call("dnd.setSnooze", &[("num_minutes", &minutes.max(1).to_string())])?;
     dnd(s)
 }
 
-fn resume(s: &Slack, snooze: bool) -> Res<Option<Paused>> {
+pub(crate) fn resume(s: &Slack, snooze: bool) -> Res<Option<Paused>> {
     s.call(if snooze { "dnd.endSnooze" } else { "dnd.endDnd" }, &[])?;
     dnd(s)
 }
@@ -392,7 +415,7 @@ fn until_tomorrow() -> i64 {
 
 /// "until 2:30 PM", "until tomorrow, 8:00 AM", "until Oct 17, 8:00 AM";
 /// "até 14h30", "até amanhã, 08h00", "até 17/10, 08h00".
-fn until(ts: i64) -> String {
+pub(crate) fn until(ts: i64) -> String {
     let Some(t) = Local.timestamp_opt(ts, 0).single() else { return String::new() };
     let today = Local::now().date_naive();
     let hhmm = i18n::clock(&t);
@@ -420,16 +443,9 @@ fn step(items: &[Item], cur: Item, delta: isize) -> Item {
     items[i as usize]
 }
 
-/// The rows of `parent`'s submenu; those without an item are only text.
-fn sub_rows(app: &App, parent: Item) -> Vec<(Option<Item>, String, String)> {
+/// The notifications submenu's rows; those without an item are only text.
+fn sub_rows(app: &App, _parent: Item) -> Vec<(Option<Item>, String, String)> {
     let mut rows = Vec::new();
-    if parent == Item::Language {
-        for l in Lang::ALL {
-            let mark = if l == i18n::lang() { "✓" } else { "" };
-            rows.push((Some(Item::Lang(l)), l.label().to_string(), mark.to_string()));
-        }
-        return rows;
-    }
     let state = match app.account.paused {
         Some(p) => trf!("{PAUSED} Paused {}", "{PAUSED} Pausadas {}", until(p.until)),
         None => tr("Notifications on", "Notificações ativas").into(),
@@ -459,11 +475,8 @@ fn sub_items(app: &App, parent: Item) -> Vec<Item> {
     sub_rows(app, parent).into_iter().filter_map(|(i, ..)| i).collect()
 }
 
-/// The row a submenu opens on: the current language, else the first item.
+/// The row a submenu opens on: its first item.
 fn first_sub(app: &App, parent: Item) -> Option<Item> {
-    if parent == Item::Language {
-        return Some(Item::Lang(i18n::lang()));
-    }
     sub_items(app, parent).into_iter().find(|i| *i != Item::Sep)
 }
 
@@ -509,6 +522,21 @@ impl App {
         }
     }
 
+    /// Your pause alone: it ends, or gets set elsewhere, without telling us.
+    pub(crate) fn refresh_dnd(&self) {
+        self.spawn(|s| Event::Account(Ev::Dnd(dnd(s))));
+    }
+
+    /// Pauses notifications, as from the menu, for `minutes`.
+    pub(crate) fn pause_notifications(&self, minutes: i64) {
+        self.spawn(move |s| Event::Account(Ev::DndSaved(pause(s, minutes))));
+    }
+
+    pub(crate) fn resume_notifications(&self) {
+        let snooze = self.account.paused.is_none_or(|p| p.snooze);
+        self.spawn(move |s| Event::Account(Ev::DndSaved(resume(s, snooze))));
+    }
+
     /// Once per opening of a DM: is the other person paused?
     pub(crate) fn refresh_user_dnd(&self, uid: String) {
         self.spawn(move |s| {
@@ -523,7 +551,7 @@ impl App {
                 self.account.online = online;
                 self.account.away = away;
                 if let Some(me) = self.my_id() {
-                    self.presence.insert(me, online);
+                    self.on_presence(vec![(me, online)]);
                 }
             }
             Ev::Dnd(Ok(p)) | Ev::DndSaved(Ok(p)) => self.account.paused = p,
@@ -756,7 +784,7 @@ impl App {
         self.account.away = away;
         self.account.online = !away;
         if let Some(me) = self.my_id() {
-            self.presence.insert(me, !away);
+            self.on_presence(vec![(me, !away)]);
         }
     }
 
@@ -800,24 +828,21 @@ impl App {
             Item::Sep => close = false,
             Item::Status => self.open_status_dialog(),
             Item::Away => self.toggle_away(),
-            Item::Notifications | Item::Language => {
+            Item::Notifications => {
                 close = false;
                 let first = first_sub(self, item);
                 if let Some(p) = self.account.menu.as_mut() {
                     (p.sel, p.sub) = (item, first);
                 }
-                if item == Item::Notifications {
-                    self.spawn(|s| Event::Account(Ev::Level(level(s))));
-                }
+                self.spawn(|s| Event::Account(Ev::Level(level(s))));
             }
-            Item::Lang(l) => self.set_language(l),
             Item::Profile => {
                 if let Some(me) = self.my_id() {
                     self.open_profile(me);
                 }
             }
             Item::Preferences => page(self, "account/preferences").iter().for_each(|u| self.open_url(u)),
-            Item::Settings => page(self, "account/settings").iter().for_each(|u| self.open_url(u)),
+            Item::Settings => self.open_settings(),
             Item::NotifyPrefs => page(self, "account/notifications").iter().for_each(|u| self.open_url(u)),
             Item::Downloads => {
                 let dir = files::downloads_dir();
@@ -836,14 +861,8 @@ impl App {
                     close = false;
                 }
             }
-            Item::Resume => {
-                let snooze = self.account.paused.is_none_or(|p| p.snooze);
-                self.spawn(move |s| Event::Account(Ev::DndSaved(resume(s, snooze))));
-            }
-            Item::Pause(min) => {
-                let min = if min == 0 { until_tomorrow() } else { min };
-                self.spawn(move |s| Event::Account(Ev::DndSaved(pause(s, min))));
-            }
+            Item::Resume => self.resume_notifications(),
+            Item::Pause(min) => self.pause_notifications(if min == 0 { until_tomorrow() } else { min }),
         }
         if close {
             self.account.menu = None;
@@ -857,6 +876,53 @@ impl App {
         if let Err(e) = crate::config::set(&[("language", l.code().to_string())]) {
             self.error = Some(trf!("didn't save the language: {e}", "não salvou o idioma: {e}"));
         }
+    }
+
+    pub(crate) fn open_settings(&mut self) {
+        self.account.menu = None;
+        let first = opts().iter().position(|o| *o == Opt::Lang(i18n::lang())).unwrap_or(0);
+        self.account.settings = Some(first);
+        self.dirty = true;
+    }
+
+    /// Picks or flips a row; the dialog stays open.
+    fn choose_opt(&mut self, o: Opt) {
+        match o {
+            Opt::Lang(l) => self.set_language(l),
+            Opt::Photos => {
+                self.sidebar_avatars = !self.sidebar_avatars;
+                if let Err(e) = crate::config::set(&[("sidebar_avatars", self.sidebar_avatars.to_string())]) {
+                    self.error = Some(trf!("didn't save the setting: {e}", "não salvou a configuração: {e}"));
+                }
+            }
+            #[cfg(target_os = "linux")]
+            Opt::Tray => {
+                self.account.tray = !self.account.tray;
+                if let Err(e) = crate::config::set(&[("tray", self.account.tray.to_string())]) {
+                    self.error = Some(trf!("didn't save the setting: {e}", "não salvou a configuração: {e}"));
+                }
+            }
+            Opt::Slack => {
+                if let Some(u) = self.team_url() {
+                    self.open_url(&format!("{u}/account/settings"));
+                }
+            }
+        }
+        self.dirty = true;
+    }
+
+    pub(crate) fn settings_key(&mut self, k: KeyEvent) {
+        let Some(sel) = self.account.settings else { return };
+        let all = opts();
+        let n = all.len();
+        match k.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.account.settings = None,
+            KeyCode::Up | KeyCode::Char('k') | KeyCode::BackTab => self.account.settings = Some((sel + n - 1) % n),
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => self.account.settings = Some((sel + 1) % n),
+            KeyCode::Enter | KeyCode::Char(' ') => self.choose_opt(all[sel]),
+            _ => {}
+        }
+        self.dirty = true;
     }
 
     pub(crate) fn about_key(&mut self, k: KeyEvent) {
@@ -997,6 +1063,26 @@ impl App {
             return true;
         }
         let a = &self.areas.account;
+        if self.account.settings.is_some() {
+            let hit = a.settings_rows.iter().find(|(r, _)| r.contains(at)).map(|(_, i)| *i);
+            let outside = !a.settings.contains(at);
+            match m.kind {
+                MouseEventKind::Moved => {
+                    if let Some(i) = hit {
+                        self.account.settings = Some(i);
+                    }
+                }
+                _ if left && hit.is_some() => {
+                    let i = hit.unwrap_or(0);
+                    self.account.settings = Some(i);
+                    self.choose_opt(opts()[i]);
+                }
+                MouseEventKind::Down(_) if outside => self.account.settings = None,
+                _ => return true,
+            }
+            self.dirty = true;
+            return true;
+        }
         if self.account.about {
             if left && a.about_site.contains(at) {
                 self.open_url(&format!("https://{SITE}"));
@@ -1188,7 +1274,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     a.presets.clear();
     a.picker_rows.clear();
     a.fields.clear();
-    (a.photo, a.about, a.about_site, a.about_link) = Default::default();
+    (a.photo, a.about, a.about_site, a.about_link, a.settings) = Default::default();
+    a.settings_rows.clear();
     if app.account.menu.is_some() {
         draw_menu(f, app);
     }
@@ -1200,6 +1287,79 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     if app.account.about {
         draw_about(f, app);
+    }
+    if app.account.settings.is_some() {
+        draw_settings(f, app);
+    }
+}
+
+/// slick's settings: the language, the sidebar's photos, the tray icon and a way to Slack's own.
+fn draw_settings(f: &mut Frame, app: &mut App) {
+    let Some(sel) = app.account.settings else { return };
+    let all = opts();
+    // A heading over each group, a blank line between groups.
+    let mut lines: Vec<(Option<usize>, Line)> = vec![(None, Line::from(""))];
+    let heading = |s: &str| Line::from(format!(" {s}")).style(dim().bold());
+    let mut last: Option<u8> = None;
+    for (i, o) in all.iter().enumerate() {
+        let group = match o {
+            Opt::Lang(_) => 0,
+            Opt::Photos => 1,
+            #[cfg(target_os = "linux")]
+            Opt::Tray => 2,
+            Opt::Slack => 3,
+        };
+        if last != Some(group) {
+            if last.is_some() {
+                lines.push((None, Line::from("")));
+            }
+            match group {
+                0 => lines.push((None, heading(tr("Language", "Idioma")))),
+                1 => lines.push((None, heading(tr("Sidebar", "Barra lateral")))),
+                2 => lines.push((None, heading(tr("System tray", "Bandeja do sistema")))),
+                _ => lines.push((None, heading("Slack"))),
+            }
+            last = Some(group);
+        }
+        let text = match o {
+            Opt::Lang(l) => format!("{} {}", if *l == i18n::lang() { "(•)" } else { "( )" }, l.label()),
+            Opt::Photos => format!("{} {}", if app.sidebar_avatars { "[✓]" } else { "[ ]" }, tr("Show photos in the list", "Mostrar fotos na lista")),
+            #[cfg(target_os = "linux")]
+            Opt::Tray => format!("{} {}", if app.account.tray { "[✓]" } else { "[ ]" }, tr("Show the tray icon", "Mostrar o ícone na bandeja")),
+            Opt::Slack => format!("{} ↗", tr("Account settings", "Configurações da conta")),
+        };
+        lines.push((Some(i), Line::from(text)));
+    }
+    lines.push((None, Line::from("")));
+    let hint = tr("↑↓ move · Enter picks · Esc closes", "↑↓ move · Enter escolhe · Esc fecha");
+    lines.push((None, Line::from(format!(" {hint}")).style(dim())));
+
+    let area = f.area();
+    let content_w = lines.iter().map(|(_, l)| l.width()).max().unwrap_or(0) as u16;
+    let (w, h) = ((content_w + 8).max(44).min(area.width), (lines.len() as u16 + 3).min(area.height));
+    let rect = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
+    f.render_widget(Clear, rect);
+    let title = Line::from(tr(" Settings ", " Configurações ")).bold();
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(dim()).title(title);
+    let inner = block.inner(rect).inner(Margin { horizontal: 1, vertical: 0 });
+    f.render_widget(block, rect);
+    app.areas.account.settings = rect;
+
+    for (n, (opt, line)) in lines.into_iter().enumerate() {
+        let row = Rect::new(inner.x, inner.y + n as u16, inner.width, 1);
+        if row.y >= inner.bottom() {
+            break;
+        }
+        let Some(i) = opt else {
+            f.render_widget(Paragraph::new(line), row);
+            continue;
+        };
+        let mark = if i == sel { Span::styled("› ", Style::new().fg(Color::Cyan).bold()) } else { Span::raw("  ") };
+        let style = if i == sel { Style::new().add_modifier(Modifier::REVERSED) } else { Style::new() };
+        let mut spans = vec![mark];
+        spans.extend(line.spans.into_iter().map(|s| s.patch_style(style)));
+        f.render_widget(Paragraph::new(Line::from(spans)), row);
+        app.areas.account.settings_rows.push((row, i));
     }
 }
 
@@ -1279,7 +1439,7 @@ enum Part {
 fn draw_profile_dialog(f: &mut Frame, app: &mut App) {
     let Some(d) = &app.account.profile else { return };
     let (field, photo, saving, tz) = (d.field, d.photo, d.saving, d.tz.clone());
-    let fields: Vec<Editor> = d.fields.iter().map(|e| Editor { text: e.text.clone(), cursor: e.cursor }).collect();
+    let fields: Vec<Editor> = d.fields.to_vec();
     let team = app.me.as_ref().map(|m| m.team.clone()).unwrap_or_else(|| "Slack".into());
     let area = f.area();
     let w = 64.min(area.width.saturating_sub(4));
@@ -1452,24 +1612,20 @@ fn draw_menu(f: &mut Frame, app: &mut App) {
             }
             Item::Away if app.account.away => padded(tr("Set yourself as active", "Defina seu status como ativo"), "", iw),
             Item::Away => padded(tr("Set yourself as away", "Defina seu status como ausente"), "", iw),
-            Item::Notifications | Item::Language => {
+            Item::Notifications => {
                 if *item == sel {
                     sub_y = row.y;
                     if sub.is_some() {
                         style = Style::new().bg(Color::Indexed(236));
                     }
                 }
-                if *item == Item::Language {
-                    padded(tr("Language", "Idioma"), &format!("{} ›", i18n::lang().name()), iw)
-                } else {
-                    let pause = if app.account.paused.is_some() { format!("{PAUSED} ") } else { String::new() };
-                    let level = truncate(app.account.level.as_deref().map_or("", level_label), iw.saturating_sub(20));
-                    padded(tr("Notifications", "Notificações"), &format!("{pause}{level} ›"), iw)
-                }
+                let pause = if app.account.paused.is_some() { format!("{PAUSED} ") } else { String::new() };
+                let level = truncate(app.account.level.as_deref().map_or("", level_label), iw.saturating_sub(20));
+                padded(tr("Notifications", "Notificações"), &format!("{pause}{level} ›"), iw)
             }
             Item::Profile => padded(tr("Profile", "Perfil"), "", iw),
             Item::Preferences => padded(tr("Preferences", "Preferências"), "↗", iw),
-            Item::Settings => padded(tr("Account settings", "Configurações da conta"), "↗", iw),
+            Item::Settings => padded(tr("Settings", "Configurações"), "", iw),
             Item::Downloads => padded("Downloads", "", iw),
             Item::About if app.update.is_some() => {
                 // The note faded, after the words.
@@ -1504,7 +1660,7 @@ fn draw_menu(f: &mut Frame, app: &mut App) {
     }
 }
 
-/// The notifications or language submenu, beside the menu.
+/// The notifications submenu, beside the menu.
 fn draw_sub(f: &mut Frame, app: &mut App, main: Rect, y: u16, parent: Item, sel: Item) {
     let rows = sub_rows(app, parent);
     let area = f.area();
