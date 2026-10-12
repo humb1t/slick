@@ -254,6 +254,12 @@ impl App {
         !matches!(c.kind, Kind::Direct | Kind::Group) && self.events.prefs.get(&c.id).is_some_and(Pref::quiet)
     }
 
+    /// A channel muted in Slack (not "mentions only"): the sidebar files it
+    /// under Silenced and never bolds it. DMs stay where they are.
+    pub(crate) fn muted(&self, c: &crate::slack::Conversation) -> bool {
+        !matches!(c.kind, Kind::Direct | Kind::Group) && self.events.prefs.get(&c.id).is_some_and(|p| p.muted)
+    }
+
     /// The new counts: conversations whose newest message moved get their
     /// unread messages fetched for the preview.
     pub(crate) fn on_counts(&mut self, counts: HashMap<String, Count>) {

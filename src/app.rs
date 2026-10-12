@@ -35,6 +35,9 @@ const MAX_RECENTS: usize = 8;
 const FLASH: Duration = Duration::from_secs(3);
 /// Without Slack's list of open DMs: how many the section shows, most recent first.
 const DM_LIMIT: usize = 15;
+/// The key of the section slick adds last for the channels muted in Slack.
+/// Not one of Slack's: it can't be moved, nor have conversations moved in.
+pub const SILENCED: &str = "slick:silenced";
 /// Slack's "hide inactive" hides what has been quiet this long.
 pub const SIDEBAR_DEFAULT: u16 = 32;
 pub const SIDEBAR_MIN: u16 = 18;
@@ -363,6 +366,8 @@ pub struct App {
     pub team_popup: bool,
     pub counts: HashMap<String, Count>,
     pub collapsed: HashSet<String>,
+    /// Silenced starts folded each time; its fold is kept here, not in the cache.
+    pub silenced_open: bool,
     pub recents: Vec<String>,
     pub messages: HashMap<String, Vec<Message>>,
     pub current: Option<String>,
@@ -499,6 +504,7 @@ impl App {
             vips: HashSet::new(),
             counts: HashMap::new(),
             collapsed: cache.collapsed,
+            silenced_open: false,
             recents: cache.recents,
             messages: cache.messages,
             current: None,
@@ -858,15 +864,26 @@ impl App {
         if !order.iter().any(|s| s.kind == "recent_apps") {
             order.push(&apps_section);
         }
+        // Like Slack's muting, but out of the way: channels muted there leave
+        // their sections for Silenced, last, by name. Before the preferences
+        // arrive nothing is muted, and the sidebar is as Slack has it.
+        let muted = |i: &usize| self.muted(&self.convs[*i]);
+        let silenced: Vec<usize> = (0..self.convs.len()).filter(|i| index.contains_key(self.convs[*i].id.as_str()) && muted(i)).collect();
+        let silenced_section =
+            Section { id: SILENCED.into(), kind: SILENCED.into(), name: String::new(), emoji: String::new(), ids: Vec::new() };
+        order.push(&silenced_section);
 
         let mut rows = Vec::new();
         for s in order {
-            let members: &[usize] = match s.kind.as_str() {
+            let all: &[usize] = match s.kind.as_str() {
                 "direct_messages" => &dms,
                 "recent_apps" => &apps,
                 "channels" => &channels,
+                SILENCED => &silenced,
                 _ => explicit.get(&s.id).map(Vec::as_slice).unwrap_or(&[]),
             };
+            let is_silenced = s.kind == SILENCED;
+            let members: Vec<usize> = all.iter().copied().filter(|i| is_silenced || !muted(i)).collect();
             if members.is_empty() {
                 continue;
             }
@@ -875,17 +892,27 @@ impl App {
                 "direct_messages" => tr("Direct messages", "Mensagens diretas").to_string(),
                 "channels" => tr("Channels", "Canais").to_string(),
                 "recent_apps" => "Apps".to_string(),
+                SILENCED => tr("Silenced", "Silenciados").to_string(),
                 _ => s.name.clone(),
             };
             let emoji = emojis::get_by_shortcode(&s.emoji).map(|e| format!("{} ", e.as_str())).unwrap_or_default();
-            let collapsed = self.collapsed.contains(&s.id);
-            let unread = collapsed && members.iter().any(|i| self.unread(&self.convs[*i].id).0);
+            let collapsed = if is_silenced { !self.silenced_open } else { self.collapsed.contains(&s.id) };
+            // Muted unread doesn't light a folded Silenced; its mentions show anyway.
+            let unread = collapsed && !is_silenced && members.iter().any(|i| self.unread(&self.convs[*i].id).0);
             if !rows.is_empty() {
                 rows.push(Row::Gap);
             }
             rows.push(Row::Header { key: s.id.clone(), title: format!("{emoji}{title}"), collapsed, unread });
             if !collapsed {
                 rows.extend(members.iter().map(|i| Row::Conv(*i)));
+            } else if is_silenced {
+                // Folded, it still lists what mentions you and the open one,
+                // as Slack does: a mention in a muted channel still counts.
+                let keep = |i: &&usize| {
+                    let id = &self.convs[**i].id;
+                    self.unread(id).1 > 0 || self.current.as_ref() == Some(id)
+                };
+                rows.extend(members.iter().filter(keep).map(|i| Row::Conv(*i)));
             }
         }
         rows
@@ -943,12 +970,19 @@ impl App {
             }
             Some(Row::Header { key, .. }) => {
                 let key = key.clone();
-                if !self.collapsed.remove(&key) {
-                    self.collapsed.insert(key);
-                }
+                self.toggle_section(key);
                 self.list.select(Some(row));
             }
             _ => {}
+        }
+    }
+
+    /// Folds or unfolds a sidebar section.
+    fn toggle_section(&mut self, key: String) {
+        if key == SILENCED {
+            self.silenced_open = !self.silenced_open;
+        } else if !self.collapsed.remove(&key) {
+            self.collapsed.insert(key);
         }
     }
 
@@ -1140,7 +1174,8 @@ impl App {
             .rows()
             .iter()
             .filter_map(|r| match r {
-                Row::Header { key, .. } => Some(key.clone()),
+                // Silenced is slick's, pinned last: neither moved nor passed.
+                Row::Header { key, .. } if key != SILENCED => Some(key.clone()),
                 _ => None,
             })
             .collect();
@@ -1231,8 +1266,9 @@ impl App {
     /// Drag and drop: a conversation onto another section, here and in Slack.
     fn move_conv(&mut self, id: String, to: String) {
         let kind = self.section_kind(&to);
-        // Apps lists app DMs on its own; nothing is moved into it.
-        if kind == "recent_apps" {
+        // Apps lists app DMs on its own, Silenced the muted channels; nothing
+        // is moved into them.
+        if kind == "recent_apps" || to == SILENCED {
             return;
         }
         let from = self
@@ -1278,7 +1314,7 @@ impl App {
             .rows()
             .iter()
             .filter_map(|r| match r {
-                Row::Header { key, .. } => Some(key.clone()),
+                Row::Header { key, .. } if key != SILENCED => Some(key.clone()),
                 _ => None,
             })
             .collect();
@@ -1376,6 +1412,9 @@ impl App {
                 }
                 items
             }
+            Some(Row::Header { key, collapsed, .. }) if key == SILENCED => {
+                vec![((if *collapsed { tr("Expand", "Expandir") } else { tr("Collapse", "Recolher") }).to_string(), Action::Collapse(key.clone()))]
+            }
             Some(Row::Header { key, collapsed, .. }) => vec![
                 (tr("Move section up", "Mover seção para cima").to_string(), Action::SectionUp(key.clone())),
                 (tr("Move section down", "Mover seção para baixo").to_string(), Action::SectionDown(key.clone())),
@@ -1427,11 +1466,7 @@ impl App {
             }
             Action::SectionUp(key) => self.move_section(&key, -1),
             Action::SectionDown(key) => self.move_section(&key, 1),
-            Action::Collapse(key) => {
-                if !self.collapsed.remove(&key) {
-                    self.collapsed.insert(key);
-                }
-            }
+            Action::Collapse(key) => self.toggle_section(key),
             Action::NewMessage => self.dialog = Some(crate::compose::Dialog::Message(Default::default())),
             Action::NewChannel => self.dialog = Some(crate::compose::Dialog::Channel(Default::default())),
             Action::Message(it) => close = self.message_action(it),

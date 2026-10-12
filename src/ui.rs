@@ -535,6 +535,8 @@ fn sidebar_row<'a>(app: &App, row: &Row, width: usize, photos: bool) -> ListItem
         Row::Conv(i) => {
             let c = &app.convs[*i];
             let (unread, mentions) = app.unread(&c.id);
+            // Like Slack: a muted channel stays dim; only a mention badges it.
+            let unread = unread && !app.muted(c);
             let uid = c.user.as_deref().unwrap_or("");
             let bot = app.users.bots.contains(uid);
             let dot = presence_span(app, presence_of(app, uid));
