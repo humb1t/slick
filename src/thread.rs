@@ -266,6 +266,8 @@ impl App {
         let Some(t) = self.thread.as_mut() else { return self.focus = Focus::Input };
         let e = &mut t.editor;
         match k.code {
+            // Alt with the arrows is the sidebar's and the history's (`global_key`).
+            KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right if k.modifiers.contains(KeyModifiers::ALT) => {}
             KeyCode::Esc => self.focus = Focus::Input,
             KeyCode::Enter if newline || e.in_code() => e.newline(),
             KeyCode::Char('j') if ctrl => e.newline(),

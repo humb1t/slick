@@ -77,6 +77,8 @@ enum Item {
     Preferences,
     Settings,
     Downloads,
+    /// The keyboard shortcuts guide, as Ctrl+/.
+    Shortcuts,
     CheckUpdate,
     About,
     Logout,
@@ -91,7 +93,7 @@ enum Item {
     NotifyPrefs,
 }
 
-const MAIN: [Item; 14] = [
+const MAIN: [Item; 15] = [
     Item::Status,
     Item::Away,
     Item::Notifications,
@@ -103,6 +105,7 @@ const MAIN: [Item; 14] = [
     Item::Settings,
     Item::Downloads,
     Item::Sep,
+    Item::Shortcuts,
     Item::CheckUpdate,
     Item::About,
     Item::Logout,
@@ -924,6 +927,7 @@ impl App {
                 let _ = std::fs::create_dir_all(&dir);
                 self.open_url(&dir.to_string_lossy());
             }
+            Item::Shortcuts => self.open_help(),
             Item::CheckUpdate => self.check_updates(),
             Item::About => self.account.about = true,
             Item::Logout => {
@@ -1711,6 +1715,16 @@ fn draw_menu(f: &mut Frame, app: &mut App) {
                 let note = tr("· update available", "· atualização disponível");
                 let s = padded(tr("About slick", "Sobre o slick"), note, iw);
                 let cut = s.len().saturating_sub(note.len() + 1);
+                let line = Line::from(vec![Span::styled(s[..cut].to_string(), style), Span::styled(s[cut..].to_string(), style.patch(dim()))]);
+                f.render_widget(Paragraph::new(line), row);
+                app.areas.account.rows.push((row, *item));
+                continue;
+            }
+            Item::Shortcuts => {
+                // The key faded, on the right, as a hint.
+                let key = "Ctrl+/";
+                let s = padded(tr("Keyboard shortcuts", "Atalhos de teclado"), key, iw);
+                let cut = s.len().saturating_sub(key.len() + 1);
                 let line = Line::from(vec![Span::styled(s[..cut].to_string(), style), Span::styled(s[cut..].to_string(), style.patch(dim()))]);
                 f.render_widget(Paragraph::new(line), row);
                 app.areas.account.rows.push((row, *item));

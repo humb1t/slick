@@ -133,6 +133,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     crate::edit::draw(f, app);
     viewer(f, app);
     crate::compose::draw(f, app);
+    crate::help::draw(f, app);
     login(f, app);
 }
 
@@ -592,7 +593,7 @@ fn offscreen_mentions(app: &App, rows: &[Row], offset: usize, height: usize) -> 
 /// Whether a sidebar row is bold (unread, not muted) and whether it has a
 /// mention badge: what the edge pills look for. Rows other than
 /// conversations that can be unread (the "Threads" row) answer here too.
-fn row_attention(app: &App, row: &Row) -> (bool, bool) {
+pub(crate) fn row_attention(app: &App, row: &Row) -> (bool, bool) {
     match row {
         Row::Conv(i) => {
             let c = &app.convs[*i];
@@ -1025,6 +1026,7 @@ fn messages(f: &mut Frame, app: &mut App, area: Rect) {
                 "  Ctrl+P    account and status  Ctrl+N          new message or channel",
                 "  Ctrl+P    sua conta e status  Ctrl+N          nova mensagem ou canal",
             )),
+            Line::from(tr("  Ctrl+/    all shortcuts", "  Ctrl+/    todos os atalhos")),
         ];
         f.render_widget(Paragraph::new(help).style(dim()), inner);
         return;

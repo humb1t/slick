@@ -39,6 +39,8 @@ const REST_AFTER: Duration = Duration::from_secs(10);
 const WATCH_EVERY: Duration = Duration::from_secs(5);
 const COUNTS_EVERY: Duration = Duration::from_secs(15);
 const MAX_RECENTS: usize = 8;
+/// Conversations Alt+← can go back through.
+const MAX_HISTORY: usize = 100;
 /// How long a message opened from "Fixados" stays highlighted.
 const FLASH: Duration = Duration::from_secs(3);
 /// Without Slack's list of open DMs: how many the section shows, most recent first.
@@ -415,6 +417,10 @@ pub struct App {
     /// Silenced starts folded each time; its fold is kept here, not in the cache.
     pub silenced_open: bool,
     pub recents: Vec<String>,
+    /// Conversations in the order they were opened, for Alt+← and Alt+→,
+    /// and where in it the one on screen is.
+    history: Vec<String>,
+    history_at: usize,
     pub messages: HashMap<String, Vec<Message>>,
     pub current: Option<String>,
     pub focus: Focus,
@@ -500,6 +506,8 @@ pub struct App {
     pub threads: crate::threads::Threads,
     /// "Invite people to …", opened from the account menu.
     pub invite: Option<crate::invite::Invite>,
+    /// The keyboard shortcuts guide (Ctrl+/), over everything but sign-in.
+    pub help: Option<crate::help::Help>,
     /// Whose data the cache holds.
     owner: String,
     pub status: String,
@@ -588,6 +596,8 @@ impl App {
             collapsed: cache.collapsed,
             silenced_open: false,
             recents: cache.recents,
+            history: Vec::new(),
+            history_at: 0,
             messages: cache.messages,
             current: None,
             focus: Focus::Sidebar,
@@ -641,6 +651,7 @@ impl App {
             details: None,
             threads: Default::default(),
             invite: None,
+            help: None,
             owner: cache.owner,
             status: tr("connecting…", "conectando…").into(),
             update: None,
@@ -978,7 +989,13 @@ impl App {
     }
 
     pub fn rows(&self) -> Vec<Row> {
-        if !self.filter.is_empty() {
+        self.sidebar_rows(false)
+    }
+
+    /// The sidebar's rows; `unfold` lists folded sections' conversations too
+    /// and ignores the search, for Alt+Shift+↑/↓, which visit them as Slack does.
+    fn sidebar_rows(&self, unfold: bool) -> Vec<Row> {
+        if !self.filter.is_empty() && !unfold {
             // Every conversation we are in, also those hidden from the sidebar;
             // best match first, then the most recent activity. Archived
             // channels after all the rest, as Slack ranks them.
@@ -1149,7 +1166,7 @@ impl App {
                 rows.push(Row::Gap);
             }
             rows.push(Row::Header { key: s.id.clone(), title: format!("{emoji}{title}"), collapsed, unread });
-            if !collapsed {
+            if !collapsed || unfold {
                 rows.extend(members.iter().map(|i| Row::Conv(*i)));
             } else if is_silenced {
                 // Folded, it still lists what mentions you and the open one,
@@ -1237,10 +1254,112 @@ impl App {
         }
     }
 
+    /// Where Alt+↑/↓ start in `rows`: the open conversation, else the row
+    /// selected in the sidebar.
+    fn start_row(&self, rows: &[Row]) -> Option<usize> {
+        let open = self.current.as_ref().and_then(|id| rows.iter().position(|r| matches!(r, Row::Conv(i) if self.convs[*i].id == *id)));
+        open.or_else(|| {
+            let shown = self.rows();
+            let sel = shown.get(self.list.selected()?)?;
+            rows.iter().position(|r| match (r, sel) {
+                (Row::Conv(a), Row::Conv(b)) => a == b,
+                (Row::Header { key: a, .. }, Row::Header { key: b, .. }) => a == b,
+                (Row::Threads, Row::Threads) => true,
+                _ => false,
+            })
+        })
+    }
+
+    /// The conversation `delta` steps away in `rows` (down is 1) that `want`
+    /// takes, going round past the ends when `wrap`.
+    fn next_conv(&self, rows: &[Row], delta: isize, wrap: bool, want: impl Fn(&Row) -> bool) -> Option<String> {
+        let n = rows.len() as isize;
+        let start = self.start_row(rows).map_or(if delta < 0 { n } else { -1 }, |i| i as isize);
+        let at = |k: isize| {
+            let i = start + delta * k;
+            if wrap { Some(i.rem_euclid(n.max(1))) } else { (0..n).contains(&i).then_some(i) }
+        };
+        (1..=n).map_while(at).find_map(|i| match rows[i as usize] {
+            Row::Conv(c) if want(&rows[i as usize]) => Some(self.convs[c].id.clone()),
+            _ => None,
+        })
+    }
+
+    /// Alt+↑/↓: the conversation above or below the open one in the sidebar.
+    fn open_next(&mut self, delta: isize) {
+        let rows = self.rows();
+        if let Some(id) = self.next_conv(&rows, delta, false, |_| true) {
+            self.open(id);
+        }
+    }
+
+    /// Alt+Shift+↑/↓: the previous or next conversation with something unread
+    /// (bold, or with a mention badge, as the sidebar shows them), folded
+    /// sections included, going round past the ends.
+    fn open_unread(&mut self, delta: isize) {
+        let rows = self.sidebar_rows(true);
+        let unread = |r: &Row| {
+            let (bold, mention) = crate::ui::row_attention(self, r);
+            bold || mention
+        };
+        match self.next_conv(&rows, delta, true, unread) {
+            Some(id) => self.open(id),
+            None => self.brief(tr("No unread conversations", "Nenhuma conversa não lida").into(), 2),
+        }
+    }
+
+    /// Alt+← and Alt+→: the conversation opened before (or after) this one.
+    /// Away from it (the Threads view), back is the last one opened.
+    fn go_history(&mut self, delta: isize) {
+        let here = self.current.is_some() && self.current.as_ref() == self.history.get(self.history_at);
+        let mut i = self.history_at as isize + if here || delta > 0 { delta } else { 0 };
+        // Conversations left since are passed over.
+        loop {
+            let Some(id) = usize::try_from(i).ok().and_then(|n| self.history.get(n)).cloned() else { return };
+            if self.convs.iter().any(|c| c.id == id) {
+                self.history_at = i as usize;
+                return self.open(id);
+            }
+            i += delta;
+        }
+    }
+
+    /// Shift+Esc: every conversation marked read, as Slack's "mark all as read".
+    fn mark_all_read(&mut self) {
+        let ids: Vec<String> = self.counts.iter().filter(|(_, c)| c.unread || c.mentions > 0).map(|(id, _)| id.clone()).collect();
+        if ids.is_empty() {
+            return;
+        }
+        let n = ids.len();
+        for id in ids {
+            self.run_action(Action::MarkRead(id));
+        }
+        self.brief(trf!("{n} conversations marked as read", "{n} conversas marcadas como lidas"), 3);
+    }
+
+    /// Ctrl+.: the panel on the right (thread or profile) closes.
+    fn close_panel(&mut self) {
+        if self.thread.is_some() {
+            self.close_thread();
+        } else {
+            self.profile = None;
+        }
+    }
+
     pub(crate) fn open(&mut self, id: String) {
         self.recents.retain(|r| r != &id);
         self.recents.insert(0, id.clone());
         self.recents.truncate(MAX_RECENTS);
+        // Back and forward (`go_history`) land on their entry and push nothing;
+        // anything else opened drops what was ahead.
+        if self.history.get(self.history_at) != Some(&id) {
+            self.history.truncate(self.history_at + 1);
+            self.history.push(id.clone());
+            if self.history.len() > MAX_HISTORY {
+                self.history.remove(0);
+            }
+            self.history_at = self.history.len() - 1;
+        }
         // Out of focus (opened from outside) it stays unread until the window
         // gets the keyboard, which then marks it read (`set_focused`).
         if let Some(c) = self.counts.get_mut(&id).filter(|_| self.focused) {
@@ -2670,6 +2789,9 @@ impl App {
         if self.login.is_some() {
             return self.login_paste(s);
         }
+        if self.help.is_some() {
+            return self.help_paste(s);
+        }
         if self.dialog.is_some() {
             return self.dialog_paste(s);
         }
@@ -2716,6 +2838,14 @@ impl App {
         if self.login.is_some() {
             return self.login_key(k);
         }
+        // The shortcuts guide sits over everything and takes every key;
+        // Ctrl+/ opens it from anywhere, the message box included.
+        if self.help.is_some() {
+            return self.help_key(k);
+        }
+        if crate::help::is_toggle(&k) {
+            return self.toggle_help();
+        }
         if ctrl && k.code == KeyCode::Char('l') {
             return self.open_login(None);
         }
@@ -2747,8 +2877,10 @@ impl App {
         if self.invite.is_some() {
             return self.people_key(k);
         }
-        // The conversation's details, or a DM's profile, as a click on its name.
-        if k.modifiers.contains(KeyModifiers::ALT) && k.code == KeyCode::Char('i') {
+        let (alt, shift) = (k.modifiers.contains(KeyModifiers::ALT), k.modifiers.contains(KeyModifiers::SHIFT));
+        // The conversation's details, or a DM's profile, as a click on its name;
+        // Ctrl+Shift+I as in Slack.
+        if (alt && k.code == KeyCode::Char('i')) || (ctrl && shift && matches!(k.code, KeyCode::Char('i' | 'I'))) {
             return self.open_details();
         }
         if ctrl && k.code == KeyCode::Char('n') {
@@ -2790,6 +2922,9 @@ impl App {
             }
             return;
         }
+        if self.global_key(k, ctrl, alt, shift) {
+            return;
+        }
         if k.code == KeyCode::Esc && self.selection.take().is_some_and(|s| s.moved) {
             return;
         }
@@ -2814,7 +2949,8 @@ impl App {
         }
         match (k.code, ctrl) {
             (KeyCode::Char('c'), true) => return self.quit = true,
-            (KeyCode::Char('k'), true) => {
+            // Ctrl+T too, as in Slack.
+            (KeyCode::Char('k' | 't'), true) => {
                 self.filter.clear();
                 self.focus = Focus::Filter;
                 return self.list.select(None);
@@ -2844,15 +2980,9 @@ impl App {
                     self.focus = Focus::Filter;
                     self.list.select(None);
                 }
-                KeyCode::Up | KeyCode::Down | KeyCode::Char('K') | KeyCode::Char('J')
-                    if k.modifiers.contains(KeyModifiers::ALT) || matches!(k.code, KeyCode::Char(_)) =>
-                {
-                    let up = matches!(k.code, KeyCode::Up | KeyCode::Char('K'));
-                    let rows = self.rows();
-                    if let Some(Row::Header { key, .. }) = self.list.selected().and_then(|i| rows.get(i)) {
-                        let key = key.clone();
-                        self.move_section(&key, if up { -1 } else { 1 });
-                    }
+                // Alt+↑/↓ on a header does it too (`global_key`).
+                KeyCode::Char('K') | KeyCode::Char('J') => {
+                    self.move_selected_section(if k.code == KeyCode::Char('K') { -1 } else { 1 });
                 }
                 KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
                 KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
@@ -2898,6 +3028,49 @@ impl App {
         }
     }
 
+    /// Slack's keys that work wherever the focus is, once no dialog or popup
+    /// has the key. True when handled.
+    fn global_key(&mut self, k: KeyEvent, ctrl: bool, alt: bool, shift: bool) -> bool {
+        let delta = if matches!(k.code, KeyCode::Up | KeyCode::Left) { -1 } else { 1 };
+        match k.code {
+            KeyCode::Up | KeyCode::Down if alt && shift && !ctrl => self.open_unread(delta),
+            // The search's own list keeps its arrows.
+            KeyCode::Up | KeyCode::Down if alt && !ctrl && self.focus != Focus::Filter => {
+                // On a section's header in the sidebar it moves the section instead.
+                if !(self.focus == Focus::Sidebar && self.move_selected_section(delta)) {
+                    self.open_next(delta);
+                }
+            }
+            KeyCode::Left | KeyCode::Right if alt && !ctrl && !shift => self.go_history(delta),
+            KeyCode::Esc if shift && !ctrl && !alt => self.mark_all_read(),
+            KeyCode::Char('t' | 'T') if ctrl && shift => {
+                self.open_threads();
+                let rows = self.rows();
+                if let Some(pos) = rows.iter().position(|r| matches!(r, Row::Threads)) {
+                    self.list.select(Some(pos));
+                }
+            }
+            KeyCode::Char('y' | 'Y') if ctrl && shift && self.me.is_some() => self.open_status_dialog(),
+            KeyCode::Char(',') if ctrl => self.open_settings(),
+            KeyCode::Char('.') if ctrl => self.close_panel(),
+            // Ctrl+Shift+\: a reaction to the conversation's last message.
+            KeyCode::Char('\\') if ctrl && shift => self.react_last(),
+            KeyCode::Char('|') if ctrl => self.react_last(),
+            _ => return false,
+        }
+        true
+    }
+
+    /// Moves the section whose header is selected in the sidebar; false
+    /// when the selection is not a header.
+    fn move_selected_section(&mut self, delta: isize) -> bool {
+        let rows = self.rows();
+        let Some(Row::Header { key, .. }) = self.list.selected().and_then(|i| rows.get(i)) else { return false };
+        let key = key.clone();
+        self.move_section(&key, delta);
+        true
+    }
+
     fn scroll_by(&mut self, n: usize) {
         self.scroll = (self.scroll + n).min(self.max_scroll);
         if self.scroll == self.max_scroll {
@@ -2921,6 +3094,10 @@ impl App {
     }
 
     fn on_input_key(&mut self, k: KeyEvent, ctrl: bool) {
+        // Alt with the arrows is the sidebar's and the history's (`global_key`).
+        if k.modifiers.contains(KeyModifiers::ALT) && matches!(k.code, KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right) {
+            return;
+        }
         // A deactivated account's archives or an archived channel: reading
         // only, nothing to type in; `u` unarchives the channel.
         if let Some(why) = self.read_only() {
@@ -2990,6 +3167,9 @@ impl App {
                 self.dirty = true;
             }
             return;
+        }
+        if self.help.is_some() {
+            return self.help_mouse(m);
         }
         if self.details.is_some() {
             return self.details_mouse(m);

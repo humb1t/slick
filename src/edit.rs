@@ -374,6 +374,7 @@ impl App {
                 'e' => Act::Edit,
                 'u' if !thread => Act::Unread,
                 'l' => Act::CopyLink,
+                'p' => Act::Pin(!self.message(&chan, &sel.ts).is_some_and(|m| m.pinned_to.contains(&chan))),
                 'm' => {
                     let (x, y) = self.anchor(&Item { chan: chan.clone(), ts: sel.ts.clone(), thread, act: Act::Cancel });
                     self.message_menu(thread, sel.ts, x, y);
@@ -392,6 +393,14 @@ impl App {
         };
         self.message_action(Item { chan, ts: sel.ts, thread, act });
         true
+    }
+
+    /// Ctrl+Shift+\: the reaction picker for the conversation's last message, as in Slack.
+    pub(crate) fn react_last(&mut self) {
+        let Some(chan) = self.current.clone() else { return };
+        let Some(ts) = self.messages.get(&chan).and_then(|l| l.last()).map(|m| m.ts.clone()) else { return };
+        let (x, y) = self.anchor(&Item { chan, ts: ts.clone(), thread: false, act: Act::Cancel });
+        self.open_picker(ts, x, y);
     }
 
     /// Slack's right-click menu for a message, which also picks it.
@@ -433,7 +442,7 @@ impl App {
         }
         items.extend([
             sep(),
-            (entry(PIN, if pinned { tr("Unpin from conversation", "Desafixar da conversa") } else { tr("Pin to conversation", "Fixar na conversa") }, ""), it(Act::Pin(!pinned))),
+            (entry(PIN, if pinned { tr("Unpin from conversation", "Desafixar da conversa") } else { tr("Pin to conversation", "Fixar na conversa") }, "P"), it(Act::Pin(!pinned))),
             (entry(LINK, tr("Copy link", "Copiar link"), "L"), it(Act::CopyLink)),
             (entry(COPY, tr("Copy message", "Copiar mensagem"), "Ctrl+C"), it(Act::CopyText)),
         ]);

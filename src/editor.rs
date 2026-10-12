@@ -407,6 +407,33 @@ impl Editor {
         }
     }
 
+    /// Ctrl+Shift+8 and Ctrl+Shift+7: the line becomes a bulleted (or
+    /// numbered) item, or stops being one; a list of the other kind switches.
+    /// A quote's `> ` stays in front.
+    pub fn list(&mut self, numbered: bool) {
+        let (start, end, chars) = self.line();
+        let q = match (chars.get(start), chars.get(start + 1)) {
+            (Some('>'), Some(' ')) => 2,
+            (Some('>'), _) => 1,
+            _ => 0,
+        };
+        let line = &chars[(start + q).min(end)..end];
+        let sp = line.iter().take_while(|c| **c == ' ').count();
+        let at = start + q + sp;
+        if let Some((_, n)) = crate::markup::continued(line).filter(|_| line.first() != Some(&'>')) {
+            let was_numbered = line.get(sp).is_some_and(|c| c.is_ascii_digit());
+            self.remove(at, start + q + n);
+            if was_numbered == numbered {
+                return;
+            }
+        }
+        let mark = if numbered { "1. " } else { "- " };
+        let cursor = self.cursor;
+        self.cursor = at;
+        self.insert(mark);
+        self.cursor = if cursor >= at { cursor + mark.len() } else { cursor };
+    }
+
     pub fn rows(&self, width: usize) -> Vec<Row> {
         let width = width.max(2);
         let mut rows = vec![Row { start: 0, chars: Vec::new() }];
@@ -482,7 +509,8 @@ impl App {
     /// bold (Alt+B too, as the thread's Ctrl+B also sends to the channel),
     /// Ctrl+I italic (the terminal must tell it from Tab), Ctrl+Shift+X
     /// strike, Ctrl+Shift+C code (Alt+X and Alt+C where the terminal keeps
-    /// those) and Ctrl+Shift+9 quote. True when handled.
+    /// those), Ctrl+Alt+Shift+C a code block, Ctrl+Shift+9 quote and
+    /// Ctrl+Shift+8 / Ctrl+Shift+7 bulleted / numbered list. True when handled.
     pub fn format_key(&mut self, k: KeyEvent) -> bool {
         let m = k.modifiers;
         let (ctrl, shift, alt) = (m.contains(KeyModifiers::CONTROL), m.contains(KeyModifiers::SHIFT), m.contains(KeyModifiers::ALT));
@@ -492,18 +520,21 @@ impl App {
             'b' if ctrl && !shift && !alt && !thread => "*",
             'b' if alt && !ctrl => "*",
             'i' if ctrl && !shift && !alt => "_",
+            'c' if ctrl && shift && alt => "```",
             'x' | 'c' if (ctrl && shift && !alt) || (alt && !ctrl) => if c.eq_ignore_ascii_case(&'x') { "~" } else { "`" },
             '9' | '(' if ctrl && shift && !alt => ">",
+            '8' | '*' if ctrl && shift && !alt => "- ",
+            '7' | '&' if ctrl && shift && !alt => "1. ",
             _ => return false,
         };
         if self.focus == Focus::Input && self.read_only().is_some() {
             return false;
         }
         let Some(e) = self.typing_editor_mut() else { return false };
-        if mark == ">" {
-            e.quote();
-        } else {
-            e.wrap(mark);
+        match mark {
+            ">" => e.quote(),
+            "- " | "1. " => e.list(mark != "- "),
+            _ => e.wrap(mark),
         }
         true
     }

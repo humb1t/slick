@@ -84,7 +84,7 @@ The script ([install.sh](install.sh)) downloads the latest
 (built on Ubuntu 24.04, so glibc 2.39 or newer), checks its SHA-256 and puts
 `slick` in `~/.local/bin`, without sudo. It warns when that folder is not on
 your `PATH`. `SLICK_INSTALL_DIR` changes the folder and
-`SLICK_VERSION=v0.4.0` picks a version. Installed this way, slick updates itself
+`SLICK_VERSION=v0.4.1` picks a version. Installed this way, slick updates itself
 (see below).
 
 ### Windows
@@ -102,7 +102,7 @@ irm https://slick.leonavas.com/install.ps1 | iex
 
 The script ([install.ps1](install.ps1)) downloads the latest release, checks its
 SHA-256, puts `slick.exe` in `%LOCALAPPDATA%\Programs\slick` and adds that folder
-to your user `PATH`, without admin rights (`$env:SLICK_VERSION = 'v0.4.0'` picks
+to your user `PATH`, without admin rights (`$env:SLICK_VERSION = 'v0.4.1'` picks
 a version). Open a new terminal and run `slick`. Only x86_64 for now.
 
 ### From source
@@ -160,9 +160,16 @@ for creating that app with the scopes slick uses.
 
 | Key | Action |
 |---|---|
+| `Ctrl+/` or `F1` | all keyboard shortcuts, searchable (also in the account menu) |
 | `↑` `↓` / `j` `k` | move in the sidebar |
 | `Enter` | open a conversation / expand or collapse a section |
-| `/` or `Ctrl+K` | search conversations |
+| `/`, `Ctrl+K` or `Ctrl+T` | search conversations |
+| `Alt+↑` `Alt+↓` | previous / next conversation in the sidebar (on a selected section header: move the section) |
+| `Alt+Shift+↑` `Alt+Shift+↓` | previous / next unread conversation, folded sections included |
+| `Alt+←` `Alt+→` | back / forward through the conversations you opened |
+| `Shift+Esc` | mark all conversations as read |
+| `Ctrl+Shift+T` | Threads |
+| `Ctrl+.` | close the thread or profile panel |
 | `Tab` | sidebar → message box → thread |
 | `Shift+J` / `Shift+K` | move a section up or down |
 | `m` or right click | menu for a conversation or message |
@@ -171,15 +178,20 @@ for creating that app with the scopes slick uses.
 | `*bold*` `_italic_` `~strike~` `` `code` `` ```` ``` ```` `> ` `- ` `1. ` | Slack's formatting, styled as you type and sent as rich text; `Enter` inside an open ```` ``` ```` block adds a line |
 | `Ctrl+B` `Ctrl+I` | bold, italic (`Alt+B` too; in a thread `Ctrl+B` stays "also send to the channel") |
 | `Ctrl+Shift+X` `Ctrl+Shift+C` `Ctrl+Shift+9` | strikethrough, code, quote (`Alt+X`, `Alt+C` where the terminal takes the `Ctrl+Shift` ones) |
+| `Ctrl+Alt+Shift+C` `Ctrl+Shift+8` `Ctrl+Shift+7` | code block, bulleted list, numbered list |
 | `:` | emoji autocomplete |
 | `Ctrl+U` / `Ctrl+W` | clear the message box / delete a word |
 | `↑` in an empty message box | pick a message |
-| `E` `R` `T` `F` `A` `U` `L` `Del` | on a picked message: edit, react, reply in thread, forward, save, mark unread, copy link, delete |
+| `E` `R` `T` `F` `A` `U` `P` `L` `Del` | on a picked message: edit, react, reply in thread, forward, save, mark unread, pin / unpin, copy link, delete |
+| `Ctrl+Shift+\` | react to the conversation's last message |
 | `Ctrl+C` | copy the picked or selected messages; otherwise quit |
 | `Ctrl+B` | in a thread, also send the reply to the channel |
-| `Alt+I` or click on the name | channel details (about, members, settings); a DM's profile |
+| `Alt+I`, `Ctrl+Shift+I` or click on the name | channel details (about, members, settings); a DM's profile |
 | `Ctrl+N` | new message or channel |
 | `Ctrl+P` | your account, status and profile |
+| `Ctrl+Shift+Y` | set your status |
+| `Ctrl+,` | settings |
+| `Ctrl+1`…`Ctrl+9`, `Ctrl+Tab` / `Ctrl+Shift+Tab`, `Ctrl+PgDn` / `Ctrl+PgUp` | switch workspace (with more than one) |
 | `Ctrl+R` | reload channels and users |
 | `Ctrl+L` | sign in again |
 | click on an image | enlarge it (`o` opens it in the system viewer, `d` downloads it) |

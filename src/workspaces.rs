@@ -195,13 +195,27 @@ impl Workspaces {
         self.list.iter().position(has).unwrap_or(self.active)
     }
 
-    /// Ctrl+1..9, before the app sees the key. Only with more than one.
+    /// Ctrl+1..9, and Ctrl+Tab / Ctrl+PgDn to the next one (Ctrl+Shift+Tab /
+    /// Ctrl+PgUp the one before), before the app sees the key. Only with more
+    /// than one. Ctrl+Shift with a digit is the box's formatting.
     pub fn key(&mut self, k: KeyEvent) -> bool {
         if self.list.len() < 2 || !k.modifiers.contains(KeyModifiers::CONTROL) {
             return false;
         }
-        let KeyCode::Char(c @ '1'..='9') = k.code else { return false };
-        self.switch_to(c as usize - '1' as usize);
+        // The shortcuts guide takes every key while open.
+        if self.list[self.active].app.help.is_some() {
+            return false;
+        }
+        let (n, shift) = (self.list.len(), k.modifiers.contains(KeyModifiers::SHIFT));
+        let to = match k.code {
+            // Only to a workspace there is: legacy terminals send Ctrl+/ as Ctrl+7.
+            KeyCode::Char(c @ '1'..='9') if !shift && ((c as usize - '1' as usize) < n) => c as usize - '1' as usize,
+            KeyCode::Tab if !shift => (self.active + 1) % n,
+            KeyCode::PageDown => (self.active + 1) % n,
+            KeyCode::Tab | KeyCode::BackTab | KeyCode::PageUp => (self.active + n - 1) % n,
+            _ => return false,
+        };
+        self.switch_to(to);
         true
     }
 

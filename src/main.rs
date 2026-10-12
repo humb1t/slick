@@ -17,6 +17,7 @@ mod ipc;
 mod emoji;
 mod events;
 mod files;
+mod help;
 mod login;
 mod mention;
 mod markup;
