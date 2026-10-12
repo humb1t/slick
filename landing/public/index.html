@@ -1,0 +1,1528 @@
+<!doctype html>
+<html lang="en" data-theme="slick">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>slick — ultrafast, slim and beautiful Slack TUI</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="description" content="slick is an ultrafast, slim and beautiful Slack client for the terminal. One small Rust binary, no browser inside: channels, DMs, threads, search, reactions and Slack's hotkeys.">
+<link rel="canonical" href="https://slick.leonavas.com/">
+<meta name="robots" content="index, follow">
+<meta name="theme-color" content="#252321">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="slick">
+<meta property="og:url" content="https://slick.leonavas.com/">
+<meta property="og:title" content="slick — ultrafast, slim and beautiful Slack TUI">
+<meta property="og:description" content="Ultrafast, slim and beautiful Slack TUI. One small Rust binary, no browser inside, with Slack's channels, DMs, threads, search and hotkeys.">
+<meta property="og:image" content="https://slick.leonavas.com/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The slick icon and wordmark: Ultrafast, slim and beautiful Slack TUI">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="slick — ultrafast, slim and beautiful Slack TUI">
+<meta name="twitter:description" content="Ultrafast, slim and beautiful Slack TUI. One small Rust binary, no browser inside, with Slack's channels, DMs, threads, search and hotkeys.">
+<meta name="twitter:image" content="https://slick.leonavas.com/og.png">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"slick","url":"https://slick.leonavas.com/","image":"https://slick.leonavas.com/og.png","description":"slick is an ultrafast, slim and beautiful Slack client for the terminal. One small Rust binary, no browser inside: channels, DMs, threads, search, reactions and Slack's hotkeys.","applicationCategory":"CommunicationApplication","operatingSystem":"Linux, Windows","license":"https://www.apache.org/licenses/LICENSE-2.0","sameAs":"https://github.com/leonavas/slick","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}
+</script>
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="preload" href="https://cdn.jsdelivr.net/npm/@fontsource/maple-mono@5.2.6/files/maple-mono-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+<style>
+/* Maple Mono: the installed copy if there is one, else the webfont. */
+@font-face { font-family: "Maple Mono"; font-weight: 400; font-display: swap;
+  src: local("Maple Mono"), local("MapleMono-Regular"), url(https://cdn.jsdelivr.net/npm/@fontsource/maple-mono@5.2.6/files/maple-mono-latin-400-normal.woff2) format("woff2"); }
+@font-face { font-family: "Maple Mono"; font-weight: 700; font-display: swap;
+  src: local("Maple Mono Bold"), local("MapleMono-Bold"), url(https://cdn.jsdelivr.net/npm/@fontsource/maple-mono@5.2.6/files/maple-mono-latin-700-normal.woff2) format("woff2"); }
+@font-face { font-family: "Maple Mono"; font-weight: 800; font-display: swap;
+  src: local("Maple Mono ExtraBold"), local("MapleMono-ExtraBold"), url(https://cdn.jsdelivr.net/npm/@fontsource/maple-mono@5.2.6/files/maple-mono-latin-800-normal.woff2) format("woff2"); }
+/* Real terminal palettes. The page owns no colors of its own, like the app. */
+:root {
+  /* the wordmark's colors, the same fixed RGB the app's login screen uses */
+  --s-blue: #467996; --s-green: #598266; --s-red: #b65f4e; --s-yellow: #e7ba79;
+}
+/* the default: the logo's four colors, lifted just enough to read as text on the dark ground */
+:root, [data-theme="slick"] {
+  --bg: #252321; --surface: #33302c; --line: #57524b;
+  --fg: #e6dccd; --bright: #f6efe4; --dim: #a39a8d;
+  --red: #d0816f; --green: #7fae8c; --yellow: #e7ba79;
+  --blue: #6fa3c2; --magenta: #c58fa6; --cyan: #8fbcd6;
+  --badge-fg: #1d1b19;
+}
+[data-theme="terminal"] {
+  --bg: #282828; --surface: #3c3836; --line: #665c54;
+  --fg: #ebdbb2; --bright: #fbf1c7; --dim: #a89984;
+  --red: #fb4934; --green: #b8bb26; --yellow: #fabd2f;
+  --blue: #83a598; --magenta: #d3869b; --cyan: #8ec07c;
+  --badge-fg: #1d2021;
+}
+[data-theme="solarized-light"] {
+  --bg: #fdf6e3; --surface: #eee8d5; --line: #c9c2ab;
+  --fg: #586e75; --bright: #073642; --dim: #5f7379;
+  --red: #c4271f; --green: #6c7c00; --yellow: #946f00;
+  --blue: #1f72b0; --magenta: #c22a73; --cyan: #17716b;
+  --badge-fg: #fdf6e3;
+}
+[data-theme="nord"] {
+  --bg: #2e3440; --surface: #3b4252; --line: #4c566a;
+  --fg: #d8dee9; --bright: #eceff4; --dim: #9aa5ba;
+  --red: #d47680; --green: #a3be8c; --yellow: #ebcb8b;
+  --blue: #81a1c1; --magenta: #b48ead; --cyan: #88c0d0;
+  --badge-fg: #2e3440;
+}
+[data-theme="catppuccin-latte"] {
+  --bg: #eff1f5; --surface: #e6e9ef; --line: #bcc0cc;
+  --fg: #4c4f69; --bright: #1e2030; --dim: #5c5f77;
+  --red: #c80e36; --green: #2f7d1f; --yellow: #a35f00;
+  --blue: #1e5ee0; --magenta: #7a2fd9; --cyan: #127a80;
+  --badge-fg: #eff1f5;
+}
+
+* { box-sizing: border-box; }
+html {
+  scroll-padding-top: var(--hh, 3rem);
+  scroll-padding-bottom: calc(var(--dh, 0px) + var(--sh, 0px));
+  scroll-snap-type: y mandatory;
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 15px/1.5 "Maple Mono", "Maple Mono NF", ui-monospace, "SF Mono", Menlo, monospace;
+  font-variant-ligatures: none;
+  font-variant-numeric: tabular-nums;
+  caret-color: var(--yellow);
+  -webkit-font-smoothing: antialiased;
+  padding-bottom: var(--sh, 1.5em);
+}
+::selection { background: var(--yellow); color: var(--bg); }
+* { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+::-webkit-scrollbar { width: 1ch; height: 1ch; }
+::-webkit-scrollbar-thumb { background: var(--line); }
+::-webkit-scrollbar-track { background: transparent; }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
+:focus-visible { outline: 2px solid var(--yellow); outline-offset: 1px; }
+a { color: var(--blue); text-underline-offset: .2em; }
+kbd { font: inherit; font-weight: 700; color: var(--yellow); }
+b, strong { color: var(--bright); }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* ---- frame: sticky sidebar | scrolling conversation, status line pinned below ---- */
+.tui {
+  display: grid;
+  grid-template-columns: 32ch minmax(0, 1fr);
+  align-items: start;
+}
+
+/* ---- sidebar ---- */
+.side {
+  position: sticky; top: 0;
+  height: calc(100dvh - var(--sh, 1.5em));
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+  padding-bottom: 1lh;
+}
+.team { padding: 0 1ch; font-weight: 800; font-size: 1.15em; letter-spacing: .02em; height: 2lh; display: flex; align-items: center; width: 100%; text-align: left; }
+.team .mark { width: 1.5em; height: 1.5em; margin-right: 1ch; flex: none; }
+.team .wm { height: .95em; width: auto; overflow: visible; }
+.team:focus-visible { outline: 1px solid var(--yellow); outline-offset: -1px; }
+.search {
+  display: flex; align-items: center; gap: 1ch;
+  width: 100%; padding: 0 1ch; height: 1lh; color: var(--dim);
+}
+.search svg { width: 1em; height: 1em; flex: none; }
+.search .k { margin-left: auto; }
+.search input {
+  flex: 1; min-width: 0; font: inherit; color: var(--fg); background: none; border: 0; padding: 0; outline: none;
+}
+.search:has(input:focus) { color: var(--fg); background: var(--surface); }
+.group { margin-top: 1lh; }
+.group + .group { margin-top: .5lh; }
+.hdr { width: 100%; padding: 0 1ch; color: var(--dim); font-weight: 700; height: 1lh; }
+.hdr.unread { color: var(--fg); }
+.group ul { list-style: none; margin: 0; padding: 0; }
+.row {
+  display: flex; align-items: center; width: 100%;
+  padding: 0 1ch 0 3ch; height: 1lh; white-space: nowrap; color: var(--dim);
+  transition: color .2s, background-color .2s;
+}
+.row .ico { width: 2ch; flex: none; color: var(--dim); }
+.row .ico.on { color: var(--green); }
+.row .name { overflow: hidden; text-overflow: ellipsis; }
+.row.unread { color: var(--bright); font-weight: 700; }
+.row.current { color: var(--cyan); font-weight: 700; }
+.row:hover { background: var(--surface); }
+.badge {
+  margin-left: auto; display: inline-grid; place-items: center;
+  min-width: 2.6ch; height: 1.3em; padding: 0 .8ch; border-radius: 999px;
+  font-size: .85em; font-weight: 700; line-height: 1;
+  /* the logo's own red, in every theme */
+  background: var(--s-red); color: #fff;
+}
+.badge:empty { display: none; }
+/* ratatui's REVERSED highlight, only while the list has focus */
+/* only while moving with the keyboard: a mouse click leaves the list focused but should not pin the highlight */
+.side:has(:focus-visible) .row.sel, .side:has(:focus-visible) .row.sel .ico { background: var(--fg); color: var(--bg); }
+.side:has(:focus-visible) .row.sel .badge { background: var(--bg); color: var(--s-red); }
+.row:focus-visible { outline: none; }
+.empty { padding: 0 3ch; color: var(--dim); }
+
+/* ---- conversation ---- */
+.conv { min-width: 0; display: flex; flex-direction: column; min-height: calc(100dvh - var(--sh, 1.5em)); }
+.head {
+  position: sticky; top: 0; z-index: 3;
+  display: flex; gap: 1ch; align-items: center;
+  padding: 0 2ch; height: 2lh; border-bottom: 1px solid var(--line);
+  white-space: nowrap; overflow: hidden; background: var(--bg);
+}
+.head .ico { color: var(--dim); }
+.head .nm { font-weight: 700; color: var(--bright); }
+.head .star { color: var(--yellow); }
+.head .topic { color: var(--dim); overflow: hidden; text-overflow: ellipsis; }
+/* pager: one segment per channel; the current one in yellow, read ones filled. Click goes back to the top. */
+.head .pos {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 1ch;
+  padding: .1lh 1ch; margin-right: -1ch; color: var(--dim); border-radius: 4px;
+}
+.head .pos:hover { background: var(--surface); color: var(--fg); }
+.head .pos:focus-visible { outline: 1px solid var(--yellow); outline-offset: 1px; }
+.pips { display: inline-flex; gap: 2px; }
+.pips i { width: 1.1ch; height: .9em; border: 1px solid var(--line); border-radius: 1px; }
+.pips i.rd { background: var(--line); }
+.pips i.cur { background: var(--yellow); border-color: var(--yellow); }
+.head .pos .up { width: 1ch; opacity: 0; transition: opacity .15s; }
+.head .pos:hover .up, .head .pos:focus-visible .up { opacity: 1; }
+.log { flex: 1; padding: 0 2ch; }
+
+/* channel boundary, drawn like a ratatui block title */
+/* one channel per screen: each fills the pane between the header and the message box,
+   and the scroll snaps channel to channel. */
+.chan {
+  min-height: calc(100dvh - var(--hh, 3rem) - var(--dh, 4rem) - var(--sh, 1.5em));
+  display: flex; flex-direction: column; justify-content: center; padding: .5lh 0 1.5lh;
+  scroll-snap-align: start;
+}
+/* your proposal, until it has passed the human check and was sent */
+.msg.pending { opacity: .55; }
+.body .err { color: var(--red); }
+.body .ts { margin-top: .5lh; min-height: 65px; }
+/* changelog entry head */
+.body .ver { color: var(--bright); }
+.body .date { color: var(--dim); margin-left: 1ch; }
+/* secondary setup, folded like a thread under the message */
+.more summary { width: fit-content; margin-top: .75lh; color: var(--blue); cursor: pointer; list-style: none; }
+.more summary::-webkit-details-marker { display: none; }
+.more summary::before { content: "▸ "; }
+.more[open] summary::before { content: "▾ "; }
+.more summary:hover { text-decoration: underline; }
+.more > :not(summary) { margin-top: .5lh; }
+.chd {
+  display: flex; align-items: center; gap: 1ch; padding-top: 1lh;
+  white-space: nowrap; color: var(--dim);
+}
+.chd::before { content: ""; width: 2ch; border-top: 1px solid var(--line); flex: none; }
+.chd::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+.chd .n { color: var(--bright); font-weight: 700; }
+.chd .t { overflow: hidden; text-overflow: ellipsis; }
+
+/* ---- hero: #welcome, first viewport ---- */
+.hero {
+  container-type: inline-size;
+  flex: 1;
+  display: flex; flex-direction: column; justify-content: center; align-items: center;
+  padding: 2rem 0 2.5rem;
+}
+/* one measure for the whole hero, centered in the pane; content left-aligned inside it */
+.hero > * { width: min(100%, 1080px); }
+/* the drawing keeps its proportions and sits on the left edge of the hero measure */
+.hero > .logo { display: block; height: clamp(92px, 15cqi, 176px); overflow: visible; }
+:is(.logo, .wm) .ink { fill: var(--c); shape-rendering: crispEdges; }
+:is(.logo, .wm) .sh { fill: none; stroke: var(--c); stroke-width: 1.4; stroke-linecap: square; opacity: .55; }
+.hero-copy { margin-top: clamp(1.75rem, 3cqi, 2.75rem); }
+.hero h1 {
+  margin: 0; max-width: 26ch; color: var(--bright); font-weight: 800;
+  font-size: clamp(1.9rem, 3.3cqi, 3.1rem); line-height: 1.08; letter-spacing: -0.03em;
+  text-wrap: balance;
+}
+.lede { margin: 1rem 0 0; max-width: 60ch; color: var(--fg); font-size: 1.05rem; text-wrap: balance; }
+.cmd {
+  display: flex; align-items: stretch; width: fit-content; max-width: 100%; margin-top: 1.75rem;
+  border: 1px solid var(--yellow); background: var(--surface);
+}
+.cmd pre {
+  margin: 0; padding: .6lh 2ch; font: inherit; color: var(--bright);
+  white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0;
+}
+.cmd pre .p { color: var(--yellow); user-select: none; }
+.cmd .go {
+  flex: none; padding: 0 2ch; font-weight: 800;
+  background: var(--yellow); color: var(--bg);
+  transition: filter .15s;
+}
+.cmd .go:hover { filter: brightness(1.08); }
+.cmd .go.ok { background: var(--green); }
+
+/* one orchestrated moment: the logo prints */
+.anim .logo { animation: print .6s steps(var(--n), end) both; }
+@keyframes print { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+
+/* ---- messages ---- */
+.msg { display: grid; grid-template-columns: 4ch minmax(0, 1fr); margin-top: 1lh; max-width: 84ch; font-size: 17px; }
+.av {
+  width: 2ch; height: 1.2em; margin-top: .15em; display: grid; place-items: center;
+  font-weight: 700; color: var(--bg); background: var(--yellow); border-radius: 2px; line-height: 1;
+}
+.av.you { background: var(--blue); }
+svg.om { width: 1em; height: 1em; vertical-align: -.125em; color: var(--green); }
+.om-head { display: flex; align-items: center; gap: 1ch; }
+.om-head svg.big { width: 2lh; height: 2lh; flex: none; }
+.who { font-weight: 700; color: var(--bright); }
+.app, .time { color: var(--dim); }
+.time { margin-left: 1ch; }
+.body > * { margin: 0; }
+.body > * + * { margin-top: .5lh; }
+.body ul { list-style: none; padding: 0; }
+.body li + li { margin-top: .5lh; }
+.quote li { display: grid; grid-template-columns: 2ch 1fr; }
+.quote li::before { content: "▎"; color: var(--dim); }
+.dash li { display: grid; grid-template-columns: 2ch 1fr; }
+.dash li::before { content: "-"; color: var(--dim); }
+code { font: inherit; color: var(--cyan); background: var(--surface); padding: 0 .5ch; }
+.block {
+  display: flex; align-items: flex-start; gap: 2ch;
+  border: 1px solid var(--line); padding: .5lh 1ch; max-width: 76ch;
+}
+.block pre { margin: 0; flex: 1; min-width: 0; font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--bright); }
+.block pre .c { color: var(--dim); }
+.btn { color: var(--blue); font-weight: 700; white-space: nowrap; }
+.btn:hover { text-decoration: underline; text-underline-offset: .2em; }
+.btn.ok { color: var(--green); }
+.chl { color: var(--blue); }
+.chl:hover { text-decoration: underline; text-underline-offset: .2em; }
+.me { background: color-mix(in srgb, var(--yellow) 22%, transparent); color: var(--bright); font-weight: 700; padding: 0 .25ch; }
+.tag { color: var(--yellow); font-weight: 700; }
+table { border-collapse: collapse; }
+td { padding: 0 3ch 0 0; vertical-align: top; }
+td:first-child { white-space: nowrap; }
+td:first-child, td:first-child * { color: var(--yellow); font-weight: 700; }
+.fresh { animation: arrive .9s cubic-bezier(.16, 1, .3, 1); }
+@keyframes arrive { from { background: color-mix(in srgb, var(--yellow) 18%, transparent); } to { background: transparent; } }
+
+/* ---- input box, docked above the status line ---- */
+.dock {
+  position: sticky; bottom: var(--sh, 1.5em); z-index: 3;
+  background: var(--bg); padding: .5lh 1ch .75lh;
+}
+.input {
+  position: relative;
+  border: 1px solid var(--line); border-radius: 6px; padding: .25lh 1ch .35lh;
+}
+.input:focus-within { border-color: var(--yellow); }
+.input textarea {
+  display: block; width: 100%; font: inherit; color: var(--bright); background: none;
+  border: 0; padding: 0; resize: none; outline: none; height: 1lh; max-height: 8lh;
+}
+.input textarea::placeholder { color: var(--dim); }
+.input .hint {
+  position: absolute; right: 1.5ch; bottom: -.75lh; padding: 0 1ch; background: var(--bg);
+  color: var(--dim); line-height: 1.5; font-size: inherit;
+}
+.input .hint:hover { color: var(--fg); }
+
+/* ---- status line ---- */
+.status {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 4;
+  display: flex; gap: 2ch; align-items: center; justify-content: space-between;
+  padding: 0 1ch; min-height: 1lh; white-space: nowrap; overflow: hidden; color: var(--dim);
+  background: var(--surface);
+}
+.status .left { overflow: hidden; text-overflow: ellipsis; }
+.status .left.ok { color: var(--green); }
+.status .left.err { color: var(--red); }
+.status .left.busy { color: var(--yellow); }
+.status .right { display: flex; gap: 2ch; align-items: center; flex: none; }
+.status .right button, .status .right a { color: var(--dim); text-decoration: none; }
+.status .right button:hover, .status .right a:hover { color: var(--fg); }
+.status .gh { display: inline-flex; align-items: center; gap: .6ch; }
+.lang [aria-pressed="true"] { color: var(--bright); font-weight: 700; }
+.lang span { color: var(--line); }
+#themeName { color: var(--fg); }
+
+/* ---- narrow screens: channels become a sticky strip above the conversation ---- */
+@media (max-width: 760px) {
+  body { font-size: 14px; }
+  .tui { grid-template-columns: minmax(0, 1fr); }
+  .side {
+    position: sticky; top: 0; z-index: 5; height: auto; background: var(--bg);
+    display: flex; align-items: center; gap: 0;
+    border-right: 0; border-bottom: 1px solid var(--line);
+    overflow-x: auto; overflow-y: hidden; padding: .35lh 0;
+    scrollbar-width: none;
+  }
+  .search, .hdr, .empty { display: none; }
+  .team { flex: none; width: auto; height: auto; padding: 0 1.5ch 0 1ch; }
+  .group, .group + .group { margin: 0; }
+  .group ul, .group ul[hidden] { display: flex; }
+  .row { padding: 0 1.5ch 0 1ch; }
+  .row .badge { margin-left: 1ch; }
+  .head { display: none; }
+  .dock { display: none; }
+  .log { padding: 0 1.5ch; }
+  .hero { padding-top: 1.5lh; }
+  html { scroll-snap-type: y proximity; }
+  .msg { grid-template-columns: 3ch minmax(0, 1fr); font-size: 15px; }
+  td { display: block; padding: 0; }
+  tr { display: block; margin-bottom: .5lh; }
+  .block { flex-direction: column; gap: .25lh; }
+  .cmd { flex-direction: column; width: 100%; }
+  .cmd .go { padding: .4lh 2ch; text-align: center; }
+  .status { flex-wrap: wrap; row-gap: 0; padding: .25lh 1ch; }
+  .status .left { flex-basis: 100%; }
+  .status .hints { display: none; }
+}
+/* short screens (768p laptops): tighten the rhythm so each channel still fits one screen */
+@media (min-width: 761px) and (max-height: 820px) {
+  .chan { padding: 0 0 .5lh; }
+  .chd { padding-top: .5lh; }
+  .msg { margin-top: .6lh; font-size: 16px; }
+  .body > * + * { margin-top: .35lh; }
+  .hero { padding: 1rem 0; }
+  .hero-copy { margin-top: 1.25rem; }
+  .cmd { margin-top: 1.25rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fresh, .anim .logo { animation: none; opacity: 1; }
+  .row { transition: none; }
+}
+</style>
+</head>
+<body>
+<div class="tui">
+
+  <!-- ===== sidebar ===== -->
+  <nav class="side" id="side" aria-label="Conversations">
+    <button class="team" type="button" data-open="welcome" aria-label="slick"><img class="mark" src="/favicon.svg" alt="" width="20" height="20"><svg class="wm" id="teamLogo" preserveAspectRatio="xMinYMid meet" aria-hidden="true" focusable="false"></svg></button>
+    <label class="search" id="searchLine">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="6.8" cy="6.8" r="4.6"/><path d="M10.2 10.2 14 14" stroke-linecap="round"/></svg>
+      <span class="sr" data-i18n="findLabel">Find a conversation</span>
+      <input id="filter" type="text" autocomplete="off" spellcheck="false" placeholder="Find a conversation" data-i18n-ph="findLabel">
+      <span class="k" aria-hidden="true">^K</span>
+    </label>
+
+    <div class="group" data-group="starred">
+      <button class="hdr" aria-expanded="true"><span class="arr">▾</span> <span data-i18n="gStarred">Starred</span></button>
+      <ul>
+        <li><button class="row current" data-ch="welcome"><span class="ico">#</span><span class="name">welcome</span><span class="badge"></span></button></li>
+        <li><button class="row unread" data-ch="install"><span class="ico">#</span><span class="name">install</span><span class="badge">1</span></button></li>
+      </ul>
+    </div>
+    <div class="group" data-group="channels">
+      <button class="hdr unread" aria-expanded="true"><span class="arr">▾</span> <span data-i18n="gChannels">Channels</span></button>
+      <ul>
+        <li><button class="row unread" data-ch="features"><span class="ico">#</span><span class="name">features</span><span class="badge"></span></button></li>
+        <li><button class="row unread" data-ch="hotkeys"><span class="ico">#</span><span class="name">hotkeys</span><span class="badge"></span></button></li>
+        <li><button class="row unread" data-ch="why-so-fast"><span class="ico">#</span><span class="name">why-so-fast</span><span class="badge"></span></button></li>
+        <li><button class="row unread" data-ch="disk-usage"><span class="ico">#</span><span class="name">disk-usage</span><span class="badge"></span></button></li>
+        <li><button class="row unread" data-ch="omarchy"><span class="ico"><svg class="om" viewBox="0 0 1024 1024" aria-hidden="true" focusable="false"><path fill="currentColor" d="M70 954H549V1024H0V0H1024V1024H626V954H954V70H70ZM884 884H140V140H551V210H210V814H814V210H736V140H884ZM471 884H549V954H471ZM473 70H551V140H473ZM0 473H210V551H0Z"/></svg></span><span class="name">omarchy</span><span class="badge"></span></button></li>
+        <li><button class="row unread" data-ch="roadmap"><span class="ico">#</span><span class="name">roadmap</span><span class="badge"></span></button></li>
+      </ul>
+    </div>
+    <div class="group" data-group="dms">
+      <button class="hdr unread" aria-expanded="true"><span class="arr">▾</span> <span data-i18n="gDms">Direct messages</span></button>
+      <ul>
+        <li><button class="row unread" data-ch="dm"><span class="ico on" aria-label="online">●</span><span class="name">slick</span><span class="badge">1</span></button></li>
+        <li><button class="row unread" data-ch="requests"><span class="ico on" aria-label="online">●</span><span class="name">feature-requests</span><span class="badge"></span></button></li>
+      </ul>
+    </div>
+    <p class="empty" id="noMatch" hidden></p>
+  </nav>
+
+  <!-- ===== conversation ===== -->
+  <main class="conv">
+    <header class="head" id="head">
+      <span class="ico" id="hIco">#</span>
+      <span class="nm" id="hName">welcome</span>
+      <span class="star" id="hStar">★</span>
+      <span class="topic" id="hTopic"></span>
+      <button class="pos" id="hPos" type="button" data-open="welcome" aria-label="Back to the top" data-i18n-aria="toTop"><span class="pips" id="hPips" aria-hidden="true"></span><span class="n" id="hNum">1/8</span><span class="up" aria-hidden="true">↑</span></button>
+    </header>
+
+    <div class="log" id="log">
+
+      <!-- #welcome: the hero -->
+      <section class="chan" id="ch-welcome" data-topic="tWelcome">
+        <div class="hero" id="hero">
+          <svg class="logo" id="logo" style="--n:35" preserveAspectRatio="xMinYMid meet" aria-hidden="true" focusable="false"></svg>
+          <div class="hero-copy">
+            <h1 data-i18n="heroH">Ultrafast, slim and beautiful Slack TUI.</h1>
+            <div>
+              <p class="lede" data-i18n="heroLede">One small Rust binary, no browser inside. It has all the important features and hotkeys from Slack.</p>
+              <div class="cmd"><pre><span class="p">$ </span>curl -fsSL https://slick.leonavas.com/install.sh | sh</pre><button class="go" type="button" data-copy="install" data-i18n="copyCmd">Copy</button></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- #install -->
+      <section class="chan" id="ch-install" data-topic="tInstall">
+        <div class="chd"><span class="n"># install</span><span class="t" data-topic-of="tInstall"></span></div>
+        <article class="msg">
+          <span class="av" aria-hidden="true">s</span>
+          <div>
+            <div><span class="who">slick</span><span class="app"> APP</span><span class="time">09:10</span></div>
+            <div class="body">
+              <p data-i18n="i1"><b>1.</b> Install it. On Linux (x86_64 and arm64) the script downloads the latest release for your machine, checks its SHA-256 and puts <code>slick</code> in <code>~/.local/bin</code>, no sudo. The sign-in window needs WebKitGTK (<code>webkit2gtk-4.1</code>).</p>
+              <div class="block"><pre>curl -fsSL https://slick.leonavas.com/install.sh | sh</pre><button class="btn" data-copy="install">[Copy]</button></div>
+              <p data-i18n="i1win">On Windows 10/11 (x86_64), in PowerShell. It installs to <code>%LOCALAPPDATA%\Programs\slick</code> and adds it to your PATH. Use Windows Terminal (or another terminal with colors and images); there's no tray icon on Windows yet.</p>
+              <div class="block"><pre>irm https://slick.leonavas.com/install.ps1 | iex</pre><button class="btn" data-copy="windows">[Copy]</button></div>
+              <details class="more">
+              <summary data-i18n="i1sum">Prefer to build from source?</summary>
+              <p data-i18n="i1src">You need Rust, cargo and the WebKitGTK development package (<code>libwebkit2gtk-4.1-dev</code> on Debian/Ubuntu).</p>
+              <div class="block"><pre>cargo install --locked --git https://github.com/leonavas/slick</pre><button class="btn" data-copy="source">[Copy]</button></div>
+              </details>
+            </div>
+          </div>
+        </article>
+        <article class="msg">
+          <span class="av" aria-hidden="true">s</span>
+          <div>
+            <div><span class="who">slick</span><span class="app"> APP</span><span class="time">09:11</span></div>
+            <div class="body">
+              <p data-i18n="i2"><b>2.</b> Sign in. A small window opens Slack's own sign-in page; once you're in, it hands the session to slick and closes. Inside the app, <kbd>Ctrl</kbd>+<kbd>L</kbd> opens the same screen.</p>
+              <div class="block"><pre>slick login</pre><button class="btn" data-copy="login">[Copy]</button></div>
+              <p data-i18n="i2ws">Add your workspace (<code>slick login acme</code>) to go straight to its email-and-password form.</p>
+              <p data-i18n="i2keep">The session is saved to <code>~/.config/slick/config</code>, readable only by you. The window keeps its own profile, so signing out of Slack in your browser doesn't sign you out here. If the session expires, slick asks you to sign in again.</p>
+              <details class="more">
+              <summary data-i18n="i2sum">Prefer a token or environment variables?</summary>
+              <p data-i18n="i2b">Put one of these in <code>~/.config/slick/config</code>:</p>
+              <div class="block"><pre data-i18n="i2cfg"><span class="c"># A) internal Slack app (official): create it from
+#    slack-app-manifest.yml, install it, use the User OAuth Token</span>
+token = xoxp-…
+
+<span class="c"># B) browser session, no admin needed</span>
+token = xoxc-…
+cookie = xoxd-…</pre></div>
+              <p data-i18n="i3">Or set <code>SLACK_TOKEN</code> and <code>SLACK_COOKIE</code> in the environment. You can also paste the token and the cookie straight into the sign-in screen.</p>
+              </details>
+            </div>
+          </div>
+        </article>
+        <article class="msg">
+          <span class="av" aria-hidden="true">s</span>
+          <div>
+            <div><span class="who">slick</span><span class="app"> APP</span><span class="time">09:12</span></div>
+            <div class="body">
+              <p data-i18n="i4"><b>3.</b> Run it.</p>
+              <div class="block"><pre>slick</pre><button class="btn" data-copy="run">[Copy]</button></div>
+              <p data-i18n="i5"><span class="me">@you</span> the first launch fetches your channels and users. Every launch after that opens from the local cache, already on screen.</p>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <!-- #features -->
+      <section class="chan" id="ch-features" data-topic="tFeatures">
+        <div class="chd"><span class="n"># features</span><span class="t" data-topic-of="tFeatures"></span></div>
+        <article class="msg">
+          <span class="av" aria-hidden="true">s</span>
+          <div>
+            <div><span class="who">slick</span><span class="app"> APP</span><span class="time">11:30</span></div>
+            <div class="body">
+              <p data-i18n="s1">What the TUI does today:</p>
+              <ul class="dash">
+                <li><span data-i18n="s2">Channels, private channels, DMs and group DMs. Start a new DM or channel with <kbd>Ctrl</kbd>+<kbd>N</kbd>.</span></li>
+                <li><span data-i18n="s10">Hotkeys for everything: <kbd>Ctrl</kbd>+<kbd>K</kbd> to jump to any conversation, <kbd>j</kbd> <kbd>k</kbd> to move, <kbd>Tab</kbd> to write, <kbd>Shift</kbd>+<kbd>J</kbd> <kbd>K</kbd> to reorder sections. Full list in <button class="chl" data-open="hotkeys">#hotkeys</button>.</span></li>
+                <li><span data-i18n="s3">Your Slack sidebar sections. Fold them, drag them, and the new order syncs back to Slack. Unread DMs float to the top.</span></li>
+                <li><span data-i18n="s4">Starred conversations, unread state and mention badges.</span></li>
+                <li><span data-i18n="s11">Search conversations by several words at once, with the matches highlighted.</span></li>
+                <li><span data-i18n="s12">Threads in a side panel, with “also send to channel”.</span></li>
+                <li><span data-i18n="s13">Reactions and a reaction picker, <code>:</code> emoji autocomplete, and your workspace's custom emoji, animated ones playing at the GIF's own pace.</span></li>
+                <li><span data-i18n="s14">Message actions: edit, delete, forward, save for later, remind me, mark unread, copy the link or the text, follow a thread.</span></li>
+                <li><span data-i18n="s15">Pinned messages, in their own tab in each conversation.</span></li>
+                <li><span data-i18n="s6">Avatars and images right in the conversation, in terminals with kitty, sixel or iTerm2 graphics (half blocks elsewhere). Click one to enlarge it; open or download shared files.</span></li>
+                <li><span data-i18n="s8">Block Kit and attachments drawn the way Slack draws them, with buttons you can click.</span></li>
+                <li><span data-i18n="s16">Your account: active or away, pause notifications, custom status, edit your profile. Other people's presence, status and profile cards.</span></li>
+                <li><span data-i18n="s7">Mouse support: drag to select messages and copy them, right-click menus, a sidebar you can resize.</span></li>
+                <li><span data-i18n="s17">A tray icon that lights up with unread DMs and mentions.</span></li>
+                <li><span data-i18n="s18">Updates itself from the GitHub releases, with one click.</span></li>
+                <li><span data-i18n="s9">Your terminal's own colors. Press <kbd>t</kbd> to see what that means.</span></li>
+                <li><span data-i18n="s19">The interface is in Brazilian Portuguese for now.</span></li>
+              </ul>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <!-- #hotkeys -->
+      <section class="chan" id="ch-hotkeys" data-topic="tKeys">
+        <div class="chd"><span class="n"># hotkeys</span><span class="t" data-topic-of="tKeys"></span></div>
+        <article class="msg">
+          <span class="av" aria-hidden="true">s</span>
+          <div>
+            <div><span class="who">slick</span><span class="app"> APP</span><span class="time">11:00</span></div>
+            <div class="body">
+              <p data-i18n="k1">The keyboard is the main interface. The mouse works too.</p>
+              <table>
+                <tr><td>↑ ↓ &nbsp;j k</td><td data-i18n="k_nav">Move through the list</td></tr>
+                <tr><td data-i18n="k_openKey">Enter · click</td><td data-i18n="k_open">Open a conversation or fold a section</td></tr>
+                <tr><td>Ctrl+K · /</td><td data-i18n="k_find">Find a conversation</td></tr>
+                <tr><td>Tab · Esc</td><td data-i18n="k_tab">Move between the list, the message box and the thread</td></tr>
+                <tr><td>g · G</td><td data-i18n="k_ends">First · last conversation</td></tr>
+                <tr><td>Shift+J · Shift+K</td><td data-i18n="k_move">Move a section (the order syncs with Slack)</td></tr>
+                <tr><td data-i18n="k_menuKey">m · right click</td><td data-i18n="k_menu">Menu for a conversation or a message</td></tr>
+                <tr><td>Enter · Shift+Enter</td><td data-i18n="k_nl">Send · new line</td></tr>
+                <tr><td>:</td><td data-i18n="k_emoji">Emoji autocomplete</td></tr>
+                <tr><td data-i18n="k_pickKey">↑ in an empty box</td><td data-i18n="k_pick">Pick a message</td></tr>
+                <tr><td>E R T F A U L Del</td><td data-i18n="k_act">On a picked message: edit, react, reply in thread, forward, save, mark unread, copy link, delete</td></tr>
+                <tr><td>Ctrl+C</td><td data-i18n="k_copy">Copy the picked or selected messages</td></tr>
+                <tr><td>Ctrl+B</td><td data-i18n="k_bcast">In a thread, also send the reply to the channel</td></tr>
+                <tr><td data-i18n="k_scrollKey">PgUp PgDn · wheel</td><td data-i18n="k_scroll">Scroll; at the top, load older messages</td></tr>
+                <tr><td>Ctrl+U · Ctrl+W</td><td data-i18n="k_clear">Clear the box · delete a word</td></tr>
+                <tr><td>Ctrl+N</td><td data-i18n="k_new">New message or channel</td></tr>
+                <tr><td>Ctrl+P</td><td data-i18n="k_acct">Your account, status and profile</td></tr>
+                <tr><td>Ctrl+R</td><td data-i18n="k_reload">Reload channels and users</td></tr>
+                <tr><td>Ctrl+L</td><td data-i18n="k_login">Sign in to Slack</td></tr>
+                <tr><td data-i18n="k_imgKey">click an image</td><td data-i18n="k_img">Enlarge it (o opens it, d downloads it)</td></tr>
+                <tr><td>q · Ctrl+C</td><td data-i18n="k_quit">Quit</td></tr>
+              </table>
+              <p data-i18n="k2">Most of these work on this page too. Try <kbd>q</kbd>.</p>
+              <p data-i18n="k3">Coming from Slack? On this page its shortcuts work as well: <kbd>Ctrl</kbd>+<kbd>K</kbd> jumps to a conversation, <kbd>Alt</kbd>+<kbd>↑</kbd> <kbd>↓</kbd> go to the previous or next channel, <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>↑</kbd> <kbd>↓</kbd> to the next unread one, and <kbd>Esc</kbd> marks the current one read.</p>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <!-- #why-so-fast -->
+      <section class="chan" id="ch-why-so-fast" data-topic="tWhy">
+        <div class="chd"><span class="n"># why-so-fast</span><span class="t" data-topic-of="tWhy"></span></div>
+        <article class="msg">
+          <span class="av you" aria-hidden="true">y</span>
+          <div>
+            <div><span class="who" data-i18n="you">you</span><span class="time">10:12</span></div>
+            <div class="body"><p data-i18n="f1">ok, but why is it so fast?</p></div>
+          </div>
+        </article>
+        <article class="msg">
+          <span class="av" aria-hidden="true">s</span>
+          <div>
+            <div><span class="who">slick</span><span class="app"> APP</span><span class="time">10:12</span></div>
+            <div class="body">
+              <p data-i18n="f2">Rust, mostly. Here's my <i>trust me bro benchmark</i>: slick and the Slack desktop app, same workspace, running side by side on my machine right now:</p>
+              <div class="block"><pre data-i18n="fb"><span class="c">                 slick    Slack</span>
+memory           24 MB    650 MB
+processes        1        10
+threads          5        131
+install          8 MB     295 MB
+cache on disk    13 MB    800 MB</pre></div>
+              <p data-i18n="f2b">Here's what makes that possible:</p>
+              <ul class="quote">
+                <li><span data-i18n="fr1"><b>Native code, not a browser.</b> slick is written in Rust and compiled ahead of time to machine code. No JavaScript engine to boot, no garbage collector pausing to clean up, nothing to warm up.</span></li>
+                <li><span data-i18n="fr2"><b>Light on memory.</b> About 24 MB with my workspace open, against 650 MB spread over Slack's 10 processes. The terminal only redraws when something on screen changed.</span></li>
+                <li><span data-i18n="f3"><b>Cache first.</b> Users, channels, your recent conversations and their last 50 messages are saved locally, so they're on screen before Slack answers.</span></li>
+                <li><span data-i18n="f4"><b>Never blocks.</b> Every request runs on its own thread, and Rust guarantees those threads can't corrupt each other's data. Typing and scrolling never wait on the network.</span></li>
+                <li><span data-i18n="f5"><b>One small binary.</b> About 8 MB (Slack installs 295 MB), no runtime to install. No webview, no Electron. A browser window shows up only to sign in.</span></li>
+                <li><span data-i18n="f6"><b>Asks for less.</b> The open conversation checks for new messages every 3 seconds and only fetches what's newer than what you have.</span></li>
+              </ul>
+            </div>
+          </div>
+        </article>
+        <article class="msg">
+          <span class="av you" aria-hidden="true">y</span>
+          <div>
+            <div><span class="who" data-i18n="you">you</span><span class="time">10:13</span></div>
+            <div class="body"><p data-i18n="f7">fair.</p></div>
+          </div>
+        </article>
+      </section>
+
+      <!-- #disk-usage -->
+      <section class="chan" id="ch-disk-usage" data-topic="tDisk">
+        <div class="chd"><span class="n"># disk-usage</span><span class="t" data-topic-of="tDisk"></span></div>
+        <article class="msg">
+          <span class="av" aria-hidden="true">s</span>
+          <div>
+            <div><span class="who">slick</span><span class="app"> APP</span><span class="time">10:05</span></div>
+            <div class="body">
+              <p data-i18n="d1">Slack's desktop app keeps growing on your disk. slick doesn't.</p>
+              <ul class="quote">
+                <li><span data-i18n="d2"><b>Only what's useful is cached.</b> Users, channels, your 8 most recent conversations and their last 50 messages, in a single file.</span></li>
+                <li><span data-i18n="d3"><b>Old images go away.</b> Photos, avatars and emoji you haven't seen in 7 days are deleted when slick starts. What you keep looking at stays.</span></li>
+              </ul>
+              <p data-i18n="d4">No more bloated disk space for a chat app. On my machine, right now:</p>
+              <div class="block"><pre><span class="c">$ du -sh ~/.cache/slick ~/.config/Slack</span>
+13M   ~/.cache/slick
+800M  ~/.config/Slack</pre></div>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <!-- #omarchy -->
+      <section class="chan" id="ch-omarchy" data-topic="tOmarchy">
+        <div class="chd"><span class="n"><svg class="om" viewBox="0 0 1024 1024" aria-hidden="true" focusable="false"><path fill="currentColor" d="M70 954H549V1024H0V0H1024V1024H626V954H954V70H70ZM884 884H140V140H551V210H210V814H814V210H736V140H884ZM471 884H549V954H471ZM473 70H551V140H473ZM0 473H210V551H0Z"/></svg> omarchy</span><span class="t" data-topic-of="tOmarchy"></span></div>
+        <article class="msg">
+          <span class="av" aria-hidden="true">s</span>
+          <div>
+            <div><span class="who">slick</span><span class="app"> APP</span><span class="time">12:30</span></div>
+            <div class="body">
+              <p class="om-head"><svg class="om big" viewBox="0 0 1024 1024" aria-hidden="true" focusable="false"><path fill="currentColor" d="M70 954H549V1024H0V0H1024V1024H626V954H954V70H70ZM884 884H140V140H551V210H210V814H814V210H736V140H884ZM471 884H549V954H471ZM473 70H551V140H473ZM0 473H210V551H0Z"/></svg><span data-i18n="o0"><b>slick fits right into Omarchy.</b></span></p>
+              <p data-i18n="o1">It opens like any other Omarchy TUI app: from the launcher, in its own window, with its own icon. And it follows your Omarchy theme: slick draws with your terminal's colors, so when you switch themes, slick switches with them.</p>
+              <ul class="quote">
+                <li><span data-i18n="o2"><b>In your bar today.</b> slick's tray icon lights up with unread DMs and mentions, and a click brings its window to the front. <span class="tag">[soon]</span> An Omarchy bar plugin where you decide how it behaves: what the icon shows, what a click does, when it notifies you.</span></li>
+                <li><span data-i18n="o3"><span class="tag">[soon]</span> <b>Slack events in Omarchy.</b> Everything slick receives (new messages, mentions, reactions, presence) is passed on to Omarchy, so your own plugins and scripts can react to it and do whatever you want.</span></li>
+              </ul>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <!-- #roadmap -->
+      <section class="chan" id="ch-roadmap" data-topic="tRoadmap">
+        <div class="chd"><span class="n"># roadmap</span><span class="t" data-topic-of="tRoadmap"></span></div>
+        <article class="msg">
+          <span class="av" aria-hidden="true">s</span>
+          <div>
+            <div><span class="who">slick</span><span class="app"> APP</span><span class="time">12:00</span></div>
+            <div class="body">
+              <p data-i18n="r1">Nothing in this channel works yet. This is where slick is headed:</p>
+              <ul class="quote">
+                <li><span data-i18n="r2"><span class="tag">[planned]</span> <b>Themes.</b> Colors and layout in a config file, beyond your terminal palette.</span></li>
+                <li><span data-i18n="r7"><span class="tag">[planned]</span> <b>Multiple workspaces.</b> Sign in to several Slack workspaces and switch between them without leaving the app, with unread counts for each one.</span></li>
+                <li><span data-i18n="r3"><span class="tag">[planned]</span> <b>Keybindings.</b> Remap any key.</span></li>
+                <li><span data-i18n="r6"><span class="tag">[planned]</span> <b>Panes and tabs, tmux style.</b> Split the screen and keep conversations side by side, open each one in its own tab, and move between them with the keyboard.</span></li>
+                <li><span data-i18n="r8"><span class="tag">[planned]</span> <b>Slack events for your system.</b> New messages, mentions, reactions and presence exposed as a stream of events and as hooks, so any script, bar or notifier can react to them and you can extend and customize slick however you like.</span></li>
+                <li><span data-i18n="r4"><span class="tag">[planned]</span> <b>Plugins.</b> Hooks and scripting to extend it with your own commands.</span></li>
+              </ul>
+              <p data-i18n="r5">Want one of these sooner, or something else? Tell me in <button class="chl" data-open="requests">● feature-requests</button>.</p>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <!-- DM -->
+      <section class="chan" id="ch-dm" data-topic="tDm">
+        <div class="chd"><span class="n">● slick</span><span class="t" data-topic-of="tDm"></span></div>
+        <article class="msg">
+          <span class="av" aria-hidden="true">s</span>
+          <div>
+            <div><span class="who">slick</span><span class="app"> APP</span><span class="time">09:02</span></div>
+            <div class="body">
+              <p><b class="ver">0.1.0</b> <span class="date">2026-10-12</span></p>
+              <p data-i18n="cl0">First release.</p>
+              <ul class="dash">
+                <li><span data-i18n="cl1">Channels, private channels, DMs and group DMs, with threads in a side panel, reactions, pinned messages and every message action Slack has.</span></li>
+                <li><span data-i18n="cl2">Your Slack sidebar sections, starred conversations, unread state and mention badges. Sections fold and reorder, and the order syncs back to Slack.</span></li>
+                <li><span data-i18n="cl3">Avatars, images, Block Kit and your workspace's emoji, animated ones included, in terminals with kitty, sixel or iTerm2 graphics.</span></li>
+                <li><span data-i18n="cl4">Keyboard first: <kbd>Ctrl</kbd>+<kbd>K</kbd> to jump to a conversation, <kbd>j</kbd> <kbd>k</kbd> to move. Mouse works too, down to selecting and copying messages.</span></li>
+                <li><span data-i18n="cl5">Opens from a local cache, refreshes the open conversation every 3 seconds and marks it read.</span></li>
+                <li><span data-i18n="cl6">Sign in on Slack's own page in a small window: <code>slick login [workspace]</code> or <kbd>Ctrl</kbd>+<kbd>L</kbd> in the app. A token in the config file or environment variables work too.</span></li>
+                <li><span data-i18n="cl7">Your account and status, a tray icon for unread messages, and one-click updates from the GitHub releases.</span></li>
+              </ul>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <!-- DM: feature requests; Enter in the box opens a prefilled GitHub issue -->
+      <section class="chan" id="ch-requests" data-topic="tReq">
+        <div class="chd"><span class="n">● feature-requests</span><span class="t" data-topic-of="tReq"></span></div>
+        <article class="msg">
+          <span class="av" aria-hidden="true">s</span>
+          <div>
+            <div><span class="who">slick</span><span class="app"> APP</span><span class="time">09:03</span></div>
+            <div class="body">
+              <p data-i18n="rq1">Missing something? Tell me what slick should do next: threads, reactions, a theme, a key you can't live without.</p>
+              <p data-i18n="rq2">Write your proposal in the box below and press <kbd>Enter</kbd>. After a quick check that you're human and a confirmation by email, it's sent.</p>
+            </div>
+          </div>
+        </article>
+      </section>
+    </div>
+
+    <div class="dock" id="dock">
+      <form class="input" id="inputForm">
+        <label class="sr" for="box" id="boxLabel">Message #welcome</label>
+        <textarea id="box" rows="1" spellcheck="false">curl -fsSL https://slick.leonavas.com/install.sh | sh</textarea>
+        <button type="button" class="hint" id="hint" data-copy="install">Enter copies the command</button>
+      </form>
+    </div>
+  </main>
+</div>
+
+<!-- ===== status line ===== -->
+<footer class="status" id="statusBar">
+  <span class="left" id="status" role="status" aria-live="polite"></span>
+  <span class="right">
+    <span class="hints" data-i18n="hints">j k · Alt+↑↓ channels · ^K find · t theme</span>
+    <button id="themeBtn" type="button"><span data-i18n="themeWord">theme</span>: <span id="themeName">slick</span></button>
+    <span class="lang" role="group" aria-label="Language">
+      <button type="button" data-lang="en" aria-pressed="true">EN</button><span>|</span><button type="button" data-lang="pt" aria-pressed="false">PT</button>
+    </span>
+    <a class="gh" href="https://github.com/leonavas/slick" target="_blank" rel="noopener"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/></svg>GitHub</a>
+  </span>
+</footer>
+
+<script>
+(() => {
+  const INSTALL = "curl -fsSL https://slick.leonavas.com/install.sh | sh";
+  const SOURCE = "cargo install --locked --git https://github.com/leonavas/slick";
+  const COPY = { install: INSTALL, windows: "irm https://slick.leonavas.com/install.ps1 | iex", source: SOURCE, login: "slick login", run: "slick" };
+  const THEMES = [
+    ["slick", "slick"], ["terminal", "Terminal"], ["solarized-light", "Solarized Light"],
+    ["nord", "Nord"], ["catppuccin-latte", "Catppuccin Latte"],
+  ];
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // ---------- logo: ANSI Shadow, drawn with box characters ----------
+  const G = {
+    f: ["███████╗", "██╔════╝", "█████╗  ", "██╔══╝  ", "██║     ", "╚═╝     "],
+    a: [" █████╗ ", "██╔══██╗", "███████║", "██╔══██║", "██║  ██║", "╚═╝  ╚═╝"],
+    s: ["███████╗", "██╔════╝", "███████╗", "╚════██║", "███████║", "╚══════╝"],
+    t: ["████████╗", "╚══██╔══╝", "   ██║   ", "   ██║   ", "   ██║   ", "   ╚═╝   "],
+    l: ["██╗     ", "██║     ", "██║     ", "██║     ", "███████╗", "╚══════╝"],
+    i: ["██╗", "██║", "██║", "██║", "██║", "╚═╝"],
+    c: [" ██████╗", "██╔════╝", "██║     ", "██║     ", "╚██████╗", " ╚═════╝"],
+    k: ["██╗  ██╗", "██║ ██╔╝", "█████╔╝ ", "██╔═██╗ ", "██║  ██╗", "╚═╝  ╚═╝"],
+  };
+  // Drawn as SVG from the same grid, so it renders the same in every font.
+  // Letter by letter in the colors of the app's login screen.
+  (() => {
+    const W = 12, H = 22, d = 2.6;
+    const conn = { "═": "LR", "║": "UD", "╗": "LD", "╔": "RD", "╝": "LU", "╚": "RU" };
+    const SLICK = [["s", "--s-blue"], ["l", "--s-green"], ["i", "--s-red"], ["c", "--s-yellow"], ["k", "--s-blue"]];
+    const draw = (svg, bands) => {
+      let out = "", cols = 0, y0 = 0;
+      for (const band of bands) {
+        let x0 = 0;
+        for (const item of band) {
+          if (item === " ") { x0++; continue; }
+          const [g, color] = item, rows = G[g];
+          let ink = "", sh = "";
+          rows.forEach((line, r) => [...line].forEach((ch, c) => {
+            const x = (x0 + c) * W, y = (y0 + r) * H, cx = x + W / 2, cy = y + H / 2;
+            if (ch === "█") { ink += `M${x} ${y}h${W}v${H}h${-W}z`; return; }
+            const k = conn[ch]; if (!k) return;
+            if (k === "LR") sh += `M${x} ${cy - d}H${x + W}M${x} ${cy + d}H${x + W}`;
+            else if (k === "UD") sh += `M${cx - d} ${y}V${y + H}M${cx + d} ${y}V${y + H}`;
+            else {
+              const sx = k[0] === "R" ? 1 : -1, sy = k[1] === "D" ? 1 : -1;
+              const ex = cx + sx * W / 2, ey = cy + sy * H / 2;
+              sh += `M${ex} ${cy - sy * d}H${cx - sx * d}V${ey}`;
+              sh += `M${ex} ${cy + sy * d}H${cx + sx * d}V${ey}`;
+            }
+          }));
+          out += `<g style="--c:var(${color})"><path class="sh" d="${sh}"/><path class="ink" d="${ink}"/></g>`;
+          x0 += rows[0].length;
+        }
+        cols = Math.max(cols, x0); y0 += 7;
+      }
+      svg.setAttribute("viewBox", `0 0 ${cols * W} ${(y0 - 1) * H}`);
+      svg.innerHTML = out;
+    };
+    draw(document.getElementById("logo"), [SLICK]);
+    draw(document.getElementById("teamLogo"), [SLICK]);
+  })();
+
+  // ---------- i18n ----------
+  const PT = {
+    findLabel: "Encontrar uma conversa",
+    gStarred: "Favoritos", gChannels: "Canais", gDms: "Mensagens diretas",
+    you: "você",
+    heroH: "Uma TUI de Slack ultrarrápida, enxuta e bonita.",
+    heroLede: "Um binário Rust pequeno, sem navegador dentro. Tem todas as features e atalhos importantes do Slack.",
+    copyCmd: "Copiar",
+    i1: "<b>1.</b> Instale. No Linux (x86_64 e arm64), o script baixa a última release para a sua máquina, confere o SHA-256 e coloca o <code>slick</code> em <code>~/.local/bin</code>, sem sudo. A janela de login precisa do WebKitGTK (<code>webkit2gtk-4.1</code>).",
+    i1win: "No Windows 10/11 (x86_64), no PowerShell. Ele instala em <code>%LOCALAPPDATA%\\Programs\\slick</code> e coloca a pasta no PATH. Use o Windows Terminal (ou outro terminal com cores e imagens); por enquanto não há ícone na bandeja no Windows.",
+    i1sum: "Prefere compilar do código-fonte?",
+    i1src: "Você precisa do Rust, do cargo e do pacote de desenvolvimento do WebKitGTK (<code>libwebkit2gtk-4.1-dev</code> no Debian/Ubuntu).",
+    i2: "<b>2.</b> Entre na sua conta. Uma janelinha abre a página de login do próprio Slack; quando você entra, ela passa a sessão para o slick e fecha. Dentro do app, <kbd>Ctrl</kbd>+<kbd>L</kbd> abre a mesma tela.",
+    i2ws: "Passe o seu workspace (<code>slick login acme</code>) para ir direto ao formulário de e-mail e senha dele.",
+    i2keep: "A sessão fica salva em <code>~/.config/slick/config</code>, que só você consegue ler. A janela tem um perfil próprio, então sair do Slack no navegador não te desconecta aqui. Se a sessão expirar, o slick pede para você entrar de novo.",
+    i2sum: "Prefere um token ou variáveis de ambiente?",
+    i2b: "Coloque uma destas opções em <code>~/.config/slick/config</code>:",
+    i2cfg: '<span class="c"># A) app interno do Slack (oficial): crie a partir do\n#    slack-app-manifest.yml, instale e use o User OAuth Token</span>\ntoken = xoxp-…\n\n<span class="c"># B) sessão do navegador, sem precisar de admin</span>\ntoken = xoxc-…\ncookie = xoxd-…',
+    i3: "Ou defina <code>SLACK_TOKEN</code> e <code>SLACK_COOKIE</code> no ambiente. Também dá para colar o token e o cookie direto na tela de login.",
+    i4: "<b>3.</b> Rode.",
+    i5: '<span class="me">@você</span> a primeira execução busca seus canais e usuários. Nas próximas, ele abre direto do cache local, com tudo já na tela.',
+    f1: "tá, mas por que ele é tão rápido?",
+    f2: "Rust, principalmente. Olha o meu <i>trust me bro benchmark</i>: slick e o app desktop do Slack, mesmo workspace, rodando lado a lado na minha máquina agora:",
+    fb: '<span class="c">                 slick    Slack</span>\nmemória          24 MB    650 MB\nprocessos        1        10\nthreads          5        131\ninstalação       8 MB     295 MB\ncache em disco   13 MB    800 MB',
+    f2b: "Isto é o que torna isso possível:",
+    fr1: "<b>Código nativo, não um navegador.</b> O slick é escrito em Rust e compilado direto para código de máquina. Nenhum motor de JavaScript para subir, nenhum coletor de lixo pausando para limpar, nada para aquecer.",
+    fr2: "<b>Leve na memória.</b> Uns 24 MB com o meu workspace aberto, contra 650 MB espalhados pelos 10 processos do Slack. O terminal só é redesenhado quando algo na tela mudou.",
+    f3: "<b>Cache primeiro.</b> Usuários, canais, suas conversas recentes e as últimas 50 mensagens de cada uma ficam salvos localmente, então aparecem na tela antes de o Slack responder.",
+    f4: "<b>Nunca trava.</b> Cada requisição roda em uma thread própria, e o Rust garante que essas threads não corrompam os dados umas das outras. Digitar e rolar nunca esperam a rede.",
+    f5: "<b>Um binário pequeno.</b> Cerca de 8 MB (o Slack instala 295 MB), sem runtime para instalar. Sem webview, sem Electron. Uma janela de navegador só aparece para fazer login.",
+    f6: "<b>Pede menos.</b> A conversa aberta procura mensagens novas a cada 3 segundos e só traz o que for mais novo do que você já tem.",
+    f7: "justo.",
+    k1: "O teclado é a interface principal. O mouse também funciona.",
+    k_nav: "Navegar na lista",
+    k_openKey: "Enter · clique",
+    k_open: "Abrir a conversa ou recolher uma seção",
+    k_find: "Procurar uma conversa",
+    k_tab: "Alternar entre a lista, o campo de mensagem e a thread",
+    k_ends: "Primeira · última conversa",
+    k_move: "Mover uma seção (a ordem sincroniza com o Slack)",
+    k_menuKey: "m · clique direito",
+    k_menu: "Menu de uma conversa ou mensagem",
+    k_nl: "Enviar · nova linha",
+    k_emoji: "Autocomplete de emoji",
+    k_pickKey: "↑ com o campo vazio",
+    k_pick: "Escolher uma mensagem",
+    k_act: "Na mensagem escolhida: editar, reagir, responder na thread, encaminhar, salvar, marcar como não lida, copiar link, apagar",
+    k_copy: "Copiar as mensagens escolhidas ou selecionadas",
+    k_bcast: "Na thread, enviar a resposta também para o canal",
+    k_scrollKey: "PgUp PgDn · roda",
+    k_scroll: "Rolar; no topo, carrega mensagens antigas",
+    k_clear: "Limpar o campo · apagar uma palavra",
+    k_new: "Nova mensagem ou canal",
+    k_acct: "Sua conta, status e perfil",
+    k_reload: "Recarregar canais e usuários",
+    k_login: "Entrar no Slack",
+    k_imgKey: "clique na imagem",
+    k_img: "Ampliar (o abre, d baixa)",
+    k_quit: "Sair",
+    k2: "A maioria funciona nesta página também. Tente <kbd>q</kbd>.",
+    k3: "Vem do Slack? Nesta página os atalhos dele também funcionam: <kbd>Ctrl</kbd>+<kbd>K</kbd> pula para uma conversa, <kbd>Alt</kbd>+<kbd>↑</kbd> <kbd>↓</kbd> vão para o canal anterior ou o próximo, <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>↑</kbd> <kbd>↓</kbd> para o próximo não lido, e <kbd>Esc</kbd> marca o atual como lido.",
+    s1: "O que a TUI já faz hoje:",
+    s2: "Canais, canais privados, DMs e DMs em grupo. Comece uma DM ou um canal novo com <kbd>Ctrl</kbd>+<kbd>N</kbd>.",
+    s3: "As seções da sua barra lateral do Slack. Recolha, arraste, e a nova ordem volta sincronizada para o Slack. DMs não lidas sobem para o topo.",
+    s4: "Conversas favoritas, não lidas e contador de menções.",
+    s11: "Busca de conversas por várias palavras ao mesmo tempo, com o que bateu destacado.",
+    s12: "Threads num painel ao lado, com “enviar também para o canal”.",
+    s13: "Reações e seletor de reações, autocomplete de emoji com <code>:</code> e os emojis próprios do seu workspace, com os animados no ritmo do GIF.",
+    s14: "Ações na mensagem: editar, apagar, encaminhar, salvar para depois, lembrar, marcar como não lida, copiar o link ou o texto, seguir uma thread.",
+    s15: "Mensagens fixadas, numa aba própria em cada conversa.",
+    s6: "Avatares e imagens no meio da conversa, em terminais com gráficos kitty, sixel ou iTerm2 (meio-blocos nos outros). Clique para ampliar; abra ou baixe os arquivos compartilhados.",
+    s8: "Block Kit e anexos desenhados como o Slack desenha, com botões clicáveis.",
+    s16: "Sua conta: ativo ou ausente, pausar notificações, status personalizado, editar o perfil. Presença, status e cartão de perfil das outras pessoas.",
+    s7: "Suporte a mouse: arraste para selecionar mensagens e copiar, menus no clique direito, barra lateral redimensionável.",
+    s17: "Um ícone na bandeja do sistema que acende com DMs não lidas e menções.",
+    s18: "Se atualiza sozinho pelas releases do GitHub, com um clique.",
+    s9: "As cores do seu próprio terminal. Aperte <kbd>t</kbd> para ver o que isso quer dizer.",
+    s19: "Por enquanto, a interface é em português.",
+    s10: 'Atalhos para tudo: <kbd>Ctrl</kbd>+<kbd>K</kbd> para pular para qualquer conversa, <kbd>j</kbd> <kbd>k</kbd> para navegar, <kbd>Tab</kbd> para escrever, <kbd>Shift</kbd>+<kbd>J</kbd> <kbd>K</kbd> para reordenar seções. Lista completa em <button class="chl" data-open="hotkeys">#hotkeys</button>.',
+    r1: "Nada neste canal funciona ainda. É para cá que o slick está indo:",
+    r2: '<span class="tag">[planejado]</span> <b>Temas.</b> Cores e layout em um arquivo de configuração, além da paleta do terminal.',
+    r7: '<span class="tag">[planejado]</span> <b>Vários workspaces.</b> Entre em vários workspaces do Slack e alterne entre eles sem sair do app, com as não lidas de cada um.',
+    r3: '<span class="tag">[planejado]</span> <b>Atalhos.</b> Remapeie qualquer tecla.',
+    r6: '<span class="tag">[planejado]</span> <b>Painéis e abas, no estilo tmux.</b> Divida a tela e deixe conversas lado a lado, abra cada uma numa aba própria e alterne entre elas pelo teclado.',
+    r8: '<span class="tag">[planejado]</span> <b>Eventos do Slack para o seu sistema.</b> Mensagens novas, menções, reações e presença expostas como um fluxo de eventos e como hooks, para qualquer script, barra ou notificador reagir a elas e você estender e customizar o slick do jeito que quiser.',
+    r4: '<span class="tag">[planejado]</span> <b>Plugins.</b> Hooks e scripts para estender o app com os seus próprios comandos.',
+    r5: 'Quer algum desses antes, ou outra coisa? Me conta em <button class="chl" data-open="requests">● feature-requests</button>.',
+    rq1: "Sentiu falta de algo? Conta o que o slick deveria fazer: threads, reações, um tema, um atalho sem o qual você não vive.",
+    rq2: "Escreva sua proposta na caixa abaixo e aperte <kbd>Enter</kbd>. Depois de uma verificação rápida de que você é humano e da confirmação por e-mail, ela é enviada.",
+    o0: "<b>O slick se encaixa direitinho no Omarchy.</b>",
+    o1: "Ele abre como qualquer app TUI do Omarchy: pelo launcher, na própria janela, com o próprio ícone. E segue o tema do Omarchy: o slick usa as cores do seu terminal, então quando você troca de tema, ele troca junto.",
+    o2: '<b>Na sua barra, já hoje.</b> O ícone do slick na bandeja acende com DMs não lidas e menções, e um clique traz a janela para a frente. <span class="tag">[em breve]</span> Um plugin para a barra do Omarchy onde você decide como ele se comporta: o que o ícone mostra, o que o clique faz, quando ele te avisa.',
+    o3: '<span class="tag">[em breve]</span> <b>Eventos do Slack no Omarchy.</b> Tudo o que o slick recebe (mensagens novas, menções, reações, presença) é repassado ao Omarchy, para os seus próprios plugins e scripts reagirem e fazerem o que você quiser.',
+    d1: "O app desktop do Slack não para de crescer no seu disco. O slick, não.",
+    d2: "<b>Só o que é útil vai para o cache.</b> Usuários, canais, suas 8 conversas mais recentes e as últimas 50 mensagens de cada uma, num único arquivo.",
+    d3: "<b>Imagens antigas vão embora.</b> Fotos, avatares e emojis que você não vê há 7 dias são apagados quando o slick abre. O que você continua vendo fica.",
+    d4: "Chega de espaço em disco inchado por um app de chat. Na minha máquina, agora:",
+    cl0: "Primeira versão.",
+    cl1: "Canais, canais privados, DMs e DMs em grupo, com threads num painel ao lado, reações, mensagens fixadas e todas as ações de mensagem do Slack.",
+    cl2: "As seções da sua barra lateral do Slack, favoritos, não lidas e badges de menção. As seções recolhem e mudam de ordem, e a ordem volta para o Slack.",
+    cl3: "Avatares, imagens, Block Kit e os emojis do seu workspace, inclusive os animados, em terminais com gráficos kitty, sixel ou iTerm2.",
+    cl4: "Teclado primeiro: <kbd>Ctrl</kbd>+<kbd>K</kbd> pula para uma conversa, <kbd>j</kbd> <kbd>k</kbd> navegam. O mouse também funciona, até para selecionar e copiar mensagens.",
+    cl5: "Abre a partir de um cache local, atualiza a conversa aberta a cada 3 segundos e marca como lida.",
+    cl6: "Login na própria página do Slack, numa janelinha: <code>slick login [workspace]</code> ou <kbd>Ctrl</kbd>+<kbd>L</kbd> no app. Token no arquivo de config ou variáveis de ambiente também funcionam.",
+    cl7: "Sua conta e status, ícone na bandeja para as não lidas e atualização com um clique pelas releases do GitHub.",
+    hints: "j k · Alt+↑↓ canais · ^K procurar · t tema",
+    themeWord: "tema",
+  };
+  const S = {
+    en: {
+      title: "slick — ultrafast, slim and beautiful Slack TUI",
+      desc: "slick is an ultrafast, slim and beautiful Slack TUI: one small Rust binary, no browser inside.",
+      idle: "",
+      syncing: "↻ refreshing in the background…",
+      synced: "✓ up to date",
+      copied: "✓ Copied to the clipboard",
+      copyFail: "✗ Couldn't copy. Select the text and copy it by hand.",
+      quit: "q quits the real slick. This tab stays open.",
+      theme: "theme",
+      noMatch: q => `No conversation matches “${q}”.`,
+      unknown: "✗ Unknown command. Try /theme, /lang pt or /help.",
+      message: n => `Message ${n}`,
+      hintCopy: "Enter copies the command", hintSend: "Enter sends · Shift+Enter new line",
+      copyBtn: "[Copy]", copiedBtn: "[Copied]", copyCmd: "Copy", copiedCmd: "Copied",
+      tWelcome: "Start here", tInstall: "Install, sign in, run", tWhy: "Rust, not a browser",
+      tDisk: "Small on disk", tKeys: "Everything has a key", tFeatures: "Shipping today", tRoadmap: "Planned, not shipped", tOmarchy: "Made for your desktop", tDm: "Changelog", tReq: "Ask for what's missing",
+      hintReq: "Enter sends your proposal",
+      rqCheck: "Before it goes out: one quick check that you're human.",
+      rqSending: "↻ Sending…",
+      rqSent: "✓ Your proposal was sent.",
+      rqEmail: "Thanks. Now your email: I'll send you a link, and the proposal goes out when you click it.",
+      emailPh: "you@example.com", hintEmail: "Enter sends the confirmation link",
+      rqMailed: "✉ Check your inbox: the confirmation link is on its way. Your proposal goes out once you click it.",
+      rqWaiting: "Waiting for you to confirm it by email.",
+      rqInvalid: "✗ That confirmation link expired or isn't valid. Send the proposal again.",
+      badEmail: "✗ That doesn't look like an email address.",
+      rqFail: "✗ Couldn't send it. Check your connection and try again.",
+      rqNoCaptcha: "✗ The human check didn't load. Allow challenges.cloudflare.com and try again.",
+      retry: "[Try again]",
+      noUnread: "✓ No more unread channels",
+      markedRead: n => `✓ ${n} marked as read`,
+      nav: "Conversations", lang: "Language", toTop: "Back to the top",
+    },
+    pt: {
+      title: "slick — TUI de Slack ultrarrápida, enxuta e bonita",
+      desc: "slick é uma TUI de Slack ultrarrápida, enxuta e bonita: um binário Rust pequeno, sem navegador dentro.",
+      idle: "",
+      syncing: "↻ atualizando em segundo plano…",
+      synced: "✓ tudo atualizado",
+      copied: "✓ Copiado para a área de transferência",
+      copyFail: "✗ Não deu para copiar. Selecione o texto e copie manualmente.",
+      quit: "q fecha o slick de verdade. Esta aba continua aberta.",
+      theme: "tema",
+      noMatch: q => `Nenhuma conversa com “${q}”.`,
+      unknown: "✗ Comando desconhecido. Tente /theme, /lang en ou /help.",
+      message: n => `Mensagem para ${n}`,
+      hintCopy: "Enter copia o comando", hintSend: "Enter envia · Shift+Enter nova linha",
+      copyBtn: "[Copiar]", copiedBtn: "[Copiado]", copyCmd: "Copiar", copiedCmd: "Copiado",
+      tWelcome: "Comece por aqui", tInstall: "Instalar, entrar, rodar", tWhy: "Rust, não um navegador",
+      tDisk: "Pequeno no disco", tKeys: "Tudo tem um atalho", tFeatures: "Já funciona hoje", tRoadmap: "Planejado, ainda não lançado", tOmarchy: "Feito para o seu desktop", tDm: "Changelog", tReq: "Peça o que está faltando",
+      hintReq: "Enter envia sua proposta",
+      rqCheck: "Antes de enviar: uma verificação rápida de que você é humano.",
+      rqSending: "↻ Enviando…",
+      rqSent: "✓ Sua proposta foi enviada.",
+      rqEmail: "Valeu. Agora seu e-mail: vou mandar um link, e a proposta é enviada quando você clicar nele.",
+      emailPh: "voce@exemplo.com", hintEmail: "Enter envia o link de confirmação",
+      rqMailed: "✉ Confira sua caixa de entrada: o link de confirmação está a caminho. A proposta é enviada assim que você clicar nele.",
+      rqWaiting: "Aguardando você confirmar pelo e-mail.",
+      rqInvalid: "✗ Esse link de confirmação expirou ou não é válido. Mande a proposta de novo.",
+      badEmail: "✗ Isso não parece um endereço de e-mail.",
+      rqFail: "✗ Não deu para enviar. Confira sua conexão e tente de novo.",
+      rqNoCaptcha: "✗ A verificação não carregou. Libere challenges.cloudflare.com e tente de novo.",
+      retry: "[Tentar de novo]",
+      noUnread: "✓ Nenhum canal não lido",
+      markedRead: n => `✓ ${n} marcado como lido`,
+      nav: "Conversas", lang: "Idioma", toTop: "Voltar ao início",
+    },
+  };
+
+  const store = {
+    get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+  };
+  const $ = s => document.querySelector(s);
+  const $$ = s => [...document.querySelectorAll(s)];
+  const root = document.documentElement;
+
+  const original = new Map();
+  $$("[data-i18n]").forEach(el => original.set(el, el.innerHTML));
+  const phOriginal = new Map();
+  $$("[data-i18n-ph]").forEach(el => phOriginal.set(el, el.placeholder));
+
+  let lang = "en";
+  const t = k => S[lang][k];
+
+  function setLang(next, persist) {
+    lang = next === "pt" ? "pt" : "en";
+    root.lang = lang === "pt" ? "pt-BR" : "en";
+    original.forEach((html, el) => {
+      const k = el.dataset.i18n;
+      el.innerHTML = lang === "pt" && PT[k] != null ? PT[k] : html;
+    });
+    phOriginal.forEach((ph, el) => {
+      el.placeholder = lang === "pt" ? PT[el.dataset.i18nPh] : ph;
+    });
+    $$("[data-topic-of]").forEach(el => { el.textContent = t(el.dataset.topicOf); });
+    $$("[data-i18n-aria]").forEach(el => el.setAttribute("aria-label", t(el.dataset.i18nAria)));
+    document.title = t("title");
+    $('meta[name="description"]').content = t("desc");
+    $("#side").setAttribute("aria-label", t("nav"));
+    $(".lang").setAttribute("aria-label", t("lang"));
+    $$(".lang [data-lang]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.lang === lang)));
+    $$(".btn[data-copy]").forEach(b => { b.textContent = t("copyBtn"); });
+    $$("[data-t]").forEach(el => { el.textContent = t(el.dataset.t); });
+    if (persist) store.set("fs-lang", lang);
+    renderHeader();
+    updateHint();
+    idle();
+    measure();
+  }
+
+  // ---------- theme ----------
+  let themeIdx = 0;
+  function setTheme(i, persist) {
+    themeIdx = (i + THEMES.length) % THEMES.length;
+    const [id, name] = THEMES[themeIdx];
+    root.dataset.theme = id;
+    $("#themeName").textContent = name;
+    $('meta[name="theme-color"]').content = getComputedStyle(root).getPropertyValue("--bg").trim();
+    if (persist) { store.set("fs-theme", id); flash(`${t("theme")}: ${name}`, "ok"); }
+  }
+
+  // ---------- status line ----------
+  let statusTimer;
+  function idle() { const s = $("#status"); s.className = "left"; s.textContent = t("idle"); }
+  function flash(msg, kind, ms = 2600) {
+    clearTimeout(statusTimer);
+    const s = $("#status");
+    s.className = "left" + (kind ? " " + kind : "");
+    s.textContent = msg;
+    if (ms) statusTimer = setTimeout(idle, ms);
+  }
+
+  // ---------- copy ----------
+  async function copy(text, btn) {
+    let ok = false;
+    try { await navigator.clipboard.writeText(text); ok = true; }
+    catch {
+      const ta = document.createElement("textarea");
+      ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.append(ta); ta.select();
+      try { ok = document.execCommand("copy"); } catch {}
+      ta.remove();
+    }
+    flash(ok ? t("copied") : t("copyFail"), ok ? "ok" : "err");
+    if (!ok || !btn) return;
+    const big = btn.classList.contains("go");
+    if (!big && !btn.classList.contains("btn")) return;
+    btn.textContent = t(big ? "copiedCmd" : "copiedBtn"); btn.classList.add("ok");
+    setTimeout(() => { btn.textContent = t(big ? "copyCmd" : "copyBtn"); btn.classList.remove("ok"); }, 1800);
+  }
+
+  // ---------- layout measurements for sticky offsets ----------
+  const mobile = matchMedia("(max-width: 760px)");
+  function measure() {
+    const sh = $("#statusBar").offsetHeight;
+    const hh = mobile.matches ? $("#side").offsetHeight : $("#head").offsetHeight;
+    root.style.setProperty("--sh", sh + "px");
+    root.style.setProperty("--hh", hh + "px");
+    root.style.setProperty("--dh", $("#dock").offsetHeight + "px");
+  }
+  new ResizeObserver(measure).observe($("#statusBar"));
+  addEventListener("resize", measure);
+
+  // ---------- sidebar ----------
+  const side = $("#side");
+  const sections = $$(".chan");
+  const order = sections.map(s => s.id.slice(3));
+  const rows = () => $$(".side .row").filter(r => r.offsetParent !== null);
+  let current = "welcome";
+  let sel = "welcome";
+
+  function markSel(id, focus) {
+    sel = id;
+    $$(".side .row").forEach(r => r.classList.toggle("sel", r.dataset.ch === id));
+    const r = $(`.side .row[data-ch="${id}"]`);
+    if (focus && r) r.focus({ preventScroll: true });
+  }
+
+  // Direct messages are named after who you talk to, not the channel id.
+  const DMS = { dm: "slick", requests: "feature-requests" };
+  const label = id => DMS[id] || "#" + id;
+  function renderHeader() {
+    const sec = $(`#ch-${current}`);
+    const isDm = current in DMS;
+    $("#hIco").textContent = isDm ? "●" : "#";
+    $("#hName").textContent = isDm ? DMS[current] : current;
+    $("#hStar").hidden = !(current === "welcome" || current === "install");
+    $("#hTopic").textContent = t(sec.dataset.topic);
+    $("#hNum").textContent = `${order.indexOf(current) + 1}/${order.length}`;
+    $("#hPips").innerHTML = order.map(id => {
+      const unread = $(`.side .row[data-ch="${id}"]`)?.classList.contains("unread");
+      return `<i class="${id === current ? "cur" : unread ? "" : "rd"}"></i>`;
+    }).join("");
+    $("#boxLabel").textContent = t("message")(label(current));
+    $("#box").placeholder = awaiting && current === "requests" ? t("emailPh") : t("message")(label(current));
+  }
+
+  function refreshHeaders() {
+    $$(".group").forEach(g => {
+      g.querySelector(".hdr").classList.toggle("unread", g.querySelector(".row.unread") !== null);
+    });
+  }
+
+  // Reaching a channel marks it read, like conversations.mark in the app.
+  function setCurrent(id) {
+    if (id === current) return;
+    current = id;
+    $$(".side .row").forEach(r => r.classList.toggle("current", r.dataset.ch === id));
+    const r = $(`.side .row[data-ch="${id}"]`);
+    if (r) {
+      r.classList.remove("unread"); r.querySelector(".badge").textContent = "";
+      if (mobile.matches) side.scrollTo({ left: r.offsetLeft - 16, behavior: reduced ? "auto" : "smooth" });
+    }
+    refreshHeaders();
+    if (!side.contains(document.activeElement)) markSel(id, false);
+    renderHeader();
+    if (id === "requests" && box.value.trim() === INSTALL) { box.value = ""; grow(); }
+    updateHint();
+    history.replaceState(null, "", location.pathname + location.search + (id === "welcome" ? "" : "#" + id));
+  }
+
+  // Scroll moves through the channels: the one crossing the reading line is current.
+  // After a click the page scrolls itself there; spying waits until it lands
+  // (scrollend, or the lock running out where scrollend doesn't exist).
+  let lockUntil = 0, spyLater = 0;
+  function spy() {
+    const wait = lockUntil - performance.now();
+    if (wait > 0) { clearTimeout(spyLater); spyLater = setTimeout(spy, wait + 20); return; }
+    const line = (parseFloat(root.style.getPropertyValue("--hh")) || 48) + innerHeight * 0.3;
+    let id = order[0];
+    for (const s of sections) if (s.getBoundingClientRect().top <= line) id = s.id.slice(3);
+    if (innerHeight + scrollY >= document.documentElement.scrollHeight - 4) id = order[order.length - 1];
+    setCurrent(id);
+    // The list's cursor follows the page too, also while the list has focus.
+    if (sel !== id) markSel(id, side.contains(document.activeElement));
+  }
+  let ticking = false;
+  addEventListener("scroll", () => {
+    if (ticking) return; ticking = true;
+    requestAnimationFrame(() => { ticking = false; spy(); });
+  }, { passive: true });
+  addEventListener("scrollend", () => { lockUntil = 0; spy(); });
+
+  function open(id, opts = {}) {
+    const sec = $(`#ch-${id}`);
+    if (!sec) return;
+    setCurrent(id);
+    markSel(id, false);
+    lockUntil = performance.now() + 1200;
+    const top = id === "welcome" ? 0 : sec.getBoundingClientRect().top + scrollY - (parseFloat(root.style.getPropertyValue("--hh")) || 0);
+    scrollTo({ top, behavior: reduced || opts.instant ? "auto" : "smooth" });
+    if (opts.focusInput) $("#box").focus({ preventScroll: true });
+  }
+  function step(d) {
+    const i = Math.max(0, Math.min(order.length - 1, order.indexOf(current) + d));
+    open(order[i]);
+    if (side.contains(document.activeElement)) markSel(order[i], true);
+  }
+
+  side.addEventListener("click", e => {
+    const hdr = e.target.closest(".hdr");
+    if (hdr) {
+      const ul = hdr.nextElementSibling;
+      ul.hidden = !ul.hidden;
+      hdr.setAttribute("aria-expanded", String(!ul.hidden));
+      hdr.querySelector(".arr").textContent = ul.hidden ? "▸" : "▾";
+      return;
+    }
+    const row = e.target.closest(".row");
+    if (row) { open(row.dataset.ch); row.focus({ preventScroll: true }); }
+  });
+  side.addEventListener("focusin", e => {
+    const row = e.target.closest(".row");
+    if (row) markSel(row.dataset.ch, false);
+  });
+
+  // ---------- filter ----------
+  const filter = $("#filter");
+  function applyFilter() {
+    const q = filter.value.trim().toLowerCase();
+    let any = false;
+    $$(".side .row").forEach(r => {
+      const name = r.querySelector(".name").textContent.toLowerCase();
+      // subsequence match, like a fuzzy finder
+      let i = 0; for (const c of name) if (c === q[i]) i++;
+      const hit = !q || i === q.length;
+      r.parentElement.hidden = !hit;
+      if (hit) any = true;
+    });
+    $$(".group").forEach(g => {
+      g.querySelector(".hdr").hidden = !!q;
+      if (q) g.querySelector("ul").hidden = false;
+    });
+    const nm = $("#noMatch");
+    nm.hidden = any; nm.textContent = any ? "" : t("noMatch")(filter.value.trim());
+    const first = rows()[0];
+    if (first) markSel(first.dataset.ch, false);
+  }
+  function openFilter() {
+    if (mobile.matches) return;
+    filter.focus({ preventScroll: true }); filter.select();
+  }
+  function closeFilter() {
+    filter.value = ""; applyFilter();
+    $$(".group").forEach(g => {
+      g.querySelector("ul").hidden = g.querySelector(".hdr").getAttribute("aria-expanded") === "false";
+    });
+    markSel(current, true);
+  }
+  filter.addEventListener("input", applyFilter);
+  filter.addEventListener("keydown", e => {
+    if (e.key === "Escape") { e.preventDefault(); closeFilter(); }
+    else if (e.key === "Enter") {
+      e.preventDefault();
+      const id = sel;
+      if (filter.value && rows().length) { filter.value = ""; applyFilter(); open(id); markSel(id, true); }
+    } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const list = rows(); let i = list.findIndex(r => r.dataset.ch === sel);
+      i = Math.max(0, Math.min(list.length - 1, i + (e.key === "ArrowDown" ? 1 : -1)));
+      if (list[i]) markSel(list[i].dataset.ch, false);
+    }
+  });
+
+  // ---------- input box ----------
+  const box = $("#box");
+  function grow() { box.style.height = "auto"; box.style.height = box.scrollHeight + "px"; }
+  function updateHint() {
+    const req = current === "requests";
+    $("#hint").textContent = box.value.trim() === INSTALL ? t("hintCopy")
+      : req && awaiting ? t("hintEmail") : req ? t("hintReq") : t("hintSend");
+  }
+
+  // ---------- feature requests: write → human check → email → confirmation link → sent ----------
+  // The real Turnstile site key on the live domain; Cloudflare's always-pass test key anywhere else.
+  const TURNSTILE_SITEKEY = location.hostname === "slick.leonavas.com" ? "0x4AAAAAAFUPaCg1TqpmvmtW" : "1x00000000000000000000AA";
+  const REQUEST_API = "/api/feature-request";
+  const SENT_KEY = "slick-requests";
+  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const sentList = () => { try { return JSON.parse(store.get(SENT_KEY) || "[]"); } catch { return []; } };
+  const saveList = list => store.set(SENT_KEY, JSON.stringify(list.slice(-50)));
+  const say = (body, key) => { const p = body.querySelector("p"); p.dataset.t = key; p.textContent = t(key); };
+  const mines = new Map();  // proposal id → your message, dimmed until it's confirmed
+  let awaiting = null;      // { text, mine, token } after the human check, until the email is in
+  let tsLoad = null;
+  function turnstile() {
+    if (window.turnstile) return Promise.resolve(window.turnstile);
+    return tsLoad || (tsLoad = new Promise((ok, fail) => {
+      const sc = document.createElement("script");
+      sc.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+      sc.async = true;
+      sc.onload = () => ok(window.turnstile);
+      sc.onerror = () => { tsLoad = null; sc.remove(); fail(); };
+      document.head.append(sc);
+    }));
+  }
+  function failed(body, key, retry) {
+    body.innerHTML = `<p class="err"></p><p><button type="button" class="btn"></button></p>`;
+    body.querySelector(".err").textContent = t(key);
+    const b = body.querySelector("button");
+    b.textContent = t("retry");
+    b.addEventListener("click", () => { body.closest(".msg").remove(); retry(); });
+  }
+  async function request(text, mine) {
+    mine.classList.add("pending");
+    const body = reply(`<p></p><div class="ts"></div>`);
+    say(body, "rqCheck");
+    const again = () => request(text, mine);
+    let ts;
+    try { ts = await turnstile(); } catch { failed(body, "rqNoCaptcha", again); return; }
+    ts.render(body.querySelector(".ts"), {
+      sitekey: TURNSTILE_SITEKEY,
+      theme: ["slick", "terminal", "nord"].includes(THEMES[themeIdx][0]) ? "dark" : "light",
+      language: lang === "pt" ? "pt-br" : "en",
+      "error-callback": () => failed(body, "rqNoCaptcha", again),
+      callback: token => {
+        body.innerHTML = "<p></p>";
+        say(body, "rqEmail");
+        awaiting = { text, mine, token };
+        renderHeader(); updateHint();
+        box.focus({ preventScroll: true });
+      },
+    });
+  }
+  async function sendWithEmail(email) {
+    const { text, mine, token } = awaiting;
+    awaiting = null;
+    renderHeader(); updateHint();
+    post(email);
+    const body = reply("<p></p>");
+    say(body, "rqSending");
+    let id;
+    try {
+      const r = await fetch(REQUEST_API, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text, email, token, lang }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.id) throw new Error(d.error || String(r.status));
+      id = d.id;
+    } catch (e) {
+      failed(body, e.message === "bad_email" ? "badEmail" : "rqFail", () => request(text, mine));
+      return;
+    }
+    say(body, "rqMailed");
+    body.dataset.req = id;
+    mines.set(id, mine);
+    saveList([...sentList(), { id, text, at: Date.now(), status: "pending" }]);
+  }
+  function markConfirmed(id) {
+    const list = sentList();
+    const e = list.find(x => x.id === id);
+    if (e && e.status !== "confirmed") { e.status = "confirmed"; saveList(list); }
+    const body = document.querySelector(`[data-req="${id}"]`);
+    if (body) { say(body, "rqSent"); delete body.dataset.req; }
+    if (mines.has(id)) { mines.get(id).classList.remove("pending"); mines.delete(id); }
+  }
+  // Pending proposals may have been confirmed in another tab or on another device.
+  function checkPending() {
+    for (const e of sentList()) {
+      if (e.status !== "pending" || !e.id) continue;
+      fetch(`${REQUEST_API}/${e.id}`)
+        .then(r => (r.ok ? r.json() : null))
+        .then(d => { if (d && d.status === "confirmed") markConfirmed(e.id); })
+        .catch(() => {});
+    }
+  }
+  // Proposals sent from this browser come back into the conversation; the confirmation link lands here too.
+  function restoreSent() {
+    const q = new URLSearchParams(location.search);
+    const confirmed = q.get("confirmed");
+    const invalid = q.get("confirm") === "invalid";
+    const list = sentList();
+    for (const e of list) if (e.id && e.id === confirmed) e.status = "confirmed";
+    saveList(list);
+    for (const e of list) {
+      const when = new Date(e.at);
+      const mine = post(e.text, when, "requests");
+      mine.classList.remove("fresh");
+      const body = reply("<p></p>", when, "requests");
+      body.closest(".msg").classList.remove("fresh");
+      if (e.status === "pending" && e.id) {
+        mine.classList.add("pending");
+        say(body, "rqWaiting");
+        body.dataset.req = e.id;
+        mines.set(e.id, mine);
+      } else say(body, "rqSent");
+    }
+    if (confirmed && !list.some(e => e.id === confirmed)) say(reply("<p></p>", new Date(), "requests"), "rqSent");
+    if (invalid) {
+      const body = reply(`<p class="err"></p>`, new Date(), "requests");
+      say(body, "rqInvalid");
+    }
+    if (confirmed || invalid) {
+      q.delete("confirmed"); q.delete("confirm");
+      history.replaceState(null, "", location.pathname + (q.size ? "?" + q : "") + "#requests");
+    }
+    checkPending();
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) checkPending(); });
+  }
+  box.addEventListener("input", () => { grow(); updateHint(); measure(); });
+  const hhmm = d => String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+  function post(text, at = new Date(), where = current) {
+    const art = document.createElement("article");
+    art.className = "msg fresh";
+    const hh = hhmm(at);
+    art.innerHTML = `<span class="av you" aria-hidden="true">y</span><div><div><span class="who"></span><span class="time">${hh}</span></div><div class="body"><p></p></div></div>`;
+    art.querySelector(".who").textContent = lang === "pt" ? "você" : "you";
+    art.querySelector("p").textContent = text;
+    art.querySelector("p").style.whiteSpace = "pre-wrap";
+    $(`#ch-${where}`).append(art);
+    if (where === current) art.scrollIntoView({ block: "nearest", behavior: reduced ? "auto" : "smooth" });
+    return art;
+  }
+  // A reply from the app; returns its body so it can change as things happen.
+  function reply(html, at = new Date(), where = current) {
+    const art = document.createElement("article");
+    art.className = "msg fresh";
+    art.innerHTML = `<span class="av" aria-hidden="true">s</span><div><div><span class="who">slick</span><span class="app"> APP</span><span class="time">${hhmm(at)}</span></div><div class="body">${html}</div></div>`;
+    $(`#ch-${where}`).append(art);
+    if (where === current) art.scrollIntoView({ block: "nearest", behavior: reduced ? "auto" : "smooth" });
+    return art.querySelector(".body");
+  }
+  function submit() {
+    const v = box.value.trim();
+    if (!v) return;
+    if (awaiting && current === "requests") {
+      if (!EMAIL_RE.test(v)) { flash(t("badEmail"), "err"); return; }
+      box.value = ""; grow();
+      sendWithEmail(v);
+      return;
+    }
+    if (v === INSTALL) { copy(INSTALL); return; }
+    if (v.startsWith("/")) {
+      const [cmd, arg] = v.slice(1).split(/\s+/);
+      if (cmd === "theme") {
+        const i = THEMES.findIndex(([id, n]) => arg && (id.startsWith(arg.toLowerCase()) || n.toLowerCase().startsWith(arg.toLowerCase())));
+        setTheme(i >= 0 ? i : themeIdx + 1, true);
+      } else if (cmd === "lang") setLang(arg === "pt" ? "pt" : "en", true);
+      else if (cmd === "help") open("hotkeys", { focusInput: true });
+      else if (COPY[cmd] || cmd === "install") open("install", { focusInput: true });
+      else { flash(t("unknown"), "err"); return; }
+    } else {
+      const mine = post(v);
+      if (current === "requests") request(v, mine);
+    }
+    box.value = ""; grow(); updateHint();
+  }
+  box.addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
+    else if (e.key === "Escape" || (e.key === "Tab" && !e.shiftKey)) { e.preventDefault(); markSel(current, true); }
+    else if (e.ctrlKey && e.key.toLowerCase() === "u") { e.preventDefault(); box.value = ""; grow(); updateHint(); }
+  });
+  $("#inputForm").addEventListener("submit", e => { e.preventDefault(); submit(); });
+
+  // ---------- delegated clicks ----------
+  document.addEventListener("click", e => {
+    const c = e.target.closest("[data-copy]");
+    if (c) { copy(COPY[c.dataset.copy], c); return; }
+    const o = e.target.closest("[data-open]");
+    if (o) { open(o.dataset.open); return; }
+    const l = e.target.closest("[data-lang]");
+    if (l) setLang(l.dataset.lang, true);
+  });
+  $("#themeBtn").addEventListener("click", () => setTheme(themeIdx + 1, true));
+
+  // ---------- global keys ----------
+  document.addEventListener("keydown", e => {
+    const tag = (document.activeElement && document.activeElement.tagName) || "";
+    const typing = tag === "TEXTAREA" || tag === "INPUT";
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openFilter(); return; }
+    // Slack's own: Alt+↑↓ previous/next channel, Alt+Shift+↑↓ previous/next unread.
+    if (e.altKey && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+      e.preventDefault();
+      const d = e.key === "ArrowDown" ? 1 : -1;
+      if (!e.shiftKey) return step(d);
+      const unread = new Set($$(".side .row.unread").map(r => r.dataset.ch));
+      for (let i = order.indexOf(current) + d; i >= 0 && i < order.length; i += d) {
+        if (unread.has(order[i])) return open(order[i]);
+      }
+      return flash(t("noUnread"), "ok");
+    }
+    if (typing || e.altKey || e.ctrlKey || e.metaKey) return;
+    const inSide = side.contains(document.activeElement);
+    switch (e.key) {
+      case "j": e.preventDefault(); step(1); break;
+      case "k": e.preventDefault(); step(-1); break;
+      case "ArrowDown": case "ArrowUp":
+        if (inSide) { e.preventDefault(); step(e.key === "ArrowDown" ? 1 : -1); }
+        break;
+      case "Enter":
+        if (inSide && sel !== current) { e.preventDefault(); open(sel); }
+        break;
+      case "/": e.preventDefault(); openFilter(); break;
+      case "g": e.preventDefault(); open(order[0]); break;
+      case "G": e.preventDefault(); open(order[order.length - 1]); break;
+      case "Escape": flash(t("markedRead")(label(current)), "ok"); break;
+      case "t": setTheme(themeIdx + 1, true); break;
+      case "q": flash(t("quit"), "busy", 3200); break;
+      case "Tab":
+        if (inSide && !e.shiftKey) { e.preventDefault(); box.focus({ preventScroll: true }); }
+        break;
+    }
+  });
+
+  // ---------- boot: on screen at once, then catch up like the app ----------
+  const qs = new URLSearchParams(location.search);
+  const wantTheme = qs.get("theme") || store.get("fs-theme");
+  const ti = THEMES.findIndex(([id]) => id === wantTheme);
+  setTheme(ti >= 0 ? ti : 0, false);
+
+  const qLang = qs.get("lang");
+  const saved = store.get("fs-lang");
+  const nav = (navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language || "en"]);
+  setLang(qLang || saved || (nav.some(l => /^pt\b/i.test(l)) ? "pt" : "en"), false);
+  restoreSent();
+
+  grow();
+  measure();
+  markSel(current, false);
+  const hashCh = location.hash.slice(1);
+  if ($(`#ch-${hashCh}`) && hashCh !== "welcome") requestAnimationFrame(() => open(hashCh, { instant: true }));
+  else if (!reduced) $("#hero").classList.add("anim");
+
+  flash(t("syncing"), "busy", 0);
+  setTimeout(() => flash(t("synced"), "ok", 1800), 1700);
+})();
+</script>
+</body>
+</html>

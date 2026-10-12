@@ -1,0 +1,26 @@
+# api.slack.com/apps → Create New App → From a manifest → your workspace
+# Then: Install to Workspace → copy the "User OAuth Token" (xoxp-…) into the config as `token = …`
+display_information:
+  name: slick
+  description: Lightweight terminal Slack client (personal use)
+oauth_config:
+  scopes:
+    user:
+      - channels:read
+      - channels:history
+      - channels:write
+      - groups:read
+      - groups:history
+      - groups:write
+      - im:read
+      - im:history
+      - im:write
+      - mpim:read
+      - mpim:history
+      - mpim:write
+      - users:read
+      - chat:write
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

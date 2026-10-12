@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=slick
+GenericName=Slack client
+Comment=Ultrafast, slim and beautiful Slack TUI
+Exec=xdg-terminal-exec --app-id=org.omarchy.slick -e slick
+Icon=slick
+Terminal=false
+Categories=Network;InstantMessaging;
+Keywords=slack;chat;
+StartupWMClass=org.omarchy.slick

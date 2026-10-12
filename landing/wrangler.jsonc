@@ -1,0 +1,25 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "slick-landing",
+  "account_id": "00000000000000000000000000000000",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-09-01",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  "routes": [{ "pattern": "slick.leonavas.com", "custom_domain": true }],
+  "workers_dev": false,
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "slick-feature-requests",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["noreply@slick.leonavas.com"] }],
+  "vars": { "MAIL_FROM": "noreply@slick.leonavas.com" },
+  "observability": { "enabled": true }
+}

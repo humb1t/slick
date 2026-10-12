@@ -1,0 +1,37 @@
+[package]
+name = "slick"
+version = "0.1.0"
+edition = "2021"
+description = "Cliente Slack leve para terminal"
+license = "Apache-2.0"
+
+[dependencies]
+ratatui = "0.30"
+crossterm = "0.29"
+ureq = { version = "2.12", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+unicode-width = "0.2"
+ratatui-image = { version = "11.1", default-features = false, features = ["crossterm"] }
+emojis = "0.6"
+sha2 = "0.10"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+# The sign-in window (`login_window`): WebKitGTK on Linux.
+wry = "0.57"
+tao = "0.37"
+
+# The tray icon: StatusNotifierItem over zbus (pure Rust, no libdbus), driven
+# from a thread by a single-threaded tokio runtime; fewer crates than async-io.
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni = { version = "0.3", features = ["blocking"] }
+
+# Its own workspace, also when checked out inside another (worktrees).
+[workspace]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
