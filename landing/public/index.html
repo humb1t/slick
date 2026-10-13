@@ -796,13 +796,14 @@ omarchy plugin enable leonavas.slack --section right</pre><button class="btn" da
           <div>
             <div><span class="who">slick</span><span class="app"> APP</span><span class="time">11:30</span></div>
             <div class="body">
-              <p data-i18n="cph"><b class="ver">slick 0.4.2</b> is out.</p>
+              <p data-i18n="cph"><b class="ver">slick 0.4.3</b> is out.</p>
               <ul class="dash">
-                <li><span data-i18n="cp0">Hover a message and a <b>+</b> button shows up to add a reaction, in the conversation and in the thread panel. Reacting to a reply in the thread panel works now; before, it silently did nothing.</span></li>
-                <li><span data-i18n="cp1">Joins and leaves in a row collapse into one compact line, like the official app: "Igor and 6 others left #x. Also, shirley rejoined."</span></li>
-                <li><span data-i18n="cp2"><kbd>Ctrl</kbd>+<kbd>←</kbd><kbd>→</kbd> move by word and <kbd>Ctrl</kbd>+<kbd>Delete</kbd> deletes the next word in the text boxes.</span></li>
-                <li><span data-i18n="cp3">The sign-in window's ~120 MB browser cache is dropped once you're signed in (the session stays, so no new password): slick now takes about 31 MB on disk.</span></li>
-                <li><span data-i18n="cp4">Status lines and errors under the message box go away after 10 seconds.</span></li>
+                <li><span data-i18n="cp0">A new search window: <kbd>Ctrl</kbd>+<kbd>K</kbd> opens a large centered modal with tabs All, Conversations and Messages, the matched parts highlighted, and a preview with the message's surrounding context (or its thread), or a channel's info and recent messages. <kbd>Enter</kbd> jumps right to the message.</span></li>
+                <li><span data-i18n="cp1">Search finds channels you're not in, from the whole workspace directory, archived ones too: read them and join with one key. Matching works like Slack's (word starts, accents ignored, initials, small typos), active conversations first, then by latest message.</span></li>
+                <li><span data-i18n="cp2">Messages are searched with Slack's own search, highlighted and paged as you scroll. Channel mentions show the channel's name instead of its id.</span></li>
+                <li><span data-i18n="cp3">A red <b>New</b> line above the first unread message.</span></li>
+                <li><span data-i18n="cp4">24-hour clock by default; the 12-hour one is in Settings.</span></li>
+                <li><span data-i18n="cp5">More breathing room: a blank row between messages (Comfortable or Compact in Settings) and above the message box.</span></li>
               </ul>
             </div>
           </div>
@@ -1101,12 +1102,13 @@ cookie = xoxd-…</pre></div>
     co2: "O \"(você)\" ao lado do seu nome fica mais apagado que o nome.",
     co3: "\"E-mail copiado\" e todo outro \"copiado\" somem da tela em 2 segundos.",
     co4: "Para os seus scripts: as prévias das mensagens também vêm em HTML, com os emojis do seu workspace, até 5 por conversa, e a preferência de notificação de cada canal. O arquivo de estado espera as contagens reais, então nada de badges velhos ao abrir.",
-    cph: '<b class="ver">slick 0.4.2</b> saiu.',
-    cp0: "Passe o mouse sobre uma mensagem e aparece um botão <b>+</b> para reagir, na conversa e no painel da thread. Reagir a uma resposta no painel da thread agora funciona; antes não acontecia nada.",
-    cp1: "Entradas e saídas seguidas viram uma única linha compacta, como no app oficial: \"Igor e mais 6 saíram de #x. Além disso, shirley voltou.\"",
-    cp2: "<kbd>Ctrl</kbd>+<kbd>←</kbd><kbd>→</kbd> andam de palavra em palavra e <kbd>Ctrl</kbd>+<kbd>Delete</kbd> apaga a próxima palavra nas caixas de texto.",
-    cp3: "O cache de ~120 MB da janela de login é descartado depois que você entra (a sessão continua, então nada de senha de novo): o slick agora ocupa uns 31 MB em disco.",
-    cp4: "Mensagens de status e erros embaixo da caixa de mensagem somem depois de 10 segundos.",
+    cph: '<b class="ver">slick 0.4.3</b> saiu.',
+    cp0: "Uma nova janela de busca: <kbd>Ctrl</kbd>+<kbd>K</kbd> abre uma janela grande no centro com as abas Tudo, Conversas e Mensagens, os trechos encontrados destacados e uma prévia com o contexto em volta da mensagem (ou a thread dela), ou as informações e as mensagens recentes de um canal. <kbd>Enter</kbd> vai direto para a mensagem.",
+    cp1: "A busca encontra canais em que você não está, no diretório inteiro do workspace, arquivados também: leia e entre com uma tecla. A busca funciona como a do Slack (início de palavras, sem ligar para acentos, iniciais, pequenos erros de digitação), conversas ativas primeiro, depois pela última mensagem.",
+    cp2: "As mensagens são buscadas com a própria busca do Slack, com destaque e carregando mais conforme você rola. Menções a canais mostram o nome do canal em vez do id.",
+    cp3: "Uma linha vermelha <b>Novas</b> acima da primeira mensagem não lida.",
+    cp4: "Relógio de 24 horas por padrão; o de 12 horas fica nas Configurações.",
+    cp5: "Mais respiro: uma linha em branco entre as mensagens (Confortável ou Compacto nas Configurações) e acima da caixa de mensagem.",
     hints: "j k · Alt+↑↓ canais · ^K procurar · t tema",
     themeWord: "tema",
   };

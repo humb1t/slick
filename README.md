@@ -22,7 +22,8 @@ screen (from a local cache) and refreshes in the background.
 
 - Channels, DMs and group DMs, with Slack's sidebar sections, starred
   conversations and unread counts; drag to reorder, collapse sections.
-- Fuzzy search over conversations by several words, with the matches highlighted.
+- A search window (`Ctrl+K`) over conversations and Slack's message search,
+  with the matches highlighted and a preview of the messages around each hit.
 - Real time, over Slack's own websocket: new messages, unread counts and
   "is typing" (under the message box, and as "•••" in the sidebar) arrive as
   they happen.
@@ -84,7 +85,7 @@ The script ([install.sh](install.sh)) downloads the latest
 (built on Ubuntu 24.04, so glibc 2.39 or newer), checks its SHA-256 and puts
 `slick` in `~/.local/bin`, without sudo. It warns when that folder is not on
 your `PATH`. `SLICK_INSTALL_DIR` changes the folder and
-`SLICK_VERSION=v0.4.2` picks a version. Installed this way, slick updates itself
+`SLICK_VERSION=v0.4.3` picks a version. Installed this way, slick updates itself
 (see below).
 
 ### Windows
@@ -102,7 +103,7 @@ irm https://slick.leonavas.com/install.ps1 | iex
 
 The script ([install.ps1](install.ps1)) downloads the latest release, checks its
 SHA-256, puts `slick.exe` in `%LOCALAPPDATA%\Programs\slick` and adds that folder
-to your user `PATH`, without admin rights (`$env:SLICK_VERSION = 'v0.4.2'` picks
+to your user `PATH`, without admin rights (`$env:SLICK_VERSION = 'v0.4.3'` picks
 a version). Open a new terminal and run `slick`. Only x86_64 for now.
 
 ### From source
@@ -163,7 +164,8 @@ for creating that app with the scopes slick uses.
 | `Ctrl+/` or `F1` | all keyboard shortcuts, searchable (also in the account menu) |
 | `↑` `↓` / `j` `k` | move in the sidebar |
 | `Enter` | open a conversation / expand or collapse a section |
-| `/`, `Ctrl+K` or `Ctrl+T` | search conversations |
+| `Ctrl+K` or `Ctrl+T` (or click the sidebar's box) | search window: conversations and messages, with a preview (`Tab` / `Alt+1`…`Alt+3` tabs, `Ctrl+S` relevance or date, `Enter` opens, `Esc` clears or closes) |
+| `/` | filter the sidebar's conversations |
 | `Alt+↑` `Alt+↓` | previous / next conversation in the sidebar (on a selected section header: move the section) |
 | `Alt+Shift+↑` `Alt+Shift+↓` | previous / next unread conversation, folded sections included |
 | `Alt+←` `Alt+→` | back / forward through the conversations you opened |
@@ -254,6 +256,8 @@ on Windows), `key = value` per line:
 | `auto_update` | `false` turns off the update check |
 | `tray` | `false` hides the system tray icon (Linux; lit with unread DMs and mentions, a click focuses the window on Hyprland); worth turning off when the Omarchy Slack plugin is in the bar; also in Settings, from the account menu |
 | `language` | `en-US` (default) or `pt-BR`; also switchable in Settings, from the account menu, which saves it here |
+| `clock` | `24h` (default, "21:29") or `12h` ("9:29 PM"); also switchable in Settings, from the account menu, which saves it here |
+| `message_spacing` | `comfortable` (default, a blank row between messages) or `compact` (back to back); also switchable in Settings, from the account menu, which saves it here |
 
 The `SLICK_LANG` environment variable (`en-US`, `pt-BR`) takes priority over
 `language` in the config.

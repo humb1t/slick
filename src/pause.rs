@@ -106,7 +106,7 @@ fn time_of(slot: u32) -> NaiveTime {
     NaiveTime::from_hms_opt(slot / 2, slot % 2 * 30, 0).unwrap_or_default()
 }
 
-/// "12:00 PM", or "12h00".
+/// "12:00", or "12:00 PM" on the 12-hour clock.
 fn slot_label(slot: u32) -> String {
     i18n::clock(&time_of(slot))
 }

@@ -1,6 +1,6 @@
 //! What survives a restart, so the app opens with everything already on screen.
 
-use crate::slack::{Boot, Conversation, Message, Section, Users};
+use crate::slack::{Boot, Conversation, Directory, Message, Section, Users};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -88,6 +88,32 @@ pub fn load_for(team: Option<&str>) -> Cache {
         .ok()
         .and_then(|b| serde_json::from_slice::<Cache>(&b).ok())
         .unwrap_or_default()
+}
+
+/// The workspace's public channels (`slack::Directory`), `channels-<team_id>.json`:
+/// apart from the cache, which is written far more often.
+fn directory_path(team: &str) -> PathBuf {
+    dir().join(format!("channels-{team}.json"))
+}
+
+pub fn load_directory(team: &str) -> Directory {
+    let mut d = std::fs::read(directory_path(team))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Directory>(&b).ok())
+        .unwrap_or_default();
+    d.prepare();
+    d
+}
+
+pub fn save_directory(team: &str, d: &Directory) {
+    let p = directory_path(team);
+    let _ = std::fs::create_dir_all(dir());
+    if let Ok(json) = serde_json::to_vec(d) {
+        let tmp = p.with_extension("tmp");
+        if std::fs::write(&tmp, json).is_ok() {
+            let _ = std::fs::rename(tmp, p);
+        }
+    }
 }
 
 pub fn save_for(team: Option<&str>, cache: Cache) {

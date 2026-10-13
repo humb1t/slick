@@ -639,7 +639,7 @@ fn user(id: &str, label: &str, style: Style, n: &Names) -> Seg {
 }
 
 fn channel(id: &str, label: &str, style: Style, n: &Names) -> Seg {
-    let name = n.chan(id).or(Some(label).filter(|l| !l.is_empty())).unwrap_or(id);
+    let name = n.chan_shown(id, label);
     let sign = if n.private.contains(id) { LOCK } else { "#" };
     mention(format!("{sign}{name}"), style, false, Some(Target::Channel(id.into())))
 }

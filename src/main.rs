@@ -26,6 +26,7 @@ mod login_window;
 mod pause;
 mod pins;
 mod rtm;
+mod search;
 mod selection;
 mod slack;
 mod slash;

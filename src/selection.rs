@@ -1,6 +1,5 @@
 //! Messages picked by dragging the mouse over a pane, copied as Slack copies
-//! them: `Name  [9:29 PM]` over each header's text, `[9:30 PM]text` below it
-//! (`[21h29]` in Portuguese).
+//! them: `Name  [21:29]` over each header's text, `[21:30]text` below it.
 
 use crate::app::App;
 use crate::slack::Message;

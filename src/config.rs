@@ -112,6 +112,21 @@ pub fn language() -> Option<crate::i18n::Lang> {
     crate::i18n::Lang::parse(&value("language")?)
 }
 
+/// The clock: `clock = "24h"` (the default) or `"12h"`; `None` when never set.
+pub fn clock_h12() -> Option<bool> {
+    match value("clock")?.as_str() {
+        "12h" => Some(true),
+        "24h" => Some(false),
+        _ => None,
+    }
+}
+
+/// Messages back to back: `message_spacing = "compact"`; `"comfortable"`
+/// (the default) leaves a blank row between them.
+pub fn compact_messages() -> bool {
+    value("message_spacing").is_some_and(|v| v == "compact")
+}
+
 pub fn sidebar_avatars() -> Option<bool> {
     value("sidebar_avatars")?.parse().ok()
 }

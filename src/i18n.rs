@@ -2,7 +2,7 @@
 //! `SLICK_LANG`, else `language` in the config, and switchable at run time
 //! from the settings dialog.
 
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Lang {
@@ -56,10 +56,23 @@ pub fn is_pt() -> bool {
     lang() == Lang::Pt
 }
 
-/// At start-up: `SLICK_LANG`, else the config, else English.
+/// At start-up: `SLICK_LANG`, else the config, else English; the clock
+/// from the config, else 24-hour.
 pub fn init() {
     let env = std::env::var("SLICK_LANG").ok().and_then(|v| Lang::parse(&v));
     set(env.or_else(crate::config::language).unwrap_or(Lang::En));
+    set_h12(crate::config::clock_h12().unwrap_or(false));
+}
+
+/// Times as "9:29 PM" instead of "21:29".
+static H12: AtomicBool = AtomicBool::new(false);
+
+pub fn h12() -> bool {
+    H12.load(Ordering::Relaxed)
+}
+
+pub fn set_h12(on: bool) {
+    H12.store(on, Ordering::Relaxed);
 }
 
 /// The text in the current language.
@@ -85,14 +98,14 @@ const MONTHS_PT: [&str; 12] = [
     "janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
 ];
 
-/// The time as Slack shows it: "9:29 PM", or "21h29" in Portuguese.
+/// The time of day, as Slack's clock setting shows it: "21:29" and "8:05"
+/// (24-hour, the default), or "9:29 PM" (12-hour).
 pub fn clock<T: chrono::Timelike>(t: &T) -> String {
-    match lang() {
-        Lang::Pt => format!("{:02}h{:02}", t.hour(), t.minute()),
-        Lang::En => {
-            let (pm, h) = t.hour12();
-            format!("{h}:{:02} {}", t.minute(), if pm { "PM" } else { "AM" })
-        }
+    if h12() {
+        let (pm, h) = t.hour12();
+        format!("{h}:{:02} {}", t.minute(), if pm { "PM" } else { "AM" })
+    } else {
+        format!("{}:{:02}", t.hour(), t.minute())
     }
 }
 

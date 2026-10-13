@@ -1,6 +1,6 @@
 //! The account button at the bottom of the sidebar and its menu, as in
 //! Slack: your status, away or active, pausing notifications, your profile,
-//! Slack's pages, slick's own settings (language, tray icon) and signing out.
+//! Slack's pages, slick's own settings (language, clock, message spacing, tray icon) and signing out.
 
 use crate::app::{App, Event};
 use crate::blocks::{CAP_L, CAP_R};
@@ -181,6 +181,10 @@ pub struct Account {
 #[derive(Clone, Copy, PartialEq)]
 enum Opt {
     Lang(Lang),
+    /// The clock: 12-hour when true, else 24-hour.
+    Clock(bool),
+    /// The space between messages: compact (back to back) when true.
+    Spacing(bool),
     /// Photos instead of presence dots next to DMs in the sidebar.
     Photos,
     #[cfg(target_os = "linux")]
@@ -191,6 +195,8 @@ enum Opt {
 
 fn opts() -> Vec<Opt> {
     let mut v: Vec<Opt> = Lang::ALL.into_iter().map(Opt::Lang).collect();
+    v.extend([Opt::Clock(false), Opt::Clock(true)]);
+    v.extend([Opt::Spacing(false), Opt::Spacing(true)]);
     v.push(Opt::Photos);
     #[cfg(target_os = "linux")]
     v.push(Opt::Tray);
@@ -441,8 +447,8 @@ fn until_nine(days: u64) -> i64 {
     at.map_or(12 * 60, |t| (t.timestamp() - now.timestamp()) / 60)
 }
 
-/// "until 2:30 PM", "until tomorrow, 8:00 AM", "until Oct 17, 8:00 AM";
-/// "até 14h30", "até amanhã, 08h00", "até 17/10, 08h00".
+/// "until 14:30", "until tomorrow, 8:00", "until Oct 17, 8:00";
+/// "até 14:30", "até amanhã, 8:00", "até 17/10, 8:00" (or "2:30 PM"…).
 pub(crate) fn until(ts: i64) -> String {
     let Some(t) = Local.timestamp_opt(ts, 0).single() else { return String::new() };
     let today = Local::now().date_naive();
@@ -962,6 +968,14 @@ impl App {
         }
     }
 
+    /// 12- or 24-hour times at once, remembered in the config.
+    fn set_clock(&mut self, h12: bool) {
+        i18n::set_h12(h12);
+        if let Err(e) = crate::config::set(&[("clock", if h12 { "12h" } else { "24h" }.to_string())]) {
+            self.error = Some(trf!("didn't save the setting: {e}", "não salvou a configuração: {e}"));
+        }
+    }
+
     pub(crate) fn open_settings(&mut self) {
         self.account.menu = None;
         let first = opts().iter().position(|o| *o == Opt::Lang(i18n::lang())).unwrap_or(0);
@@ -973,6 +987,14 @@ impl App {
     fn choose_opt(&mut self, o: Opt) {
         match o {
             Opt::Lang(l) => self.set_language(l),
+            Opt::Clock(h12) => self.set_clock(h12),
+            Opt::Spacing(compact) => {
+                self.compact = compact;
+                let v = if compact { "compact" } else { "comfortable" };
+                if let Err(e) = crate::config::set(&[("message_spacing", v.to_string())]) {
+                    self.error = Some(trf!("didn't save the setting: {e}", "não salvou a configuração: {e}"));
+                }
+            }
             Opt::Photos => {
                 self.sidebar_avatars = !self.sidebar_avatars;
                 if let Err(e) = crate::config::set(&[("sidebar_avatars", self.sidebar_avatars.to_string())]) {
@@ -1378,7 +1400,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     crate::pause::draw(f, app);
 }
 
-/// slick's settings: the language, the sidebar's photos, the tray icon and a way to Slack's own.
+/// slick's settings: the language, the clock, the message spacing, the sidebar's photos, the tray icon and a way to Slack's own.
 fn draw_settings(f: &mut Frame, app: &mut App) {
     let Some(sel) = app.account.settings else { return };
     let all = opts();
@@ -1389,10 +1411,12 @@ fn draw_settings(f: &mut Frame, app: &mut App) {
     for (i, o) in all.iter().enumerate() {
         let group = match o {
             Opt::Lang(_) => 0,
-            Opt::Photos => 1,
+            Opt::Clock(_) => 1,
+            Opt::Spacing(_) => 2,
+            Opt::Photos => 3,
             #[cfg(target_os = "linux")]
-            Opt::Tray => 2,
-            Opt::Slack => 3,
+            Opt::Tray => 4,
+            Opt::Slack => 5,
         };
         if last != Some(group) {
             if last.is_some() {
@@ -1400,14 +1424,24 @@ fn draw_settings(f: &mut Frame, app: &mut App) {
             }
             match group {
                 0 => lines.push((None, heading(tr("Language", "Idioma")))),
-                1 => lines.push((None, heading(tr("Sidebar", "Barra lateral")))),
-                2 => lines.push((None, heading(tr("System tray", "Bandeja do sistema")))),
+                1 => lines.push((None, heading(tr("Clock", "Relógio")))),
+                2 => lines.push((None, heading(tr("Message spacing", "Espaçamento das mensagens")))),
+                3 => lines.push((None, heading(tr("Sidebar", "Barra lateral")))),
+                4 => lines.push((None, heading(tr("System tray", "Bandeja do sistema")))),
                 _ => lines.push((None, heading("Slack"))),
             }
             last = Some(group);
         }
         let text = match o {
             Opt::Lang(l) => format!("{} {}", if *l == i18n::lang() { "(•)" } else { "( )" }, l.label()),
+            Opt::Clock(h12) => {
+                let label = if *h12 { tr("12-hour (9:29 PM)", "12 horas (9:29 PM)") } else { tr("24-hour (21:29)", "24 horas (21:29)") };
+                format!("{} {label}", if *h12 == i18n::h12() { "(•)" } else { "( )" })
+            }
+            Opt::Spacing(compact) => {
+                let label = if *compact { tr("Compact", "Compacto") } else { tr("Comfortable", "Confortável") };
+                format!("{} {label}", if *compact == app.compact { "(•)" } else { "( )" })
+            }
             Opt::Photos => format!("{} {}", if app.sidebar_avatars { "[✓]" } else { "[ ]" }, tr("Show photos in the list", "Mostrar fotos na lista")),
             #[cfg(target_os = "linux")]
             Opt::Tray => format!("{} {}", if app.account.tray { "[✓]" } else { "[ ]" }, tr("Show the tray icon", "Mostrar o ícone na bandeja")),

@@ -362,9 +362,15 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     let (broadcast, scroll, loaded) = (t.broadcast, t.scroll, t.loaded);
     let mut list = t.msgs.clone();
     let input_rows = rows.len().clamp(1, MAX_INPUT_ROWS) as u16 + crate::attach::rows(app, true);
-    let [header, msgs, input, toggle] =
-        Layout::vertical([Constraint::Length(2), Constraint::Min(1), Constraint::Length(input_rows + 2), Constraint::Length(1)])
-            .areas(inner);
+    // A blank row between the replies and the box, as in the conversation.
+    let [header, msgs, _, input, toggle] = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Min(1),
+        Constraint::Length(1),
+        Constraint::Length(input_rows + 2),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
     app.areas.thread = area;
 
     // "Conversa #canal" and a close button, like Slack's header.

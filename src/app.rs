@@ -6,7 +6,7 @@ use crate::emoji;
 use crate::config;
 use crate::files;
 use crate::i18n::tr;
-use crate::slack::{AuthInfo, Boot, Conversation, Count, Creds, File, Kind, Message, Res, Profile, Section, Slack, Users, HISTORY_LIMIT};
+use crate::slack::{AuthInfo, Boot, Conversation, Count, Creds, Directory, File, Kind, Message, Res, Profile, Section, Slack, Users, HISTORY_LIMIT};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use image::DynamicImage;
 use ratatui::layout::{Position, Rect};
@@ -38,6 +38,12 @@ const REST_AFTER: Duration = Duration::from_secs(10);
 /// How soon a change in the sidebar's DMs reaches the presence subscription.
 const WATCH_EVERY: Duration = Duration::from_secs(5);
 const COUNTS_EVERY: Duration = Duration::from_secs(15);
+/// The workspace's public channels (`Directory`) are read again this often.
+const DIRECTORY_EVERY: Duration = Duration::from_secs(6 * 3600);
+/// How long after start they're asked for: the sidebar's own requests go first.
+const DIRECTORY_AFTER: Duration = Duration::from_secs(5);
+/// Channels you are not in shown by a search, at most.
+const OUTSIDE_HITS: usize = 50;
 const MAX_RECENTS: usize = 8;
 /// Conversations Alt+← can go back through.
 const MAX_HISTORY: usize = 100;
@@ -112,6 +118,8 @@ pub enum Event {
     Attach(crate::attach::Ev),
     /// A person or channel a message mentioned: the name, and whether it's private.
     Named { id: String, res: Res<(String, bool)> },
+    /// A channel a message mentioned, looked up (`request_names`).
+    ChanNamed { id: String, res: Res<Conversation> },
     /// The DM opened by clicking a mention.
     Dm(Res<Conversation>),
     /// Slash commands: the list, and one run (`slash`).
@@ -120,6 +128,12 @@ pub enum Event {
     Details(crate::details::Ev),
     /// An archived channel brought back (`App::unarchive`).
     Unarchived { id: String, res: Res<()> },
+    /// The workspace's public channels, for the search (`Directory`).
+    Directory(Res<Directory>),
+    /// A channel joined from its preview (`App::join`).
+    Entered { id: String, res: Res<Conversation> },
+    /// The search window's answers: messages found, previews (`search`).
+    Search(crate::search::Ev),
     /// The threads you follow: their counts, the list, one marked read (`threads`).
     Threads(crate::threads::Ev),
     /// "Invite people": your address's domain and the invitations sent (`invite`).
@@ -133,6 +147,11 @@ pub(crate) enum ReadOnly {
     Deactivated,
     /// An archived channel, until someone unarchives it.
     Archived,
+    /// A public channel the user is not in, opened from the search: it
+    /// takes messages once joined.
+    Outside,
+    /// An archived channel the user is not in: only its members could unarchive it.
+    OutsideArchived,
 }
 
 /// The login screen: the two values copied from a browser session.
@@ -242,6 +261,8 @@ pub enum Row {
     Gap,
     Header { key: String, title: String, collapsed: bool, unread: bool },
     Conv(usize),
+    /// A search result among the channels the user is not in, an index in `directory`.
+    Other(usize),
 }
 
 /// What a context-menu entry does.
@@ -393,6 +414,28 @@ pub struct Areas {
     pub switcher: crate::switcher::Areas,
 }
 
+/// Slack's red "New" line: over the first message someone else sent after
+/// where the conversation was read up to on opening. Found once, it stays
+/// put while the conversation is open; messages arriving meanwhile get none.
+pub struct NewLine {
+    pub chan: String,
+    /// Read up to here on opening.
+    after: String,
+    /// The message the line goes over; `None` with nothing unread.
+    pub at: Option<String>,
+    /// The open's fetch landed: what it found stays.
+    fetched: bool,
+    /// The next draw scrolls up to it, if it is above the view.
+    pub jump: bool,
+}
+
+impl NewLine {
+    /// Right over the message `ts`: "Mark unread" from it.
+    pub fn over(chan: String, ts: String) -> Self {
+        NewLine { chan, after: String::new(), at: Some(ts), fetched: true, jump: false }
+    }
+}
+
 pub struct App {
     slack: Slack,
     tx: Sender<Event>,
@@ -408,6 +451,20 @@ pub struct App {
     pub unnamed: Vec<crate::blocks::Target>,
     asked: HashSet<String>,
     pub convs: Vec<Conversation>,
+    /// The workspace's public channels, for the search to find those you
+    /// are not in; read in the background (`fetch_directory`).
+    pub directory: Directory,
+    /// The workspace `directory` was loaded from disk for.
+    dir_team: Option<String>,
+    dir_loading: bool,
+    /// Ctrl+R: read it again however fresh.
+    dir_force: bool,
+    /// Bumped at each new `directory`, so `dir_hits` knows it is stale.
+    pub(crate) dir_gen: u64,
+    /// The last search over `directory`: (query, `dir_gen`, (tier, index) best first).
+    dir_hits: std::cell::RefCell<(String, u64, Vec<(u8, usize)>)>,
+    /// The search window (Ctrl+K): conversations and messages (`search`).
+    pub search: crate::search::Search,
     pub sections: Vec<Section>,
     pub stars: Vec<String>,
     pub vips: HashSet<String>,
@@ -446,6 +503,8 @@ pub struct App {
     pub stay: Option<(String, usize)>,
     /// A message just jumped to, highlighted for a moment.
     pub flash: Option<(String, Instant)>,
+    /// Slack's red "New" line in the open conversation.
+    pub new_line: Option<NewLine>,
     /// Conversations whose loaded history is a stretch that does not reach
     /// the newest message; polls leave it alone until they meet it.
     pub detached: HashSet<String>,
@@ -480,6 +539,8 @@ pub struct App {
     pub sidebar_width: u16,
     /// Photos instead of presence dots next to DMs in the sidebar.
     pub sidebar_avatars: bool,
+    /// Messages back to back, without the blank row between them.
+    pub compact: bool,
     pub menu: Option<Menu>,
     pub emoji: emoji::Emoji,
     pub complete: emoji::Complete,
@@ -595,6 +656,13 @@ impl App {
             unnamed: Vec::new(),
             asked: HashSet::new(),
             convs: cache.convs,
+            directory: Directory::default(),
+            dir_team: None,
+            dir_loading: false,
+            dir_force: false,
+            dir_gen: 0,
+            dir_hits: Default::default(),
+            search: Default::default(),
             sections: cache.sections,
             stars: cache.stars,
             vips: HashSet::new(),
@@ -617,6 +685,7 @@ impl App {
             max_scroll: 0,
             stay: None,
             flash: None,
+            new_line: None,
             detached: HashSet::new(),
             areas: Areas::default(),
             picker,
@@ -637,6 +706,7 @@ impl App {
             team_icon: None,
             team_popup: false,
             sidebar_avatars: config::sidebar_avatars().or(cache.boot.as_ref().map(|b| b.sidebar_avatars)).unwrap_or(true),
+            compact: config::compact_messages(),
             boot: cache.boot,
             sidebar_width: config::sidebar_width().unwrap_or(SIDEBAR_DEFAULT).max(SIDEBAR_MIN),
             menu: None,
@@ -783,7 +853,7 @@ impl App {
         Cache {
             owner: self.me.as_ref().map(|m| m.user_id.clone()).unwrap_or_else(|| self.owner.clone()),
             users: self.users.clone(),
-            convs: self.convs.clone(),
+            convs: self.convs.iter().filter(|c| !c.guest).cloned().collect(),
             sections: self.sections.clone(),
             stars: self.stars.clone(),
             collapsed: self.collapsed.clone(),
@@ -867,6 +937,7 @@ impl App {
             emoji: &self.emoji.custom,
             others: &self.others,
             private: &self.private,
+            directory: &self.directory,
             me: self.me.as_ref().map(|m| m.user_id.as_str()).unwrap_or(""),
         }
     }
@@ -882,6 +953,8 @@ impl App {
         let c = self.current.as_ref().and_then(|id| self.convs.iter().find(|c| &c.id == id))?;
         if c.kind == Kind::Direct && c.user.as_ref().is_some_and(|u| self.users.deleted.contains(u)) {
             Some(ReadOnly::Deactivated)
+        } else if c.guest {
+            Some(if c.archived { ReadOnly::OutsideArchived } else { ReadOnly::Outside })
         } else if c.archived {
             Some(ReadOnly::Archived)
         } else {
@@ -911,16 +984,127 @@ impl App {
         }
     }
 
+    /// Joins the public channel open as a preview; on success it is in the
+    /// sidebar and takes messages like any other.
+    pub fn join(&mut self, id: String) {
+        self.status = tr("joining…", "entrando…").into();
+        self.spawn(move |s| {
+            let res = s.join(&id);
+            Event::Entered { id, res }
+        });
+    }
+
+    fn entered(&mut self, id: String, res: Res<Conversation>) {
+        match res {
+            Ok(mut c) => {
+                // Some answers lack the id; it is the one asked for.
+                if c.id.is_empty() {
+                    c.id = id.clone();
+                }
+                self.convs.retain(|x| x.id != id);
+                let name = c.name.clone();
+                self.convs.push(c);
+                self.resort();
+                self.recents.retain(|r| r != &id);
+                self.recents.insert(0, id);
+                self.recents.truncate(MAX_RECENTS);
+                self.status.clear();
+                self.brief(trf!("You joined #{name}", "Você entrou em #{name}"), 4);
+                self.fetch_counts();
+            }
+            Err(e) => self.status = e,
+        }
+    }
+
+    /// The workspace's public channels read again when stale, after a
+    /// moment at start; Ctrl+R asks now. A failure waits as long as a success.
+    fn fetch_directory(&mut self) {
+        let Some(team) = self.me.as_ref().map(|m| m.team_id.clone()) else { return };
+        let fresh = crate::slack::unix_now() - self.directory.at < DIRECTORY_EVERY.as_secs() as i64;
+        if self.dir_loading || (fresh && !self.dir_force) {
+            return;
+        }
+        let force = std::mem::take(&mut self.dir_force);
+        self.dir_loading = true;
+        self.spawn(move |s| {
+            if !force {
+                std::thread::sleep(DIRECTORY_AFTER);
+            }
+            let res = s.directory().map(|chans| {
+                let d = Directory::new(crate::slack::unix_now(), chans);
+                cache::save_directory(&team, &d);
+                d
+            });
+            Event::Directory(res)
+        });
+    }
+
+    fn on_directory(&mut self, res: Res<Directory>) {
+        self.dir_loading = false;
+        match res {
+            Ok(mut d) => {
+                d.prepare();
+                self.directory = d;
+                self.dir_gen += 1;
+            }
+            Err(_) => self.directory.at = crate::slack::unix_now(),
+        }
+    }
+
+    /// The channels you are not in that the search matches, best first;
+    /// worked out once per query (`dir_hits`), the list can be long.
+    fn directory_hits(&self, query: &str, q: &crate::text::Query) -> std::cell::Ref<'_, Vec<(u8, usize)>> {
+        let stale = {
+            let memo = self.dir_hits.borrow();
+            memo.0 != query || memo.1 != self.dir_gen
+        };
+        if stale {
+            let chans = &self.directory.chans;
+            let mut ranges = Vec::new();
+            let mut hits: Vec<(u8, usize)> =
+                chans.iter().enumerate().filter_map(|(j, d)| Some((crate::text::rank(q, &d.folded, &mut ranges)?, j))).collect();
+            hits.sort_by_key(|&(t, j)| crate::text::place(t, chans[j].archived, false, chans[j].updated, chans[j].members, chans[j].folded.len()));
+            *self.dir_hits.borrow_mut() = (query.to_string(), self.dir_gen, hits);
+        }
+        std::cell::Ref::map(self.dir_hits.borrow(), |m| &m.2)
+    }
+
+    /// When the conversation's last message was, in Unix milliseconds, for
+    /// the search's order: from the counts, else the messages loaded, else
+    /// when Slack last changed it; 0 when nothing says.
+    pub(crate) fn last_message(&self, c: &Conversation) -> i64 {
+        let counted = self.counts.get(&c.id).map_or(0, |n| crate::text::ts_ms(&n.latest));
+        let loaded = self.messages.get(&c.id).and_then(|m| m.last()).map_or(0, |m| crate::text::ts_ms(&m.ts));
+        [counted, loaded].into_iter().max().filter(|t| *t > 0).unwrap_or(c.updated)
+    }
+
+    /// The channels opened from the search that you are not in, but `keep`:
+    /// a visit only, gone once another conversation opens.
+    fn drop_guests(&mut self, keep: &str) {
+        let gone: Vec<String> = self.convs.iter().filter(|c| c.guest && c.id != keep).map(|c| c.id.clone()).collect();
+        if gone.is_empty() {
+            return;
+        }
+        self.convs.retain(|c| !gone.contains(&c.id));
+        for id in &gone {
+            self.messages.remove(id);
+        }
+        self.resort();
+    }
+
     /// " (you)" closing the label of the user's own DM; drawn dimmer than the name.
     pub(crate) fn you_suffix(&self, c: &Conversation) -> Option<&'static str> {
         (c.kind == Kind::Direct && c.user.as_deref().is_some_and(|u| self.is_me(u))).then(|| tr(" (you)", " (você)"))
     }
 
-    /// " (archived)" after an archived channel, " (deactivated)" after a
-    /// deactivated account's DM, as in Slack's lists; drawn dimmer than the name.
+    /// " (archived)" after an archived channel, " (not a member)" after a
+    /// channel you are not in, " (deactivated)" after a deactivated
+    /// account's DM, as in Slack's lists; drawn dimmer than the name.
     pub(crate) fn gone_suffix(&self, c: &Conversation) -> Option<&'static str> {
         if c.archived {
             Some(tr(" (archived)", " (arquivado)"))
+        } else if c.guest {
+            Some(tr(" (not a member)", " (não participa)"))
         } else if c.kind == Kind::Direct && c.user.as_ref().is_some_and(|u| self.users.deleted.contains(u)) {
             Some(tr(" (deactivated)", " (desativada)"))
         } else {
@@ -1004,21 +1188,7 @@ impl App {
     /// and ignores the search, for Alt+Shift+↑/↓, which visit them as Slack does.
     fn sidebar_rows(&self, unfold: bool) -> Vec<Row> {
         if !self.filter.is_empty() && !unfold {
-            // Every conversation we are in, also those hidden from the sidebar;
-            // best match first, then the most recent activity. Archived
-            // channels after all the rest, as Slack ranks them.
-            let mut hits: Vec<(bool, u8, std::cmp::Reverse<String>, usize)> = self
-                .convs
-                .iter()
-                .enumerate()
-                .filter_map(|(i, c)| {
-                    let (rank, _) = crate::text::search(&self.label(c), &self.filter)?;
-                    let latest = self.counts.get(&c.id).map(|c| c.latest.clone()).unwrap_or_default();
-                    Some((c.archived, rank, std::cmp::Reverse(latest), i))
-                })
-                .collect();
-            hits.sort();
-            return hits.into_iter().map(|(_, _, _, i)| Row::Conv(i)).collect();
+            return self.conv_matches(&self.filter);
         }
 
         let dm_user = |i: usize| self.convs[i].user.as_deref().unwrap_or("");
@@ -1026,8 +1196,8 @@ impl App {
             .convs
             .iter()
             .enumerate()
-            // Deactivated accounts' DMs and archived channels: only the search finds them.
-            .filter(|(_, c)| !c.archived && !c.user.as_ref().is_some_and(|u| self.users.deleted.contains(u)))
+            // Deactivated accounts' DMs, archived channels and those we are not in: only the search finds them.
+            .filter(|(_, c)| !c.archived && !c.guest && !c.user.as_ref().is_some_and(|u| self.users.deleted.contains(u)))
             .map(|(i, c)| (c.id.as_str(), i))
             .collect();
         let mut placed = HashSet::new();
@@ -1189,6 +1359,35 @@ impl App {
         rows
     }
 
+    /// The conversations a search matches: every one we are in, also those
+    /// hidden from the sidebar, and the workspace's public channels we are
+    /// not in, in the order `text::Place` gives. The sidebar's "/" and the
+    /// search window (`search`) share it.
+    pub(crate) fn conv_matches(&self, query: &str) -> Vec<Row> {
+        let q = crate::text::Query::new(query);
+        if q.is_empty() {
+            return Vec::new();
+        }
+        let mut ranges = Vec::new();
+        let mut hits: Vec<(crate::text::Place, Row)> = Vec::new();
+        for (i, c) in self.convs.iter().enumerate() {
+            let label = self.label(c);
+            let name = crate::text::Folded::new(&label);
+            let Some(tier) = crate::text::rank(&q, &name, &mut ranges) else { continue };
+            hits.push((crate::text::place(tier, c.archived, !c.guest, self.last_message(c), 0, name.len()), Row::Conv(i)));
+        }
+        let ours: HashSet<&str> = self.convs.iter().map(|c| c.id.as_str()).collect();
+        let chans = &self.directory.chans;
+        let others = self.directory_hits(query, &q);
+        hits.extend(others.iter().filter(|(_, j)| !ours.contains(chans[*j].id.as_str())).take(OUTSIDE_HITS).map(|&(tier, j)| {
+            let d = &chans[j];
+            (crate::text::place(tier, d.archived, false, d.updated, d.members, d.folded.len()), Row::Other(j))
+        }));
+        // Stable: equal places keep the sidebar's name order.
+        hits.sort_by(|a, b| a.0.cmp(&b.0));
+        hits.into_iter().map(|(_, r)| r).collect()
+    }
+
     pub fn fix_selection(&mut self, rows: &[Row]) {
         // An empty search highlights nothing until something is typed.
         if self.focus == Focus::Filter && self.filter.is_empty() {
@@ -1197,6 +1396,7 @@ impl App {
         }
         let key = |r: &Row| match r {
             Row::Conv(i) => Some(self.convs[*i].id.clone()),
+            Row::Other(j) => Some(self.directory.chans[*j].id.clone()),
             Row::Header { key, .. } => Some(format!("section:{key}")),
             Row::Threads => Some("threads".into()),
             Row::Gap => None,
@@ -1225,10 +1425,15 @@ impl App {
         self.sidebar_wheel = false;
         let rows = self.rows();
         let n = rows.len() as isize;
-        let mut i = (self.list.selected().unwrap_or(0) as isize + delta).clamp(0, (n - 1).max(0));
+        let from = self.list.selected().unwrap_or(0) as isize;
+        let mut i = (from + delta).clamp(0, (n - 1).max(0));
         // Gaps are not stops.
-        if matches!(rows.get(i as usize), Some(Row::Gap)) {
-            i = (i + delta.signum()).clamp(0, (n - 1).max(0));
+        while matches!(rows.get(i as usize), Some(Row::Gap)) {
+            i += delta.signum();
+            if !(0..n).contains(&i) {
+                i = from;
+                break;
+            }
         }
         self.list.select(Some(i as usize));
     }
@@ -1238,6 +1443,10 @@ impl App {
         match rows.get(row) {
             Some(Row::Conv(i)) => {
                 let id = self.convs[*i].id.clone();
+                self.open(id);
+            }
+            Some(Row::Other(j)) => {
+                let id = self.directory.chans[*j].id.clone();
                 self.open(id);
             }
             Some(Row::Header { key, .. }) => {
@@ -1324,7 +1533,7 @@ impl App {
         // Conversations left since are passed over.
         loop {
             let Some(id) = usize::try_from(i).ok().and_then(|n| self.history.get(n)).cloned() else { return };
-            if self.convs.iter().any(|c| c.id == id) {
+            if self.convs.iter().any(|c| c.id == id) || self.directory.find(&id).is_some() {
                 self.history_at = i as usize;
                 return self.open(id);
             }
@@ -1355,9 +1564,19 @@ impl App {
     }
 
     pub(crate) fn open(&mut self, id: String) {
-        self.recents.retain(|r| r != &id);
-        self.recents.insert(0, id.clone());
-        self.recents.truncate(MAX_RECENTS);
+        // A channel you are not in comes for its visit only, as a preview.
+        self.drop_guests(&id);
+        if !self.convs.iter().any(|c| c.id == id) {
+            if let Some(j) = self.directory.find(&id) {
+                self.convs.push(self.directory.conv(j));
+                self.resort();
+            }
+        }
+        if !self.convs.iter().any(|c| c.id == id && c.guest) {
+            self.recents.retain(|r| r != &id);
+            self.recents.insert(0, id.clone());
+            self.recents.truncate(MAX_RECENTS);
+        }
         // Back and forward (`go_history`) land on their entry and push nothing;
         // anything else opened drops what was ahead.
         if self.history.get(self.history_at) != Some(&id) {
@@ -1367,6 +1586,13 @@ impl App {
                 self.history.remove(0);
             }
             self.history_at = self.history.len() - 1;
+        }
+        // Slack's "New" line, from where it was read up to before this open
+        // reads it; opened again from itself, it stays where it was.
+        if self.current.as_deref() != Some(id.as_str()) {
+            let from = self.counts.get(&id).filter(|c| (c.unread || c.mentions > 0) && !c.last_read.is_empty());
+            self.new_line = from.map(|c| NewLine { chan: id.clone(), after: c.last_read.clone(), at: None, fetched: false, jump: false });
+            self.find_new_line(&id, false);
         }
         // Out of focus (opened from outside) it stays unread until the window
         // gets the keyboard, which then marks it read (`set_focused`).
@@ -1384,7 +1610,9 @@ impl App {
         self.pins.tab = crate::pins::Tab::Messages;
         self.focus = Focus::Input;
         self.filter.clear();
-        // Cached messages show at once; the fetch replaces them.
+        // Cached messages show at once; the fetch replaces them, a stretch
+        // left from an earlier jump too (`merge`).
+        self.detached.remove(&id);
         self.fetch(id.clone(), Fetch::Initial);
         // A DM tells when the other person paused their notifications.
         if let Some(uid) = self.convs.iter().find(|c| c.id == id && c.kind == Kind::Direct).and_then(|c| c.user.clone()) {
@@ -1399,6 +1627,21 @@ impl App {
         if pos.is_some() {
             self.list.select(pos);
         }
+    }
+
+    /// Puts the "New" line over the first message after where it was read
+    /// up to that someone else sent. The cache may not reach that far: then
+    /// the open's own fetch (`fetched`) settles it, line or none.
+    fn find_new_line(&mut self, chan: &str, fetched: bool) {
+        let Some(n) = self.new_line.as_ref().filter(|n| n.chan == chan && !n.fetched) else { return };
+        let msgs = self.messages.get(chan).map(Vec::as_slice).unwrap_or_default();
+        let first = msgs.iter().find(|m| m.ts > n.after && !m.user.as_deref().is_some_and(|u| self.is_me(u)));
+        let at = first.map(|m| m.ts.clone()).or_else(|| n.at.clone());
+        let Some(n) = self.new_line.as_mut() else { return };
+        // Found in the cache, the fetch only asks to bring it into view again.
+        n.jump |= at.is_some() && (fetched || n.at.is_none());
+        n.at = at;
+        n.fetched = fetched;
     }
 
     pub(crate) fn fetch(&mut self, chan: String, fetch: Fetch) {
@@ -1437,6 +1680,10 @@ impl App {
     }
 
     fn mark_read(&self, chan: &str) {
+        // Slack keeps no place in a channel for who isn't in it.
+        if self.convs.iter().any(|c| c.id == chan && c.guest) {
+            return;
+        }
         if let Some(ts) = self.messages.get(chan).and_then(|m| m.last()).map(|m| m.ts.clone()) {
             let chan = chan.to_string();
             self.spawn_quiet(move |s| {
@@ -1464,17 +1711,49 @@ impl App {
                 Target::Channel(id) if !self.convs.is_empty() => (id, false),
                 _ => continue,
             };
-            if self.others.contains_key(&id) || !self.asked.insert(id.clone()) {
+            let known = !person && (self.chans.contains_key(&id) || self.directory.find(&id).is_some());
+            if known || self.others.contains_key(&id) || !self.asked.insert(id.clone()) {
                 continue;
             }
             self.spawn(move |s| {
-                let res = if person {
-                    s.profile(&id).map(|p| (p.name, false))
+                if person {
+                    let res = s.profile(&id).map(|p| (p.name, false));
+                    Event::Named { id, res }
                 } else {
-                    s.conversation(&id).map(|c| (c.name, c.kind == Kind::Private))
-                };
-                Event::Named { id, res }
+                    let res = s.conversation(&id);
+                    Event::ChanNamed { id, res }
+                }
             });
+        }
+    }
+
+    /// A mentioned channel looked up: named from now on, and a public one
+    /// joins the search's list of channels, kept on disk with it.
+    fn chan_named(&mut self, id: String, c: Conversation) {
+        if c.kind == Kind::Private {
+            self.private.insert(id.clone());
+        }
+        self.others.insert(id, c.name.clone());
+        if c.kind == Kind::Channel && self.directory.find(&c.id).is_none() {
+            self.directory.add(&c);
+            self.dir_gen += 1;
+            if let Some(team) = self.me.as_ref().map(|m| m.team_id.clone()) {
+                let d = self.directory.clone();
+                std::thread::spawn(move || cache::save_directory(&team, &d));
+            }
+        }
+    }
+
+    /// Asks for the names of the channels found messages mention, which
+    /// their rows show as "#…" until then (`request_names`).
+    pub(crate) fn name_mentions(&mut self, text: &str) {
+        let mut rest = text;
+        while let Some(i) = rest.find("<#") {
+            rest = &rest[i + 2..];
+            let id = rest.split(['|', '>']).next().unwrap_or("");
+            if !id.is_empty() && self.names().chan(id).is_none() {
+                self.unnamed.push(crate::blocks::Target::Channel(id.to_string()));
+            }
         }
     }
 
@@ -1774,7 +2053,7 @@ impl App {
     fn open_menu(&mut self, row: usize, x: u16, y: u16) {
         let rows = self.rows();
         let items: Vec<(String, Action)> = match rows.get(row) {
-            Some(Row::Conv(i)) => {
+            Some(Row::Conv(i)) if !self.convs[*i].guest => {
                 let c = &self.convs[*i];
                 let id = c.id.clone();
                 let starred = self.stars.contains(&id);
@@ -1999,6 +2278,11 @@ impl App {
             self.refresh_presence();
             self.refresh_dnd();
         }
+        // Only the workspace on screen: a search is typed there.
+        if !self.background {
+            self.fetch_directory();
+            self.tick_search();
+        }
         let users_every = if self.background { USERS_EVERY_BACKGROUND } else { USERS_EVERY };
         if self.last_users.elapsed() >= users_every {
             self.last_users = Instant::now();
@@ -2120,6 +2404,12 @@ impl App {
                     let _ = config::save_workspace(&me, &creds);
                 }
                 self.status.clear();
+                // The search's channel list as last read, until it is read again.
+                if self.dir_team.as_deref() != Some(me.team_id.as_str()) {
+                    self.dir_team = Some(me.team_id.clone());
+                    self.directory = cache::load_directory(&me.team_id);
+                    self.dir_gen += 1;
+                }
                 self.me = Some(me);
                 self.resort();
             }
@@ -2134,7 +2424,10 @@ impl App {
                 self.resort();
             }
             Event::Convs(Ok(convs)) => {
+                // The channel being previewed stays until it is left.
+                let guest = self.convs.iter().find(|c| c.guest && self.current.as_ref() == Some(&c.id)).cloned();
                 self.convs = convs;
+                self.convs.extend(guest.filter(|g| !self.convs.iter().any(|c| c.id == g.id)));
                 self.resort();
                 self.open_default();
             }
@@ -2165,12 +2458,19 @@ impl App {
                 }
                 self.others.insert(id, name);
             }
-            Event::Named { res: Err(_), .. } => {}
+            // Nothing better to show than the id, and no asking again.
+            Event::Named { id, res: Err(_) } | Event::ChanNamed { id, res: Err(_) } => {
+                self.others.insert(id.clone(), id);
+            }
+            Event::ChanNamed { id, res: Ok(c) } => self.chan_named(id, c),
             Event::Dm(res) => self.dm_opened(res),
             Event::Slash(e) => self.on_slash(e),
             Event::Details(e) => self.on_details(e),
             Event::Invite(e) => self.on_invite(e),
             Event::Unarchived { id, res } => self.unarchived(id, res),
+            Event::Directory(res) => self.on_directory(res),
+            Event::Entered { id, res } => self.entered(id, res),
+            Event::Search(e) => self.on_search(e),
             Event::Threads(e) => self.on_threads(e),
             Event::Live(ev) => self.on_live(ev),
             // Sections and counts are session-token only; without them the
@@ -2532,6 +2832,11 @@ impl App {
     }
 
     fn merge(&mut self, chan: &str, fetch: Fetch, new: Vec<Message>) {
+        // A jump's stretch of history (`on_around`) landed after the open
+        // asked for the newest page: it stays, the way back is `to_present`.
+        if fetch == Fetch::Initial && self.detached.contains(chan) {
+            return;
+        }
         let is_current = self.current.as_deref() == Some(chan);
         let list = self.messages.entry(chan.to_string()).or_default();
         let grew = match fetch {
@@ -2578,6 +2883,9 @@ impl App {
                 present
             }
         };
+        if fetch == Fetch::Initial {
+            self.find_new_line(chan, true);
+        }
         if grew && is_current && self.focused {
             self.mark_read(chan);
         }
@@ -2813,6 +3121,9 @@ impl App {
         if self.help.is_some() {
             return self.help_paste(s);
         }
+        if self.search.open {
+            return self.search_paste(s);
+        }
         if self.dialog.is_some() {
             return self.dialog_paste(s);
         }
@@ -2866,6 +3177,10 @@ impl App {
         }
         if crate::help::is_toggle(&k) {
             return self.toggle_help();
+        }
+        // The search window, over the rest: every key but those above.
+        if self.search.open {
+            return self.search_key(k);
         }
         if ctrl && k.code == KeyCode::Char('l') {
             return self.open_login(None);
@@ -2971,13 +3286,10 @@ impl App {
         match (k.code, ctrl) {
             (KeyCode::Char('c'), true) => return self.quit = true,
             // Ctrl+T too, as in Slack.
-            (KeyCode::Char('k' | 't'), true) => {
-                self.filter.clear();
-                self.focus = Focus::Filter;
-                return self.list.select(None);
-            }
+            (KeyCode::Char('k' | 't'), true) => return self.open_search(),
             (KeyCode::Char('r'), true) => {
                 self.error = None;
+                self.dir_force = true;
                 return self.refresh();
             }
             (KeyCode::PageUp, _) if self.focus == Focus::Thread => return self.scroll_thread(10),
@@ -3119,14 +3431,20 @@ impl App {
         if k.modifiers.contains(KeyModifiers::ALT) && matches!(k.code, KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right) {
             return;
         }
-        // A deactivated account's archives or an archived channel: reading
-        // only, nothing to type in; `u` unarchives the channel.
+        // A deactivated account's archives, an archived channel or one you
+        // are not in: reading only, nothing to type in; `u` unarchives the
+        // channel, Enter or `j` joins it.
         if let Some(why) = self.read_only() {
             match k.code {
                 KeyCode::Esc => self.focus = Focus::Sidebar,
                 KeyCode::Char('u') if why == ReadOnly::Archived && !ctrl => {
                     if let Some(id) = self.current.clone() {
                         self.unarchive(id);
+                    }
+                }
+                KeyCode::Enter | KeyCode::Char('j') if why == ReadOnly::Outside && !ctrl => {
+                    if let Some(id) = self.current.clone() {
+                        self.join(id);
                     }
                 }
                 KeyCode::End => self.to_present(),
@@ -3195,6 +3513,9 @@ impl App {
         if self.help.is_some() {
             return self.help_mouse(m);
         }
+        if self.search.open {
+            return self.search_mouse(m);
+        }
         if self.details.is_some() {
             return self.details_mouse(m);
         }
@@ -3215,8 +3536,10 @@ impl App {
             return;
         }
         if m.kind == MouseEventKind::Down(MouseButton::Left) && !covered && self.areas.unarchive.contains(at) {
-            if let Some(id) = self.current.clone().filter(|_| self.read_only() == Some(ReadOnly::Archived)) {
-                self.unarchive(id);
+            match (self.current.clone(), self.read_only()) {
+                (Some(id), Some(ReadOnly::Archived)) => self.unarchive(id),
+                (Some(id), Some(ReadOnly::Outside)) => self.join(id),
+                _ => {}
             }
             self.dirty = true;
             return;
@@ -3477,10 +3800,8 @@ impl App {
                 let max = self.rows().len().saturating_sub(self.areas.sidebar.height as usize);
                 *self.list.offset_mut() = (self.list.offset() + 3).min(max);
             }
-            MouseEventKind::Down(MouseButton::Left) if self.areas.search.contains(at) => {
-                self.focus = Focus::Filter;
-                self.list.select(None);
-            }
+            // The box opens the search window; "/" keeps the sidebar's own filter.
+            MouseEventKind::Down(MouseButton::Left) if self.areas.search.contains(at) => self.open_search(),
             MouseEventKind::Down(MouseButton::Left) if self.areas.input.contains(at) => self.focus = Focus::Input,
             MouseEventKind::Down(MouseButton::Left) if in_msgs => self.focus = Focus::Input,
             _ => return,

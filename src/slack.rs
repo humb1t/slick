@@ -138,7 +138,7 @@ impl Users {
     }
 }
 
-fn unix_now() -> i64 {
+pub(crate) fn unix_now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
@@ -166,6 +166,101 @@ pub struct Conversation {
     /// The workspace's default channel (#general), opened when nothing else is.
     #[serde(default)]
     pub general: bool,
+    /// A public channel the user is not in, opened from the search to read:
+    /// never in the sidebar nor the cache, gone once another is opened.
+    #[serde(skip)]
+    pub guest: bool,
+    /// When Slack last changed it, in Unix milliseconds: the search's
+    /// order for one whose last message is unknown.
+    #[serde(default)]
+    pub updated: i64,
+}
+
+/// The workspace's public channels, the user's or not, for the search to
+/// find those the user is not in, as Slack's does. Kept apart from the
+/// sidebar's cache: it can run to thousands.
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct Directory {
+    /// When it was fetched, in Unix seconds; 0 while there is none.
+    pub at: i64,
+    /// In name order, but for channels added as messages named them (`add`).
+    pub chans: Vec<DirChan>,
+    /// Each channel's place in `chans`, by id (`prepare`).
+    #[serde(skip)]
+    index: HashMap<String, usize>,
+}
+
+/// Only what the search and the preview need of a channel.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct DirChan {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub archived: bool,
+    #[serde(default)]
+    pub members: u32,
+    /// When it last changed (else was created), in Unix milliseconds: the
+    /// search orders by it, having no last message for these.
+    #[serde(default)]
+    pub updated: i64,
+    /// The name made ready for the search (`Directory::prepare`).
+    #[serde(skip)]
+    pub folded: crate::text::Folded,
+}
+
+impl Directory {
+    /// The channel as a conversation to open, flagged as one the user is not in.
+    pub fn conv(&self, i: usize) -> Conversation {
+        let d = &self.chans[i];
+        Conversation {
+            id: d.id.clone(),
+            kind: Kind::Channel,
+            name: d.name.clone(),
+            user: None,
+            ext_shared: false,
+            archived: d.archived,
+            general: false,
+            guest: true,
+            updated: d.updated,
+        }
+    }
+
+    /// Folds the names for the search, once for all its keys, and indexes the ids.
+    pub fn prepare(&mut self) {
+        for c in &mut self.chans {
+            c.folded = crate::text::Folded::new(&c.name);
+        }
+        self.index = self.chans.iter().enumerate().map(|(i, c)| (c.id.clone(), i)).collect();
+    }
+
+    /// Fetched at `at`; ready for the search once `prepare`d.
+    pub fn new(at: i64, chans: Vec<DirChan>) -> Self {
+        Self { at, chans, index: HashMap::new() }
+    }
+
+    pub fn find(&self, id: &str) -> Option<usize> {
+        self.index.get(id).copied()
+    }
+
+    pub fn name(&self, id: &str) -> Option<&str> {
+        self.find(id).map(|i| self.chans[i].name.as_str())
+    }
+
+    /// A public channel learnt of another way (a message mentioned it).
+    pub fn add(&mut self, c: &Conversation) {
+        if self.find(&c.id).is_some() || c.kind != Kind::Channel {
+            return;
+        }
+        self.index.insert(c.id.clone(), self.chans.len());
+        self.chans.push(DirChan {
+            id: c.id.clone(),
+            name: c.name.clone(),
+            archived: c.archived,
+            members: 0,
+            updated: c.updated,
+            folded: crate::text::Folded::new(&c.name),
+        });
+    }
 }
 
 /// A sidebar section as the user arranged it in Slack.
@@ -435,6 +530,13 @@ impl Slack {
 
     pub(crate) fn paginate(&self, method: &str, params: &[(&str, &str)], key: &str) -> Res<Vec<Value>> {
         let mut out = Vec::new();
+        self.paginate_each(method, params, key, |v| out.push(v.clone()))?;
+        Ok(out)
+    }
+
+    /// `paginate`, each item handed to `each` as its page arrives instead of
+    /// all of them kept: for lists too long to hold whole.
+    pub(crate) fn paginate_each(&self, method: &str, params: &[(&str, &str)], key: &str, mut each: impl FnMut(&Value)) -> Res<()> {
         let mut cursor = String::new();
         loop {
             let v = {
@@ -444,12 +546,10 @@ impl Slack {
                 }
                 self.call(method, &p)?
             };
-            if let Some(items) = v[key].as_array() {
-                out.extend(items.iter().cloned());
-            }
+            v[key].as_array().into_iter().flatten().for_each(&mut each);
             cursor = v["response_metadata"]["next_cursor"].as_str().unwrap_or("").to_string();
             if cursor.is_empty() {
-                return Ok(out);
+                return Ok(());
             }
         }
     }
@@ -583,6 +683,30 @@ impl Slack {
             .filter(|c| !c["is_user_deleted"].as_bool().unwrap_or(false))
             .map(parse_conversation)
             .collect())
+    }
+
+    /// Every public channel of the workspace, archived ones too (`Directory`).
+    pub fn directory(&self) -> Res<Vec<DirChan>> {
+        let mut out = Vec::new();
+        let params = [("types", "public_channel"), ("exclude_archived", "false"), ("limit", "1000")];
+        self.paginate_each("conversations.list", &params, "channels", |c| {
+            out.push(DirChan {
+                id: str_of(&c["id"]),
+                name: str_of(&c["name"]),
+                archived: c["is_archived"].as_bool() == Some(true),
+                members: c["num_members"].as_u64().unwrap_or(0) as u32,
+                updated: updated(c),
+                folded: Default::default(),
+            });
+        })?;
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(out)
+    }
+
+    /// Joins a public channel; Slack answers with it as the user now sees it.
+    pub fn join(&self, chan: &str) -> Res<Conversation> {
+        let v = self.call("conversations.join", &[("channel", chan)])?;
+        Ok(parse_conversation(&v["channel"]))
     }
 
     /// The DM or group DM with these people, created if there is none yet.
@@ -852,7 +976,14 @@ fn parse_conversation(c: &Value) -> Conversation {
         ext_shared: c["is_ext_shared"].as_bool() == Some(true),
         archived: c["is_archived"].as_bool() == Some(true),
         general: c["is_general"].as_bool() == Some(true),
+        guest: false,
+        updated: updated(c),
     }
+}
+
+/// A conversation's `updated` (milliseconds), else its `created` (seconds), as Unix milliseconds.
+fn updated(c: &Value) -> i64 {
+    c["updated"].as_i64().filter(|t| *t > 0).or_else(|| c["created"].as_i64().filter(|t| *t > 0).map(|t| t * 1000)).unwrap_or(0)
 }
 
 pub(crate) fn parse_message(m: &Value) -> Message {

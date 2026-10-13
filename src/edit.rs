@@ -494,6 +494,10 @@ impl App {
             Act::Save(on) => self.set_saved(it.chan, it.ts, on),
             Act::Edit => self.start_edit(it, &m),
             Act::Unread => {
+                // As in Slack, the "New" line moves over the message.
+                if self.current.as_deref() == Some(it.chan.as_str()) {
+                    self.new_line = Some(crate::app::NewLine::over(it.chan.clone(), it.ts.clone()));
+                }
                 let (chan, ts) = (it.chan, before(&it.ts));
                 self.spawn(move |s| Event::Edit(Ev::Unread(s.mark(&chan, &ts))));
             }

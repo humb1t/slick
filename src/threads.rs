@@ -8,7 +8,7 @@
 use crate::app::{App, Event, Focus};
 use crate::i18n::{self, tr};
 use crate::slack::{parse_message, Kind, Message, Res, Slack};
-use crate::ui::{dim, message_lines, place, presence_of, presence_span, truncate, Rendered, MAX_INPUT_ROWS};
+use crate::ui::{dim, packed_lines, place, presence_of, presence_span, truncate, Rendered, MAX_INPUT_ROWS};
 use chrono::{Datelike, Local, TimeZone};
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
@@ -700,7 +700,7 @@ impl App {
 }
 
 /// When a message was sent, as Slack's Threads view says it: "2 minutes ago",
-/// "Wednesday at 9:10 AM", "Aug 14th at 11:22 AM".
+/// "Wednesday at 9:10", "Aug 14th at 11:22".
 fn ago(ts: &str) -> Option<String> {
     let secs: i64 = ts.split('.').next()?.parse().ok()?;
     let t = Local.timestamp_opt(secs, 0).single()?;
@@ -795,8 +795,8 @@ fn card_lines(app: &App, s: &Sub, read_to: &str, full: Option<&[Message]>, loadi
         }
         m
     };
-    // `message_lines` opens with a blank line and the day's: not in a card.
-    let mut r = message_lines(&[plain(&s.root)], None, &names, app, width, font);
+    // `packed_lines` opens with a blank line and the day's: not in a card.
+    let mut r = packed_lines(&[plain(&s.root)], &names, app, width, font);
     r.drop_front(3);
     let gutter = font.map_or(2, |(fw, fh)| ((2.0 * fh as f64 / fw as f64).round() as usize).clamp(3, 6) + 1);
     let replies = full.unwrap_or(&s.replies);
@@ -815,7 +815,7 @@ fn card_lines(app: &App, s: &Sub, read_to: &str, full: Option<&[Message]>, loadi
     }
     let (read, unread): (Vec<Message>, Vec<Message>) = replies.iter().map(plain).partition(|m| m.ts.as_str() <= read_to);
     if !read.is_empty() {
-        let mut more = message_lines(&read, None, &names, app, width, font);
+        let mut more = packed_lines(&read, &names, app, width, font);
         more.drop_front(2);
         r.append(more);
     }
@@ -829,7 +829,7 @@ fn card_lines(app: &App, s: &Sub, read_to: &str, full: Option<&[Message]>, loadi
             Span::styled("─".repeat(width.saturating_sub(label.width())), Style::new().fg(Color::Red)),
             Span::styled(label, Style::new().fg(Color::Red).bold()),
         ]));
-        let mut more = message_lines(&unread, None, &names, app, width, font);
+        let mut more = packed_lines(&unread, &names, app, width, font);
         more.drop_front(3);
         r.append(more);
     }
