@@ -102,6 +102,16 @@ pub fn system(m: &Message) -> Option<String> {
     })
 }
 
+/// Someone joining or leaving: a run of these is drawn as one quiet line.
+/// Some(true) for a join, Some(false) for a leave.
+pub fn membership(m: &Message) -> Option<bool> {
+    match m.subtype.as_deref()? {
+        "channel_join" | "group_join" => Some(true),
+        "channel_leave" | "group_leave" => Some(false),
+        _ => None,
+    }
+}
+
 /// `:green_heart:` → 💚 for the shortcodes that have a Unicode emoji.
 pub fn shortcodes(s: &str) -> String {
     let mut out = String::with_capacity(s.len());

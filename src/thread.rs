@@ -274,6 +274,8 @@ impl App {
             KeyCode::Char('d') if ctrl => e.set(String::new()),
             KeyCode::Enter => self.send_reply(),
             KeyCode::Char('b') if ctrl => t.broadcast = !t.broadcast,
+            KeyCode::Left if ctrl => e.word_left(),
+            KeyCode::Right if ctrl => e.word_right(),
             KeyCode::Left => e.left(),
             KeyCode::Right => e.right(),
             KeyCode::Home => e.home(),
@@ -290,6 +292,7 @@ impl App {
             }
             KeyCode::Backspace if ctrl => e.delete_word(),
             KeyCode::Backspace => e.backspace(),
+            KeyCode::Delete if ctrl => e.delete_word_forward(),
             KeyCode::Delete => e.delete(),
             KeyCode::Char('u') if ctrl => {
                 e.take();

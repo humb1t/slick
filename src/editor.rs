@@ -124,6 +124,14 @@ fn is_name_char(c: char) -> bool {
     c.is_alphanumeric() || "_+-'".contains(c)
 }
 
+/// What Ctrl+←/→ go over a run of: letters, digits, accents, emoji and
+/// mentions; spaces and punctuation lie between words.
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric()
+        || c == '_'
+        || (!c.is_ascii() && !c.is_whitespace() && !matches!(c, '\u{2010}'..='\u{205E}' | '\u{3000}'..='\u{303F}' | '«' | '»' | '¿' | '¡'))
+}
+
 #[derive(Clone, Default)]
 pub struct Editor {
     pub text: String,
@@ -309,6 +317,48 @@ impl Editor {
         let start = head.rfind([' ', '\n']).map(|i| i + 1).unwrap_or(0);
         self.text.replace_range(start..end, "");
         self.cursor = self.text[..start].chars().count();
+    }
+
+    /// Ctrl+Delete: up to the end of the next word, as Ctrl+→ goes.
+    pub fn delete_word_forward(&mut self) {
+        let end = self.word_end();
+        self.remove(self.cursor, end);
+    }
+
+    /// The start of the word before the cursor, across lines: what's between
+    /// words first, then the word.
+    fn word_start(&self) -> usize {
+        let chars: Vec<char> = self.text.chars().collect();
+        let mut i = self.cursor.min(chars.len());
+        while i > 0 && !is_word_char(chars[i - 1]) {
+            i -= 1;
+        }
+        while i > 0 && is_word_char(chars[i - 1]) {
+            i -= 1;
+        }
+        i
+    }
+
+    /// The end of the word after the cursor, across lines.
+    fn word_end(&self) -> usize {
+        let chars: Vec<char> = self.text.chars().collect();
+        let mut i = self.cursor.min(chars.len());
+        while i < chars.len() && !is_word_char(chars[i]) {
+            i += 1;
+        }
+        while i < chars.len() && is_word_char(chars[i]) {
+            i += 1;
+        }
+        i
+    }
+
+    /// Ctrl+← / Ctrl+→, as in a browser's text box.
+    pub fn word_left(&mut self) {
+        self.cursor = self.word_start();
+    }
+
+    pub fn word_right(&mut self) {
+        self.cursor = self.word_end();
     }
 
     pub fn left(&mut self) {

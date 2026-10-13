@@ -50,6 +50,30 @@ fn program() -> Res<PathBuf> {
     Ok(crate::update::exe().ok_or(tr("couldn't find slick's executable", "não achou o executável do slick"))?)
 }
 
+/// The sign-in window's HTTP cache (Slack's pages and scripts, ~100 MB),
+/// useless once it's closed. Cookies and storage stay: they keep the window
+/// signed in, so adding a workspace or signing in again skips the password.
+/// Folders that aren't there or are still in use are left as they are.
+pub fn purge_cache() {
+    let dir = crate::config::data_dir().join("webview");
+    // WebKitGTK; WebView2 keeps its profile in EBWebView.
+    let caches: &[&str] = if cfg!(windows) {
+        &[
+            "EBWebView/Default/Cache",
+            "EBWebView/Default/Code Cache",
+            "EBWebView/Default/GPUCache",
+            "EBWebView/Default/Service Worker/CacheStorage",
+            "EBWebView/ShaderCache",
+            "EBWebView/GrShaderCache",
+        ]
+    } else {
+        &["WebKitCache", "CacheStorage"]
+    };
+    for c in caches {
+        let _ = std::fs::remove_dir_all(dir.join(c));
+    }
+}
+
 /// A workspace the browser is signed in to, from Slack's `localConfig_v2`.
 #[allow(dead_code)]
 #[derive(Clone, Debug, Default)]
@@ -81,6 +105,8 @@ pub fn window_known(workspace: Option<&str>, known: &[String]) -> Res<Signed> {
         .stdin(Stdio::null())
         .output()
         .map_err(|e| trf!("couldn't open the sign-in window: {e}", "não abriu a janela de login: {e}"))?;
+    // The window is gone, and its web processes with it.
+    std::thread::spawn(purge_cache);
     if !out.status.success() {
         // The loader couldn't find WebKitGTK (or GTK): the window never opened.
         if String::from_utf8_lossy(&out.stderr).contains("error while loading shared libraries") {

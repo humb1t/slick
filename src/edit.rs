@@ -257,7 +257,7 @@ impl App {
     }
 
     /// Every copy of a message: the conversation's and the thread panel's.
-    fn each_copy(&mut self, chan: &str, ts: &str, mut f: impl FnMut(&mut Message)) {
+    pub(crate) fn each_copy(&mut self, chan: &str, ts: &str, mut f: impl FnMut(&mut Message)) {
         if let Some(m) = self.messages.get_mut(chan).and_then(|l| l.iter_mut().find(|m| m.ts == ts)) {
             f(m);
         }
@@ -314,7 +314,9 @@ impl App {
 
     /// Moves the pick (older is -1); past the newest it clears. With none, ↑ picks the newest.
     fn step(&mut self, thread: bool, delta: isize) -> bool {
-        let Some((_, msgs)) = self.pane(thread) else { return false };
+        let Some((_, all)) = self.pane(thread) else { return false };
+        // Joins and leaves are folded into a line there's nothing to do with.
+        let msgs: Vec<&Message> = all.iter().filter(|m| crate::text::membership(m).is_none()).collect();
         if msgs.is_empty() {
             return false;
         }
@@ -360,7 +362,8 @@ impl App {
                 return true;
             }
             KeyCode::PageUp | KeyCode::PageDown => return false,
-            KeyCode::Delete => Act::Delete,
+            // Ctrl+Delete is the box's: a word.
+            KeyCode::Delete if !ctrl => Act::Delete,
             KeyCode::Menu => {
                 let (x, y) = self.anchor(&Item { chan: chan.clone(), ts: sel.ts.clone(), thread, act: Act::Cancel });
                 self.message_menu(thread, sel.ts, x, y);
@@ -398,9 +401,10 @@ impl App {
     /// Ctrl+Shift+\: the reaction picker for the conversation's last message, as in Slack.
     pub(crate) fn react_last(&mut self) {
         let Some(chan) = self.current.clone() else { return };
-        let Some(ts) = self.messages.get(&chan).and_then(|l| l.last()).map(|m| m.ts.clone()) else { return };
-        let (x, y) = self.anchor(&Item { chan, ts: ts.clone(), thread: false, act: Act::Cancel });
-        self.open_picker(ts, x, y);
+        let last = self.messages.get(&chan).and_then(|l| l.iter().rfind(|m| crate::text::membership(m).is_none()));
+        let Some(ts) = last.map(|m| m.ts.clone()) else { return };
+        let (x, y) = self.anchor(&Item { chan: chan.clone(), ts: ts.clone(), thread: false, act: Act::Cancel });
+        self.open_picker(chan, ts, x, y);
     }
 
     /// Slack's right-click menu for a message, which also picks it.
@@ -477,7 +481,7 @@ impl App {
             Act::Cancel => {}
             Act::React => {
                 let (x, y) = self.anchor(&it);
-                self.open_picker(it.ts, x, y);
+                self.open_picker(it.chan, it.ts, x, y);
             }
             Act::Thread => {
                 self.edit.selected = None;

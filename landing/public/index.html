@@ -612,17 +612,17 @@ td:first-child, td:first-child * { color: var(--yellow); font-weight: 700; }
           <div>
             <div><span class="who">slick</span><span class="app"> APP</span><span class="time">10:12</span></div>
             <div class="body">
-              <p data-i18n="f2">Rust, mostly. Here's my <i>trust me bro benchmark</i>: slick and the Slack desktop app, same workspace, running side by side on my machine right now:</p>
+              <p data-i18n="f2">Rust, mostly. Here's my <i>trust me bro benchmark</i>: slick and the Slack desktop app, same two workspaces, running side by side on my machine right now:</p>
               <div class="block"><pre data-i18n="fb"><span class="c">                 slick    Slack</span>
-memory           68 MB    706 MB
+memory           73 MB    828 MB
 processes        1        10
-threads          6        146
+threads          6        124
 install          10 MB    295 MB
-cache on disk    17 MB    808 MB</pre></div>
+cache on disk    21 MB    803 MB</pre></div>
               <p data-i18n="f2b">Here's what makes that possible:</p>
               <ul class="quote">
                 <li><span data-i18n="fr1"><b>Native code, not a browser.</b> slick is written in Rust and compiled ahead of time to machine code. No JavaScript engine to boot, no garbage collector pausing to clean up, nothing to warm up.</span></li>
-                <li><span data-i18n="fr2"><b>Light on memory.</b> About 70 MB with my workspace open, against 700 MB spread over Slack's 10 processes. The terminal only redraws when something on screen changed.</span></li>
+                <li><span data-i18n="fr2"><b>Light on memory.</b> About 70 MB with my two workspaces open, against 830 MB spread over Slack's 10 processes. The terminal only redraws when something on screen changed.</span></li>
                 <li><span data-i18n="f3"><b>Cache first.</b> Users, channels, your recent conversations and their last 50 messages are saved locally, so they're on screen before Slack answers.</span></li>
                 <li><span data-i18n="f4"><b>Never blocks.</b> Every request runs on its own thread, and Rust guarantees those threads can't corrupt each other's data. Typing and scrolling never wait on the network.</span></li>
                 <li><span data-i18n="f5"><b>One small binary.</b> About 10 MB (Slack installs 295 MB), no runtime to install. No webview, no Electron. A browser window shows up only to sign in.</span></li>
@@ -655,8 +655,8 @@ cache on disk    17 MB    808 MB</pre></div>
               </ul>
               <p data-i18n="d4">No more bloated disk space for a chat app. On my machine, right now:</p>
               <div class="block"><pre><span class="c">$ du -sh ~/.cache/slick ~/.config/Slack</span>
-17M   ~/.cache/slick
-808M  ~/.config/Slack</pre></div>
+21M   ~/.cache/slick
+803M  ~/.config/Slack</pre></div>
             </div>
           </div>
         </article>
@@ -796,12 +796,13 @@ omarchy plugin enable leonavas.slack --section right</pre><button class="btn" da
           <div>
             <div><span class="who">slick</span><span class="app"> APP</span><span class="time">11:30</span></div>
             <div class="body">
-              <p data-i18n="cph"><b class="ver">slick 0.4.1</b> is out.</p>
+              <p data-i18n="cph"><b class="ver">slick 0.4.2</b> is out.</p>
               <ul class="dash">
-                <li><span data-i18n="cp0">Every keyboard shortcut in one searchable guide: <kbd>Ctrl</kbd>+<kbd>/</kbd> or <kbd>F1</kbd>, or from the account menu. Search in English or Portuguese.</span></li>
-                <li><span data-i18n="cp1">The official app's shortcuts: <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>↑</kbd><kbd>↓</kbd> for the next unread, <kbd>Alt</kbd>+<kbd>←</kbd><kbd>→</kbd> back and forward, <kbd>Shift</kbd>+<kbd>Esc</kbd> marks everything read, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> Threads, <kbd>Ctrl</kbd>+<kbd>,</kbd> settings, <kbd>Ctrl</kbd>+<kbd>Tab</kbd> next workspace, and more.</span></li>
-                <li><span data-i18n="cp2"><kbd>P</kbd> pins a picked message, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>\</kbd> reacts to the last one, and code blocks and lists have their own shortcuts.</span></li>
-                <li><span data-i18n="cp3"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>9</kbd> makes a quote again instead of switching workspace.</span></li>
+                <li><span data-i18n="cp0">Hover a message and a <b>+</b> button shows up to add a reaction, in the conversation and in the thread panel. Reacting to a reply in the thread panel works now; before, it silently did nothing.</span></li>
+                <li><span data-i18n="cp1">Joins and leaves in a row collapse into one compact line, like the official app: "Igor and 6 others left #x. Also, shirley rejoined."</span></li>
+                <li><span data-i18n="cp2"><kbd>Ctrl</kbd>+<kbd>←</kbd><kbd>→</kbd> move by word and <kbd>Ctrl</kbd>+<kbd>Delete</kbd> deletes the next word in the text boxes.</span></li>
+                <li><span data-i18n="cp3">The sign-in window's ~120 MB browser cache is dropped once you're signed in (the session stays, so no new password): slick now takes about 31 MB on disk.</span></li>
+                <li><span data-i18n="cp4">Status lines and errors under the message box go away after 10 seconds.</span></li>
               </ul>
             </div>
           </div>
@@ -985,11 +986,11 @@ cookie = xoxd-…</pre></div>
     aLinux: "<b>Linux.</b> O script baixa a última release para a sua máquina, confere o SHA-256 e coloca o <code>slick</code> em <code>~/.local/bin</code>, sem sudo. <code>SLICK_INSTALL_DIR</code> muda a pasta.",
     aWin: "<b>Windows.</b> Ele instala em <code>%LOCALAPPDATA%\Programs\slick</code> e coloca a pasta no PATH. Use o Windows Terminal (ou outro terminal com cores e imagens); por enquanto não há ícone na bandeja no Windows.",
     f1: "tá, mas por que ele é tão rápido?",
-    f2: "Rust, principalmente. Olha o meu <i>trust me bro benchmark</i>: slick e o app desktop do Slack, mesmo workspace, rodando lado a lado na minha máquina agora:",
-    fb: '<span class="c">                 slick    Slack</span>\nmemória          68 MB    706 MB\nprocessos        1        10\nthreads          6        146\ninstalação       10 MB    295 MB\ncache em disco   17 MB    808 MB',
+    f2: "Rust, principalmente. Olha o meu <i>trust me bro benchmark</i>: slick e o app desktop do Slack, os mesmos dois workspaces, rodando lado a lado na minha máquina agora:",
+    fb: '<span class="c">                 slick    Slack</span>\nmemória          73 MB    828 MB\nprocessos        1        10\nthreads          6        124\ninstalação       10 MB    295 MB\ncache em disco   21 MB    803 MB',
     f2b: "Isto é o que torna isso possível:",
     fr1: "<b>Código nativo, não um navegador.</b> O slick é escrito em Rust e compilado direto para código de máquina. Nenhum motor de JavaScript para subir, nenhum coletor de lixo pausando para limpar, nada para aquecer.",
-    fr2: "<b>Leve na memória.</b> Uns 70 MB com o meu workspace aberto, contra 700 MB espalhados pelos 10 processos do Slack. O terminal só é redesenhado quando algo na tela mudou.",
+    fr2: "<b>Leve na memória.</b> Uns 70 MB com os meus dois workspaces abertos, contra 830 MB espalhados pelos 10 processos do Slack. O terminal só é redesenhado quando algo na tela mudou.",
     f3: "<b>Cache primeiro.</b> Usuários, canais, suas conversas recentes e as últimas 50 mensagens de cada uma ficam salvos localmente, então aparecem na tela antes de o Slack responder.",
     f4: "<b>Nunca trava.</b> Cada requisição roda em uma thread própria, e o Rust garante que essas threads não corrompam os dados umas das outras. Digitar e rolar nunca esperam a rede.",
     f5: "<b>Um binário pequeno.</b> Cerca de 10 MB (o Slack instala 295 MB), sem runtime para instalar. Sem webview, sem Electron. Uma janela de navegador só aparece para fazer login.",
@@ -1100,11 +1101,12 @@ cookie = xoxd-…</pre></div>
     co2: "O \"(você)\" ao lado do seu nome fica mais apagado que o nome.",
     co3: "\"E-mail copiado\" e todo outro \"copiado\" somem da tela em 2 segundos.",
     co4: "Para os seus scripts: as prévias das mensagens também vêm em HTML, com os emojis do seu workspace, até 5 por conversa, e a preferência de notificação de cada canal. O arquivo de estado espera as contagens reais, então nada de badges velhos ao abrir.",
-    cph: '<b class="ver">slick 0.4.1</b> saiu.',
-    cp0: "Todos os atalhos de teclado num guia com busca: <kbd>Ctrl</kbd>+<kbd>/</kbd> ou <kbd>F1</kbd>, ou pelo menu da conta. Busque em português ou inglês.",
-    cp1: "Os atalhos do app oficial: <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>↑</kbd><kbd>↓</kbd> para a próxima não lida, <kbd>Alt</kbd>+<kbd>←</kbd><kbd>→</kbd> para voltar e avançar, <kbd>Shift</kbd>+<kbd>Esc</kbd> marca tudo como lido, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> abre Threads, <kbd>Ctrl</kbd>+<kbd>,</kbd> as configurações, <kbd>Ctrl</kbd>+<kbd>Tab</kbd> o próximo workspace, e mais.",
-    cp2: "<kbd>P</kbd> fixa a mensagem escolhida, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>\\</kbd> reage à última, e blocos de código e listas ganharam atalhos próprios.",
-    cp3: "<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>9</kbd> volta a fazer citação em vez de trocar de workspace.",
+    cph: '<b class="ver">slick 0.4.2</b> saiu.',
+    cp0: "Passe o mouse sobre uma mensagem e aparece um botão <b>+</b> para reagir, na conversa e no painel da thread. Reagir a uma resposta no painel da thread agora funciona; antes não acontecia nada.",
+    cp1: "Entradas e saídas seguidas viram uma única linha compacta, como no app oficial: \"Igor e mais 6 saíram de #x. Além disso, shirley voltou.\"",
+    cp2: "<kbd>Ctrl</kbd>+<kbd>←</kbd><kbd>→</kbd> andam de palavra em palavra e <kbd>Ctrl</kbd>+<kbd>Delete</kbd> apaga a próxima palavra nas caixas de texto.",
+    cp3: "O cache de ~120 MB da janela de login é descartado depois que você entra (a sessão continua, então nada de senha de novo): o slick agora ocupa uns 31 MB em disco.",
+    cp4: "Mensagens de status e erros embaixo da caixa de mensagem somem depois de 10 segundos.",
     hints: "j k · Alt+↑↓ canais · ^K procurar · t tema",
     themeWord: "tema",
   };

@@ -17,7 +17,9 @@
 //!
 //! The browser profile lives in ~/.local/share/slick/webview
 //! (%LOCALAPPDATA%\slick\webview on Windows), apart from any other browser,
-//! so signing out elsewhere does not touch this session.
+//! so signing out elsewhere does not touch this session. Its HTTP cache is
+//! dropped once the window closes (`login::purge_cache`); cookies and
+//! storage stay, so signing in again doesn't ask for the password.
 //!
 //! Linux draws it with WebKitGTK, Windows with WebView2 (part of Windows 10/11).
 

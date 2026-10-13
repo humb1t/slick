@@ -217,6 +217,10 @@ fn main() {
         }
     }
     std::thread::spawn(cache::prune_images);
+    // Only the one that owns the socket: another may have the sign-in window open.
+    if owner {
+        std::thread::spawn(login::purge_cache);
+    }
     // Slick's own events (an update, the socket, the tray); each workspace has its channel.
     let (tx, rx) = mpsc::channel();
 

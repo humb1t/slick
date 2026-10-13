@@ -11,7 +11,7 @@ use crate::slack::{File, Kind, Message};
 use crate::text::Names;
 use chrono::{Datelike, Local, TimeZone};
 use std::time::{Duration, Instant};
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph};
@@ -898,6 +898,9 @@ pub(crate) struct Rendered {
     buttons: Vec<blocks::Hit>,
     /// File cards' actions.
     files: Vec<files::Hit>,
+    /// Joins and leaves folded into one line: its lines, once per message,
+    /// to scroll to them; nothing to pick or react to there.
+    quiet: Vec<(std::ops::Range<usize>, String)>,
 }
 
 impl Rendered {
@@ -927,6 +930,8 @@ impl Rendered {
         self.buttons.iter_mut().for_each(|b| b.line -= n);
         self.files.retain(|h| h.line >= n);
         self.files.iter_mut().for_each(|h| h.line -= n);
+        self.quiet.retain(|q| q.0.start >= n);
+        self.quiet.iter_mut().for_each(|q| q.0 = q.0.start - n..q.0.end - n);
     }
 
     /// Each message header's time, reworded by `f` from the message's ts
@@ -948,22 +953,26 @@ impl Rendered {
         self.hits.clear();
     }
 
-    /// Puts `other` below these lines.
+    /// The lines the message `ts` is drawn on, folded into a line of joins or not.
+    fn span_of(&self, ts: &str) -> Option<std::ops::Range<usize>> {
+        let hit = self.hits.iter().find_map(|h| match h {
+            Hit::Message { lines, ts: t } if t == ts => Some(lines.clone()),
+            _ => None,
+        });
+        hit.or_else(|| self.quiet.iter().find(|q| q.1 == ts).map(|q| q.0.clone()))
+    }
+
     /// How far up to scroll so the message `ts` starts at the top of `height` rows.
     pub fn scroll_to(&self, ts: &str, height: usize) -> Option<usize> {
-        self.hits.iter().find_map(|h| match h {
-            Hit::Message { lines, ts: t } if t == ts => Some(self.lines.len().saturating_sub(lines.start + height)),
-            _ => None,
-        })
+        self.span_of(ts).map(|lines| self.lines.len().saturating_sub(lines.start + height))
     }
 
     /// The scroll that keeps the end of the message `ts` `over` lines above the bottom.
     pub fn keep(&self, ts: &str, over: usize) -> Option<usize> {
-        self.hits.iter().find_map(|h| match h {
-            Hit::Message { lines, ts: t } if t == ts => Some(self.lines.len() - lines.end + over),
-            _ => None,
-        })
+        self.span_of(ts).map(|lines| self.lines.len() - lines.end + over)
     }
+
+    /// Puts `other` below these lines.
 
     pub fn append(&mut self, other: Rendered) {
         let n = self.lines.len();
@@ -977,6 +986,7 @@ impl Rendered {
         }));
         self.buttons.extend(other.buttons.into_iter().map(|b| blocks::Hit { line: b.line + n, ..b }));
         self.files.extend(other.files.into_iter().map(|h| files::Hit { line: h.line + n, ..h }));
+        self.quiet.extend(other.quiet.into_iter().map(|(l, ts)| (l.start + n..l.end + n, ts)));
     }
 }
 
@@ -1083,12 +1093,7 @@ fn latest_button(f: &mut Frame, app: &mut App, area: Rect) {
 /// Paints the message just jumped to, for a moment after the jump.
 pub(crate) fn flash(app: &App, r: &mut Rendered, area: Rect) {
     let Some((ts, _)) = app.flash.as_ref() else { return };
-    let Some(lines) = r.hits.iter().find_map(|h| match h {
-        Hit::Message { lines, ts: t } if t == ts => Some(lines.clone()),
-        _ => None,
-    }) else {
-        return;
-    };
+    let Some(lines) = r.span_of(ts) else { return };
     let start = (lines.start..lines.end).find(|&i| r.lines[i].width() > 0).unwrap_or(lines.start);
     let bg = Color::Rgb(0x4a, 0x41, 0x1c);
     for l in &mut r.lines[start..lines.end] {
@@ -1166,7 +1171,7 @@ pub(crate) fn shade(app: &App, r: &mut Rendered, thread: bool, area: Rect) {
 /// Shows rendered messages `scroll` lines up from the end, draws their images
 /// and registers what can be clicked. Returns how far `scroll` can go.
 pub(crate) fn place(f: &mut Frame, app: &mut App, inner: Rect, r: Rendered, scroll: usize, bottom: bool) -> usize {
-    let Rendered { lines, slots, links, people, hits, buttons, files } = r;
+    let Rendered { lines, slots, links, people, hits, buttons, files, .. } = r;
     let height = inner.height as usize;
     let max_scroll = lines.len().saturating_sub(height);
     let end = lines.len() - scroll.min(max_scroll);
@@ -1199,6 +1204,8 @@ pub(crate) fn place(f: &mut Frame, app: &mut App, inner: Rect, r: Rendered, scro
         app.areas.thread_links.push((rect, l.ts));
     }
     let row = |line: usize| inner.y + (pad + line - start) as u16;
+    let pane = app.areas.thread.contains(Position::new(inner.x, inner.y));
+    let hover = app.hover_msg.clone().filter(|(t, _)| *t == pane).map(|(_, ts)| ts);
     for h in hits {
         match h {
             Hit::Pill { line, x, w, ts, name } if line >= start && line < end => {
@@ -1207,6 +1214,21 @@ pub(crate) fn place(f: &mut Frame, app: &mut App, inner: Rect, r: Rendered, scro
             Hit::Message { lines, ts } => {
                 let (a, b) = (lines.start.max(start), lines.end.min(end));
                 if a < b {
+                    // Under the mouse: Slack's add-reaction button, top right.
+                    if hover.as_deref() == Some(ts.as_str()) {
+                        let (fg, bg) = PILL_ADD;
+                        let label = format!(" {ADD_REACTION} ");
+                        let w = label.width() as u16 + 2;
+                        let rect = Rect::new(inner.right().saturating_sub(w + 1), row(a), w, 1).intersection(inner);
+                        let line = Line::from(vec![
+                            Span::styled(blocks::CAP_L, Style::new().fg(bg)),
+                            Span::styled(label, Style::new().fg(fg).bg(bg)),
+                            Span::styled(blocks::CAP_R, Style::new().fg(bg)),
+                        ]);
+                        f.render_widget(Clear, rect);
+                        f.render_widget(Paragraph::new(line), rect);
+                        app.areas.reactions.push((rect, ts.clone(), None));
+                    }
                     app.areas.message_rows.push((Rect::new(inner.x, row(a), inner.width, (b - a) as u16), ts));
                 }
             }
@@ -1948,8 +1970,11 @@ pub(crate) fn message_lines(
     // File cards' actions.
     let mut file_hits = Vec::new();
     let mut hits = Vec::new();
+    let mut quiet = Vec::new();
     let mut prev: Option<&Message> = None;
     let mut prev_day = None;
+    // Messages already drawn in a line of joins and leaves.
+    let mut folded = 0;
     // Avatar: a square of two rows; the text starts after it.
     let avatar_cols = font.map(|(fw, fh)| ((2.0 * fh as f64 / fw as f64).round() as u16).clamp(3, 6));
     let gutter = avatar_cols.map_or(2, |c| c as usize + 1);
@@ -2006,7 +2031,11 @@ pub(crate) fn message_lines(
             ]));
         }
     }
-    for m in msgs {
+    for (i, m) in msgs.iter().enumerate() {
+        if folded > 0 {
+            folded -= 1;
+            continue;
+        }
         let time = Local.timestamp_opt(secs(&m.ts), 0).single();
         let day = time.map(|t| t.date_naive());
         if day != prev_day {
@@ -2022,6 +2051,32 @@ pub(crate) fn message_lines(
             }
             prev_day = day;
             prev = None;
+        }
+        // Slack's "Igor and 6 others left #x. Also, Ana rejoined.": the joins
+        // and leaves in a row, that day, as one quiet line with no avatar.
+        if crate::text::membership(m).is_some() {
+            let same_day = |n: &&Message| Local.timestamp_opt(secs(&n.ts), 0).single().map(|t| t.date_naive()) == day;
+            let run: Vec<&Message> = msgs[i..].iter().take_while(|n| crate::text::membership(n).is_some() && same_day(n)).collect();
+            folded = run.len() - 1;
+            let first = lines.len();
+            lines.push(Line::from(""));
+            let mut segs = membership_segs(&run, app, names);
+            let clock = time.map(|t| i18n::clock(&t)).unwrap_or_default();
+            segs.push(blocks::Seg { text: format!("  {}", clock.replace(' ', "\u{a0}")), ..Default::default() });
+            let para = blocks::Para { kind: blocks::ParaKind::Plain, segs };
+            let rich = blocks::render(&[blocks::Piece::Text(vec![para], None)], body_width, None, dim());
+            let top = lines.len();
+            buttons.extend(rich.hits.into_iter().map(|h| blocks::Hit { line: top + h.line, x: gutter as u16 + h.x, ..h }));
+            // The person icon sits in the middle of where the avatars go.
+            let at = (gutter - 1) / 2;
+            for (k, mut l) in rich.lines.into_iter().enumerate() {
+                let lead = if k == 0 { format!("{}{PERSON}{}", " ".repeat(at), " ".repeat(gutter - at - 1)) } else { indent.clone() };
+                l.spans.insert(0, Span::styled(lead, dim()));
+                lines.push(l);
+            }
+            quiet.extend(run.iter().map(|n| (first..lines.len(), n.ts.clone())));
+            prev = None;
+            continue;
         }
         let first = lines.len();
         let author = author(m, names);
@@ -2149,7 +2204,144 @@ pub(crate) fn message_lines(
         }
         hits.push(Hit::Message { lines: first..lines.len(), ts: m.ts.clone() });
     }
-    Rendered { lines, slots, links, people, hits, buttons, files: file_hits }
+    Rendered { lines, slots, links, people, hits, buttons, files: file_hits, quiet }
+}
+
+/// nf-fa-user: the mark of a line of joins and leaves, where avatars go.
+const PERSON: &str = "\u{f007}";
+
+/// What a run of joins and leaves amounts to, in Slack's words: each person
+/// once, by how they ended up ("left then joined" is "rejoined"), the
+/// largest group first and with the channel, the others after "Also,".
+fn membership_segs(run: &[&Message], app: &App, names: &Names) -> Vec<blocks::Seg> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Cat {
+        Joined,
+        Left,
+        Rejoined,
+    }
+    // Each person: the first and last thing they did and who added them.
+    let mut people: Vec<(String, bool, bool, Option<String>)> = Vec::new();
+    for m in run {
+        let (Some(uid), Some(join)) = (m.user.clone(), crate::text::membership(m)) else { continue };
+        let by = m.system.as_ref().and_then(|s| s.inviter.clone()).filter(|b| !b.trim().is_empty() && *b != uid);
+        match people.iter_mut().find(|p| p.0 == uid) {
+            Some(p) => {
+                p.2 = join;
+                p.3 = if join { by } else { None };
+            }
+            None => people.push((uid, join, join, by)),
+        }
+    }
+    // The groups, in the order their first person appears.
+    let mut groups: Vec<(Cat, Vec<(String, Option<String>)>)> = Vec::new();
+    for (uid, first, last, by) in people {
+        let cat = match (first, last) {
+            (_, false) => Cat::Left,
+            (false, true) => Cat::Rejoined,
+            (true, true) => Cat::Joined,
+        };
+        match groups.iter_mut().find(|g| g.0 == cat) {
+            Some(g) => g.1.push((uid, by)),
+            None => groups.push((cat, vec![(uid, by)])),
+        }
+    }
+    let Some(main) = (0..groups.len()).fold(None, |best: Option<usize>, i| match best {
+        Some(b) if groups[b].1.len() >= groups[i].1.len() => Some(b),
+        _ => Some(i),
+    }) else {
+        return Vec::new();
+    };
+    let txt = |t: String| blocks::Seg { text: t, ..Default::default() };
+    let name_style = Style::new().fg(Color::Gray);
+    let person = |uid: &str| blocks::Seg {
+        text: names.user(uid).unwrap_or(uid).to_string(),
+        style: name_style,
+        target: Some(blocks::Target::User(uid.to_string())),
+        ..Default::default()
+    };
+    // "Ana", "Ana and Bia", "Ana and 6 others".
+    let who = |g: &[(String, Option<String>)], out: &mut Vec<blocks::Seg>| {
+        out.push(person(&g[0].0));
+        match g.len() {
+            1 => {}
+            2 => {
+                out.push(txt(tr(" and ", " e ").into()));
+                out.push(person(&g[1].0));
+            }
+            n => {
+                let n = n - 1;
+                out.push(txt(trf!(" and {n} others", " e mais {n} pessoas")));
+            }
+        }
+    };
+    let verb = |cat: Cat, many: bool| -> &'static str {
+        match (cat, many) {
+            (Cat::Joined, false) => tr("joined", "entrou"),
+            (Cat::Joined, true) => tr("joined", "entraram"),
+            (Cat::Left, false) => tr("left", "saiu"),
+            (Cat::Left, true) => tr("left", "saíram"),
+            (Cat::Rejoined, false) => tr("rejoined", "voltou"),
+            (Cat::Rejoined, true) => tr("rejoined", "voltaram"),
+        }
+    };
+    let chan = app.current.as_deref().and_then(|c| {
+        let sign = if names.private.contains(c) { LOCK } else { "#" };
+        names.chan(c).map(|n| blocks::Seg { text: format!("{sign}{n}"), style: name_style, ..Default::default() })
+    });
+    let (cat, group) = &groups[main];
+    let many = group.len() > 1;
+    let mut out = Vec::new();
+    who(group, &mut out);
+    // All added by the same person: "were added to #x by @Ana".
+    let by = group[0].1.clone().filter(|b| *cat == Cat::Joined && group.iter().all(|p| p.1.as_ref() == Some(b)));
+    let added = by.is_some();
+    let lead = match (added, many) {
+        (true, false) => tr(" was added to ", " entrou em "),
+        (true, true) => tr(" were added to ", " entraram em "),
+        _ => "",
+    };
+    match (chan, added) {
+        (Some(c), true) => {
+            out.push(txt(lead.into()));
+            out.push(c);
+        }
+        (None, true) => out.push(txt(lead.replace(" to ", " to the channel").replace(" em ", " no canal"))),
+        (Some(c), false) => {
+            let prep = match *cat {
+                _ if !i18n::is_pt() => " ",
+                Cat::Joined => " em ",
+                Cat::Left => " de ",
+                Cat::Rejoined => " para ",
+            };
+            out.push(txt(format!(" {}{prep}", verb(*cat, many))));
+            out.push(c);
+        }
+        (None, false) => {
+            let place = match *cat {
+                Cat::Joined => tr("the channel", "no canal"),
+                Cat::Left => tr("the channel", "do canal"),
+                Cat::Rejoined => tr("the channel", "para o canal"),
+            };
+            out.push(txt(format!(" {} {place}", verb(*cat, many))));
+        }
+    }
+    if let Some(by) = by {
+        out.push(txt(tr(" by ", " a convite de ").into()));
+        out.extend(blocks::mrkdwn(&format!("<@{by}>"), names).into_iter().flat_map(|p| p.segs));
+    }
+    out.push(txt(".".into()));
+    // "Also, Bia rejoined and Caio joined."
+    let rest: Vec<_> = groups.iter().enumerate().filter(|(i, _)| *i != main).map(|(_, g)| g).collect();
+    for (k, (cat, group)) in rest.iter().enumerate() {
+        out.push(txt(if k == 0 { tr(" Also, ", " Além disso, ") } else { tr(" and ", " e ") }.into()));
+        who(group, &mut out);
+        out.push(txt(format!(" {}", verb(*cat, group.len() > 1))));
+    }
+    if !rest.is_empty() {
+        out.push(txt(".".into()));
+    }
+    out
 }
 
 /// Seconds since the epoch of a Slack ts.

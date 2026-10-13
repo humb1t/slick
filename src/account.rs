@@ -804,6 +804,8 @@ impl App {
         let e = &mut d.fields[d.field];
         let word = ctrl || k.modifiers.contains(KeyModifiers::ALT);
         match k.code {
+            KeyCode::Left if ctrl => e.word_left(),
+            KeyCode::Right if ctrl => e.word_right(),
             KeyCode::Left => e.left(),
             KeyCode::Right => e.right(),
             KeyCode::Home => e.home(),
@@ -813,6 +815,7 @@ impl App {
             KeyCode::Backspace if word => e.delete_word(),
             KeyCode::Char('w') if ctrl => e.delete_word(),
             KeyCode::Backspace => e.backspace(),
+            KeyCode::Delete if ctrl => e.delete_word_forward(),
             KeyCode::Delete => e.delete(),
             KeyCode::Char('u') if ctrl => e.set(String::new()),
             KeyCode::Char(c) if !ctrl => e.insert(c.encode_utf8(&mut [0; 4])),

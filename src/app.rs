@@ -43,6 +43,8 @@ const MAX_RECENTS: usize = 8;
 const MAX_HISTORY: usize = 100;
 /// How long a message opened from "Fixados" stays highlighted.
 const FLASH: Duration = Duration::from_secs(3);
+/// How long a status line or an error stays under the message box.
+const NOTICE_FOR: Duration = Duration::from_secs(10);
 /// Without Slack's list of open DMs: how many the section shows, most recent first.
 const DM_LIMIT: usize = 15;
 /// The key of the section slick adds last for the channels muted in Slack.
@@ -486,6 +488,8 @@ pub struct App {
     /// The workspace's slash commands and the `/` autocomplete.
     pub slash: crate::slash::Slash,
     pub react: Option<emoji::ReactPicker>,
+    /// The message under the mouse (thread panel?, ts): it shows the add-reaction button.
+    pub hover_msg: Option<(bool, String)>,
     /// The picked message, the edit and the forward dialog.
     pub edit: crate::edit::Edit,
     /// Messages dragged over with the mouse, copied on release.
@@ -513,6 +517,8 @@ pub struct App {
     pub status: String,
     /// A status that clears itself: the text and when it goes.
     pub status_until: Option<(String, Instant)>,
+    /// The status line and the error as last seen, and since when: they go after `NOTICE_FOR`.
+    notice_seen: (String, Option<String>, Instant),
     /// What was just copied from a card (`id`, `email`, `team`), shown
     /// beside it for a moment since the status line sits under the popup.
     pub copied: Option<(&'static str, Instant)>,
@@ -639,6 +645,7 @@ impl App {
             mention: Default::default(),
             slash: crate::slash::Slash::new(cache.commands),
             react: None,
+            hover_msg: None,
             edit: Default::default(),
             selection: None,
             drag: None,
@@ -657,6 +664,7 @@ impl App {
             update: None,
             restart: false,
             status_until: None,
+            notice_seen: (String::new(), None, Instant::now()),
             copied: None,
             copied_code: String::new(),
             error: None,
@@ -2032,6 +2040,19 @@ impl App {
                 self.status_until = None;
             }
         }
+        // Anything else there goes too after a while, but what's still
+        // going on ("downloading…").
+        if (&self.status, &self.error) != (&self.notice_seen.0, &self.notice_seen.1) {
+            self.notice_seen = (self.status.clone(), self.error.clone(), Instant::now());
+        } else if self.notice_seen.2.elapsed() >= NOTICE_FOR {
+            if !self.status.is_empty() && !self.status.ends_with('…') {
+                self.status.clear();
+                self.dirty = true;
+            }
+            if self.error.take().is_some() {
+                self.dirty = true;
+            }
+        }
         let before = self.typing.values().map(HashMap::len).sum::<usize>();
         self.typing.retain(|_, t| {
             t.retain(|_, at| at.elapsed() < TYPING);
@@ -3124,6 +3145,8 @@ impl App {
             KeyCode::Char('d') if ctrl => self.editor.set(String::new()),
             KeyCode::Char('v') if ctrl => self.paste_clipboard(false),
             KeyCode::Enter => self.send(),
+            KeyCode::Left if ctrl => self.editor.word_left(),
+            KeyCode::Right if ctrl => self.editor.word_right(),
             KeyCode::Left => self.editor.left(),
             KeyCode::Right => self.editor.right(),
             KeyCode::Home => self.editor.home(),
@@ -3143,6 +3166,7 @@ impl App {
             KeyCode::Backspace if self.editor.text.is_empty() && self.drop_last(false) => {}
             KeyCode::Backspace if ctrl => self.editor.delete_word(),
             KeyCode::Backspace => self.editor.backspace(),
+            KeyCode::Delete if ctrl => self.editor.delete_word_forward(),
             KeyCode::Delete => self.editor.delete(),
             KeyCode::Char('u') if ctrl => {
                 self.editor.take();

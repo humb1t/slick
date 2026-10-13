@@ -391,8 +391,11 @@ impl App {
     /// Reacts with `name`, or takes the reaction back: here at once, then in Slack.
     pub fn toggle_reaction(&mut self, chan: String, ts: String, name: String) {
         let Some(me) = self.me.as_ref().map(|m| m.user_id.clone()) else { return };
-        let Some(m) = self.messages.get_mut(&chan).and_then(|l| l.iter_mut().find(|m| m.ts == ts)) else { return };
-        let on = toggle(&mut m.reactions, &name, &me);
+        // Both copies, the conversation's and the thread panel's: a reply lives
+        // only in the panel. One we don't hold (not loaded) gets the reaction.
+        let mut on = None;
+        self.each_copy(&chan, &ts, |m| on = Some(toggle(&mut m.reactions, &name, &me)));
+        let on = on.unwrap_or(true);
         self.dirty = true;
         self.spawn(move |s| {
             let res = react(s, &chan, &ts, &name, on);
@@ -413,17 +416,12 @@ impl App {
                     Event::Emoji(Ev::Reactions { chan, ts, res })
                 });
             }
-            Ev::Reactions { chan, ts, res: Ok(r) } => {
-                if let Some(m) = self.messages.get_mut(&chan).and_then(|l| l.iter_mut().find(|m| m.ts == ts)) {
-                    m.reactions = r;
-                }
-            }
+            Ev::Reactions { chan, ts, res: Ok(r) } => self.each_copy(&chan, &ts, |m| m.reactions = r.clone()),
             Ev::Reactions { res: Err(_), .. } => {}
         }
     }
 
-    pub(crate) fn open_picker(&mut self, ts: String, x: u16, y: u16) {
-        let Some(chan) = self.current.clone() else { return };
+    pub(crate) fn open_picker(&mut self, chan: String, ts: String, x: u16, y: u16) {
         self.react = Some(ReactPicker { chan, ts, query: String::new(), sel: 0, x, y });
         self.dirty = true;
     }
@@ -489,6 +487,17 @@ impl App {
             }
             return true;
         }
+        // The message under the mouse shows Slack's add-reaction button.
+        if m.kind == MouseEventKind::Moved {
+            let thread = self.areas.thread.contains(at);
+            let hover = self.areas.message_rows.iter().find(|(r, _)| r.contains(at)).map(|(_, ts)| (thread, ts.clone()));
+            let hover = hover.filter(|(t, ts)| self.pane(*t).is_some_and(|(_, l)| l.iter().any(|m| m.ts == *ts)));
+            if hover != self.hover_msg {
+                self.hover_msg = hover;
+                self.dirty = true;
+            }
+            return false;
+        }
         let MouseEventKind::Down(button) = m.kind else { return false };
         if button == MouseButton::Left {
             if let Some(i) = row_at(&self.areas.emoji_rows) {
@@ -499,10 +508,12 @@ impl App {
                 return true;
             }
             if let Some((rect, ts, name)) = self.areas.reactions.iter().find(|(r, ..)| r.contains(at)).cloned() {
-                match (name, self.current.clone()) {
-                    (Some(name), Some(chan)) => self.toggle_reaction(chan, ts, name),
-                    // The "+" pill: the picker right under it.
-                    _ => self.open_picker(ts, rect.x, rect.y + 1),
+                let thread = self.areas.thread.contains(at);
+                let Some(chan) = self.pane(thread).map(|(c, _)| c.to_string()) else { return true };
+                match name {
+                    Some(name) => self.toggle_reaction(chan, ts, name),
+                    // The "+" pill or the hover button: the picker right under it.
+                    None => self.open_picker(chan, ts, rect.x, rect.y + 1),
                 }
                 return true;
             }

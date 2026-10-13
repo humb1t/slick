@@ -95,6 +95,8 @@ const GROUPS: &[Group] = &[
             ("Ctrl+J", "New line", "Nova linha"),
             ("Ctrl+U · Ctrl+D", "Clear the box", "Limpar a caixa"),
             ("Ctrl+W · Ctrl+Backspace", "Delete a word", "Apagar uma palavra"),
+            ("Ctrl+← · Ctrl+→", "Move by word", "Mover por palavra"),
+            ("Ctrl+Delete", "Delete the next word", "Apagar a próxima palavra"),
             ("Ctrl+V", "Paste, pictures included", "Colar, imagens também"),
             ("Ctrl+End · End", "Jump to the latest (End only in an empty box)", "Ir às mais recentes (End só com a caixa vazia)"),
             ("↑", "Empty box: pick a message", "Caixa vazia: escolher uma mensagem"),
