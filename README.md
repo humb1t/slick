@@ -22,6 +22,8 @@ screen (from a local cache) and refreshes in the background.
 
 - Channels, DMs and group DMs, with Slack's sidebar sections, starred
   conversations and unread counts; drag to reorder, collapse sections.
+  Dragged past its narrowest, the sidebar folds to a rail of photos, with
+  mentions as badges over them.
 - A search window (`Ctrl+K`) over conversations and Slack's message search,
   with the matches highlighted and a preview of the messages around each hit.
 - Real time, over Slack's own websocket: new messages, unread counts and
@@ -85,7 +87,7 @@ The script ([install.sh](install.sh)) downloads the latest
 (built on Ubuntu 24.04, so glibc 2.39 or newer), checks its SHA-256 and puts
 `slick` in `~/.local/bin`, without sudo. It warns when that folder is not on
 your `PATH`. `SLICK_INSTALL_DIR` changes the folder and
-`SLICK_VERSION=v0.4.4` picks a version. Installed this way, slick updates itself
+`SLICK_VERSION=v0.4.5` picks a version. Installed this way, slick updates itself
 (see below).
 
 ### Windows
@@ -103,7 +105,7 @@ irm https://slick.leonavas.com/install.ps1 | iex
 
 The script ([install.ps1](install.ps1)) downloads the latest release, checks its
 SHA-256, puts `slick.exe` in `%LOCALAPPDATA%\Programs\slick` and adds that folder
-to your user `PATH`, without admin rights (`$env:SLICK_VERSION = 'v0.4.4'` picks
+to your user `PATH`, without admin rights (`$env:SLICK_VERSION = 'v0.4.5'` picks
 a version). Open a new terminal and run `slick`. Only x86_64 for now.
 
 ### From source
@@ -252,7 +254,7 @@ on Windows), `key = value` per line:
 |---|---|
 | `token`, `cookie` | the session, written by `slick login` |
 | `workspace` | the last workspace signed in to |
-| `sidebar_width`, `sidebar_avatars` | the sidebar's width and whether it shows photos, saved from the app |
+| `sidebar_width`, `sidebar_avatars` | the sidebar's width (under 18, the rail of photos) and whether it shows photos, saved from the app |
 | `auto_update` | `false` turns off the update check |
 | `tray` | `false` hides the system tray icon (Linux; lit with unread DMs and mentions, a click focuses the window on Hyprland); worth turning off when the Omarchy Slack plugin is in the bar; also in Settings, from the account menu |
 | `language` | `en-US` (default) or `pt-BR`; also switchable in Settings, from the account menu, which saves it here |
