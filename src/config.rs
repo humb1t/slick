@@ -127,6 +127,17 @@ pub fn compact_messages() -> bool {
     value("message_spacing").is_some_and(|v| v == "compact")
 }
 
+/// How unread conversations stand out in the sidebar, besides bold: a bar on
+/// the left (`unread_bar = false` turns it off) and a tinted row
+/// (`unread_background = true` turns it on).
+pub fn unread_bar() -> bool {
+    value("unread_bar").is_none_or(|v| v != "false")
+}
+
+pub fn unread_background() -> bool {
+    value("unread_background").is_some_and(|v| v == "true")
+}
+
 pub fn sidebar_avatars() -> Option<bool> {
     value("sidebar_avatars")?.parse().ok()
 }

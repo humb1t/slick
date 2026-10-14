@@ -850,7 +850,8 @@ pub(crate) fn sidebar_row<'a>(app: &App, width: usize) -> ListItem<'a> {
     } else {
         Style::new().fg(Color::Gray)
     };
-    let mut spans = vec![Span::raw("   "), Span::styled(ICON, if t.unread || t.open { style } else { dim() }), Span::raw(" "), Span::styled(label, style)];
+    let mark = t.unread && !t.open;
+    let mut spans = vec![crate::ui::unread_lead(app, mark), Span::styled(ICON, if t.unread || t.open { style } else { dim() }), Span::raw(" "), Span::styled(label, style)];
     // New replies in Slack's blue, mentions in the red of the other rows.
     let badges: Vec<(String, Color)> = [(t.new, Color::Rgb(0x12, 0x64, 0xA3)), (t.mentions, Color::Red)]
         .into_iter()
@@ -870,7 +871,7 @@ pub(crate) fn sidebar_row<'a>(app: &App, width: usize) -> ListItem<'a> {
             spans.push(Span::styled(crate::blocks::CAP_R, Style::new().fg(c)));
         }
     }
-    ListItem::new(Line::from(spans))
+    crate::ui::unread_fill(app, ListItem::new(Line::from(spans)), mark)
 }
 
 /// A reply box being typed in, as laid out in the list.

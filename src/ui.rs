@@ -42,6 +42,8 @@ pub(crate) fn dim() -> Style {
 pub(crate) const SELECTED: Color = Color::Indexed(238);
 /// A surface a little lighter than the background, for pills and bars.
 pub(crate) const SURFACE: Color = Color::Indexed(236);
+/// Behind unread conversations in the sidebar (`unread_fill`): bluish, unlike `SELECTED`.
+const UNREAD_BG: Color = Color::Rgb(0x1E, 0x2A, 0x3C);
 /// Inline code's text: the theme's warning color, as for `warning` attachments.
 pub(crate) const CODE_FG: Color = Color::Yellow;
 /// Code's fill: lighter than `SURFACE`, which the picked message is painted
@@ -473,6 +475,8 @@ fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
     let drag = app.drag.filter(|d| d.over.is_some());
     let target = drag.and_then(|d| App::section_of(&rows, d.over?));
     let mut pics = Vec::new();
+    let focused = matches!(app.focus, Focus::Sidebar | Focus::Filter);
+    let selected = app.list.selected().filter(|_| focused);
     let items: Vec<ListItem> = rows
         .iter()
         .enumerate()
@@ -483,17 +487,15 @@ fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
                 Some(d) if n == d.from => item.style(dim()),
                 // The section the row would land in.
                 _ if target.is_some() && App::section_of(&rows, n) == target => item.style(Style::new().bg(Color::Indexed(236))),
+                // A quiet bar, like Slack's, instead of inverting the row's own
+                // colors. Under the row's spans, not over them as the list's
+                // highlight would be: the mention badge keeps its red.
+                _ if selected == Some(n) => item.style(Style::new().bg(SELECTED)),
                 _ => item,
             }
         })
         .collect();
-    let focused = matches!(app.focus, Focus::Sidebar | Focus::Filter);
-    // A quiet bar, like Slack's, instead of inverting the row's own colors.
-    let list = List::new(items).highlight_style(if focused {
-        Style::new().bg(SELECTED)
-    } else {
-        Style::new()
-    });
+    let list = List::new(items);
     // ratatui scrolls a list back to its selected row on every draw, which
     // undid wheel scrolling past it; draw it unselected while scrolled away.
     let (off, h) = (app.list.offset(), list_area.height as usize);
@@ -749,7 +751,8 @@ fn conv_row<'a>(app: &App, c: &Conversation, width: usize, photos: bool) -> (Lis
     } else {
         Style::new().fg(Color::Gray)
     };
-    let mut spans = vec![Span::raw("   ")];
+    let mark = unread && !is_current;
+    let mut spans = vec![unread_lead(app, mark)];
     if typing {
         spans.extend(typing_dots(app, photos));
     } else {
@@ -797,7 +800,28 @@ fn conv_row<'a>(app: &App, c: &Conversation, width: usize, photos: bool) -> (Lis
         spans.push(Span::styled(b, Style::new().fg(Color::White).bg(Color::Red).bold()));
         spans.push(Span::styled(blocks::CAP_R, Style::new().fg(Color::Red)));
     }
-    (ListItem::new(Line::from(spans)), pic)
+    (unread_fill(app, ListItem::new(Line::from(spans)), mark), pic)
+}
+
+/// The three cells before a sidebar row's icon: a bar when it's unread and
+/// `unread_bar` is on (the settings).
+pub(crate) fn unread_lead<'a>(app: &App, unread: bool) -> Span<'a> {
+    if unread && app.unread_bar {
+        Span::styled("▌  ", Style::new().fg(Color::White))
+    } else {
+        Span::raw("   ")
+    }
+}
+
+/// An unread sidebar row, tinted when `unread_background` is on; a tone of
+/// its own, so it doesn't read as the selection bar (`SELECTED`), which goes
+/// over it.
+pub(crate) fn unread_fill<'a>(app: &App, item: ListItem<'a>, unread: bool) -> ListItem<'a> {
+    if unread && app.unread_background {
+        item.style(Style::new().bg(UNREAD_BG))
+    } else {
+        item
+    }
 }
 
 // ---- conversation --------------------------------------------------------
@@ -1066,7 +1090,7 @@ fn messages(f: &mut Frame, app: &mut App, area: Rect) {
     let names = app.names();
     let font = app.picker.as_ref().map(|p| p.font_size()).map(|s| (s.width, s.height));
     let new_at = app.new_line.as_ref().filter(|n| n.chan == chan).and_then(|n| n.at.clone());
-    let mut rendered = lines_with(msgs, intro, &names, app, inner.width as usize, font, new_at.as_deref(), !app.compact);
+    let mut rendered = lines_with(msgs, intro, &names, app, inner.width as usize, font, new_at.as_deref(), gap(app, Some(&chan)));
     // Opened with unread messages above the view: up to the "New" line, near
     // the top, as Slack opens at the first unread.
     if let Some(n) = app.new_line.as_mut().filter(|n| n.jump && n.chan == chan) {
@@ -1975,6 +1999,15 @@ fn day_label(t: chrono::DateTime<Local>) -> String {
     c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or(s)
 }
 
+/// Whether consecutive messages from the same author get a blank row between
+/// them: channels in comfortable mode do, DMs keep them together.
+fn gap(app: &App, chan: Option<&str>) -> bool {
+    let dm = chan
+        .and_then(|id| app.convs.iter().find(|c| c.id == id))
+        .is_some_and(|c| matches!(c.kind, Kind::Direct | Kind::Group));
+    !app.compact && !dm
+}
+
 pub(crate) fn message_lines(
     msgs: &[Message],
     intro: Option<Intro>,
@@ -1983,7 +2016,8 @@ pub(crate) fn message_lines(
     width: usize,
     font: Option<(u16, u16)>,
 ) -> Rendered {
-    lines_with(msgs, intro, names, app, width, font, None, !app.compact)
+    let chan = app.thread.as_ref().map(|t| t.chan.as_str()).or(app.current.as_deref());
+    lines_with(msgs, intro, names, app, width, font, None, gap(app, chan))
 }
 
 /// `message_lines` back to back, whatever the spacing setting: the Threads

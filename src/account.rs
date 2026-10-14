@@ -187,6 +187,10 @@ enum Opt {
     Spacing(bool),
     /// Photos instead of presence dots next to DMs in the sidebar.
     Photos,
+    /// A bar on the left of unread conversations in the sidebar.
+    UnreadBar,
+    /// A tinted row behind unread conversations in the sidebar.
+    UnreadBackground,
     #[cfg(target_os = "linux")]
     Tray,
     /// Slack's own account settings, in the browser.
@@ -197,7 +201,7 @@ fn opts() -> Vec<Opt> {
     let mut v: Vec<Opt> = Lang::ALL.into_iter().map(Opt::Lang).collect();
     v.extend([Opt::Clock(false), Opt::Clock(true)]);
     v.extend([Opt::Spacing(false), Opt::Spacing(true)]);
-    v.push(Opt::Photos);
+    v.extend([Opt::Photos, Opt::UnreadBar, Opt::UnreadBackground]);
     #[cfg(target_os = "linux")]
     v.push(Opt::Tray);
     v.push(Opt::Slack);
@@ -1001,6 +1005,18 @@ impl App {
                     self.error = Some(trf!("didn't save the setting: {e}", "não salvou a configuração: {e}"));
                 }
             }
+            Opt::UnreadBar => {
+                self.unread_bar = !self.unread_bar;
+                if let Err(e) = crate::config::set(&[("unread_bar", self.unread_bar.to_string())]) {
+                    self.error = Some(trf!("didn't save the setting: {e}", "não salvou a configuração: {e}"));
+                }
+            }
+            Opt::UnreadBackground => {
+                self.unread_background = !self.unread_background;
+                if let Err(e) = crate::config::set(&[("unread_background", self.unread_background.to_string())]) {
+                    self.error = Some(trf!("didn't save the setting: {e}", "não salvou a configuração: {e}"));
+                }
+            }
             #[cfg(target_os = "linux")]
             Opt::Tray => {
                 self.account.tray = !self.account.tray;
@@ -1400,7 +1416,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     crate::pause::draw(f, app);
 }
 
-/// slick's settings: the language, the clock, the message spacing, the sidebar's photos, the tray icon and a way to Slack's own.
+/// slick's settings: the language, the clock, the message spacing, the sidebar's photos and unread marks, the tray icon and a way to Slack's own.
 fn draw_settings(f: &mut Frame, app: &mut App) {
     let Some(sel) = app.account.settings else { return };
     let all = opts();
@@ -1413,7 +1429,7 @@ fn draw_settings(f: &mut Frame, app: &mut App) {
             Opt::Lang(_) => 0,
             Opt::Clock(_) => 1,
             Opt::Spacing(_) => 2,
-            Opt::Photos => 3,
+            Opt::Photos | Opt::UnreadBar | Opt::UnreadBackground => 3,
             #[cfg(target_os = "linux")]
             Opt::Tray => 4,
             Opt::Slack => 5,
@@ -1443,6 +1459,8 @@ fn draw_settings(f: &mut Frame, app: &mut App) {
                 format!("{} {label}", if *compact == app.compact { "(•)" } else { "( )" })
             }
             Opt::Photos => format!("{} {}", if app.sidebar_avatars { "[✓]" } else { "[ ]" }, tr("Show photos in the list", "Mostrar fotos na lista")),
+            Opt::UnreadBar => format!("{} {}", if app.unread_bar { "[✓]" } else { "[ ]" }, tr("Bar beside unread conversations", "Barra ao lado das não lidas")),
+            Opt::UnreadBackground => format!("{} {}", if app.unread_background { "[✓]" } else { "[ ]" }, tr("Highlight unread conversations", "Fundo nas não lidas")),
             #[cfg(target_os = "linux")]
             Opt::Tray => format!("{} {}", if app.account.tray { "[✓]" } else { "[ ]" }, tr("Show the tray icon", "Mostrar o ícone na bandeja")),
             Opt::Slack => format!("{} ↗", tr("Account settings", "Configurações da conta")),

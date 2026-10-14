@@ -541,6 +541,9 @@ pub struct App {
     pub sidebar_avatars: bool,
     /// Messages back to back, without the blank row between them.
     pub compact: bool,
+    /// Unread conversations in the sidebar: a bar on the left, a tinted row.
+    pub unread_bar: bool,
+    pub unread_background: bool,
     pub menu: Option<Menu>,
     pub emoji: emoji::Emoji,
     pub complete: emoji::Complete,
@@ -709,6 +712,8 @@ impl App {
             team_popup: false,
             sidebar_avatars: config::sidebar_avatars().or(cache.boot.as_ref().map(|b| b.sidebar_avatars)).unwrap_or(true),
             compact: config::compact_messages(),
+            unread_bar: config::unread_bar(),
+            unread_background: config::unread_background(),
             boot: cache.boot,
             sidebar_width: config::sidebar_width().unwrap_or(SIDEBAR_DEFAULT).max(SIDEBAR_MIN),
             menu: None,
