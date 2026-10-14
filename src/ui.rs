@@ -122,6 +122,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     status_line(f, app, status);
     profile(f, app, panel);
     crate::thread::draw(f, app, panel);
+    reaction_card(f, app);
     // After the thread panel: they may sit over its reply box.
     emoji_popup(f, app);
     crate::mention::draw(f, app);
@@ -2843,7 +2844,10 @@ fn reaction_lines(
         .reactions
         .iter()
         .map(|r| {
-            let (label, img) = match app.emoji.glyph(&r.name) {
+            // A skin tone goes as Slack's picture; as text, unless it didn't load.
+            let toned = emoji::toned_img(&r.name)
+                .filter(|i| app.picker.is_some() && !matches!(app.images.get(&i.key), Some(Img::Failed)));
+            let (label, img) = match toned.map(emoji::Glyph::Image).or_else(|| app.emoji.glyph(&r.name)) {
                 Some(emoji::Glyph::Text(e)) => (format!("{e} {}", r.count), None),
                 // Two blank cells for the picture.
                 Some(emoji::Glyph::Image(img)) if app.picker.is_some() => (format!("   {}", r.count), Some(img)),
@@ -2880,6 +2884,112 @@ fn reaction_lines(
         x += w + 1;
     }
     lines.push(Line::from(row));
+}
+
+/// Slack's card over a hovered reaction: the emoji big, and who reacted with it.
+fn reaction_card(f: &mut Frame, app: &mut App) {
+    let Some(at) = app.hover_pill.filter(|_| app.react.is_none()) else { return };
+    let Some((pill, ts, Some(name))) = app.areas.reactions.iter().find(|(r, _, n)| n.is_some() && r.contains(at)).cloned() else {
+        return;
+    };
+    let thread = app.areas.thread.contains(at);
+    let found = app.pane(thread).and_then(|(_, l)| l.iter().find(|m| m.ts == ts));
+    let Some(r) = found.and_then(|m| m.reactions.iter().find(|r| r.name == name)).cloned() else { return };
+
+    // "You, Ana, and 3 others reacted with :heart:", you first like Slack.
+    let me = app.me.as_ref().map(|m| m.user_id.clone()).unwrap_or_default();
+    let names = app.names();
+    let mut who: Vec<String> = Vec::new();
+    if r.users.contains(&me) {
+        who.push(tr("You", "Você").into());
+    }
+    who.extend(r.users.iter().filter(|u| **u != me).map(|u| names.user(u).unwrap_or(u).to_string()));
+    let others = (r.count as usize).saturating_sub(r.users.len());
+    if others > 0 {
+        who.push(if who.is_empty() { trf!("{others} people", "{others} pessoas") } else { trf!("{others} others", "mais {others} pessoas") });
+    }
+    let n = who.len();
+    let bold = Style::new().fg(Color::White).bold();
+    let seg = |text: String, style: Style| blocks::Seg { text, style, ..Default::default() };
+    let mut segs = Vec::new();
+    for (i, w) in who.into_iter().enumerate() {
+        if i > 0 {
+            let sep = match (i + 1 == n, i18n::is_pt()) {
+                (false, _) => ", ",
+                (true, true) => " e ",
+                (true, false) if n > 2 => ", and ",
+                (true, false) => " and ",
+            };
+            segs.push(seg(sep.into(), dim()));
+        }
+        segs.push(seg(w, bold));
+    }
+    let verb = if n > 1 || others > 1 { tr("reacted with", "reagiram com") } else { tr("reacted with", "reagiu com") };
+    segs.push(seg(format!(" {verb} :{name}:"), dim()));
+    let width = 52.min(f.area().width.saturating_sub(6) as usize);
+    let para = blocks::Para { kind: blocks::ParaKind::Plain, segs };
+    let lines: Vec<Line> = blocks::render(&[blocks::Piece::Text(vec![para], None)], width, None, dim()).lines;
+
+    // The emoji on a light tile of three rows, Slack's picture for a standard one.
+    let glyph = app.emoji.glyph(&name);
+    let pic = match &glyph {
+        Some(emoji::Glyph::Image(i)) => Some(i.clone()),
+        Some(emoji::Glyph::Text(_)) => emoji::standard_img(&name),
+        None => None,
+    };
+    let pic = pic.filter(|i| app.picker.is_some() && !matches!(app.images.get(&i.key), Some(Img::Failed)));
+    let (fw, fh) = app.picker.as_ref().map(|p| p.font_size()).map(|s| (s.width.max(1), s.height.max(1))).unwrap_or((8, 16));
+    let (cols, rows) = match pic {
+        Some(_) => (((3.0 * fh as f64 / fw as f64).round() as u16).max(3), 3),
+        None => (2, 1),
+    };
+
+    let inner_w = lines.iter().map(|l| l.width()).max().unwrap_or(0).max(cols as usize) as u16;
+    let (w, h) = (inner_w + 4, rows + lines.len() as u16 + 2);
+    let area = f.area();
+    let x = (pill.x + pill.width / 2).saturating_sub(w / 2).min(area.right().saturating_sub(w));
+    // Above the pill, like Slack; under it when there's no room.
+    let y = if pill.y >= area.y + h { pill.y - h } else { pill.y + 1 };
+    let rect = Rect::new(x, y, w, h).intersection(area);
+    f.render_widget(Clear, rect);
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(dim());
+    let inner = block.inner(rect).inner(ratatui::layout::Margin { horizontal: 1, vertical: 0 });
+    f.render_widget(block, rect);
+    let top = Rect::new(inner.x + inner.width.saturating_sub(cols) / 2, inner.y, cols, rows).intersection(inner);
+    match (pic, glyph) {
+        (Some(img), _) => {
+            f.render_widget(Block::new().style(Style::new().bg(EMOJI_TILE)), top);
+            match card_image(app, &img, (top.width as u32 * fw as u32, top.height as u32 * fh as u32)) {
+                Some(card) => draw_image(f, app, &card, top),
+                // Not here yet: asked for, the tile empty meanwhile.
+                None if !app.images.contains_key(&img.key) => app.wanted.push(img),
+                None => {}
+            }
+        }
+        (None, Some(emoji::Glyph::Text(e))) => f.render_widget(Paragraph::new(e), top),
+        _ => {}
+    }
+    let text = Rect::new(inner.x, inner.y + rows, inner.width, inner.height.saturating_sub(rows));
+    f.render_widget(Paragraph::new(lines.into_iter().map(|l| l.centered()).collect::<Vec<_>>()), text);
+}
+
+/// Slack's light square behind the emoji of a reaction's card.
+const EMOJI_TILE: Color = Color::Rgb(0xe8, 0xe8, 0xe8);
+
+/// The emoji already sized to the tile's pixels, with Slack's margin around
+/// it: drawn as is, not stretched from its 64px by the terminal.
+fn card_image(app: &mut App, img: &ImgRef, (w, h): (u32, u32)) -> Option<ImgRef> {
+    let key = format!("card-{}-{w}x{h}", img.key);
+    if !app.images.contains_key(&key) {
+        let Some(Img::Ready(src)) = app.images.get(&img.key) else { return None };
+        let side = (w.min(h) as f64 * 0.78) as u32;
+        let emoji = src.resize(side, side, image::imageops::FilterType::CatmullRom);
+        let mut canvas = image::RgbaImage::new(w, h);
+        let (x, y) = ((w - emoji.width()) / 2, (h - emoji.height()) / 2);
+        image::imageops::overlay(&mut canvas, &emoji.to_rgba8(), x as i64, y as i64);
+        app.images.insert(key.clone(), Img::Ready(image::DynamicImage::ImageRgba8(canvas)));
+    }
+    Some(ImgRef { key, ..img.clone() })
 }
 
 /// One row of the autocomplete or the picker: the emoji, then `:name:`.

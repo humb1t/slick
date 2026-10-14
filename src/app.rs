@@ -551,6 +551,8 @@ pub struct App {
     pub react: Option<emoji::ReactPicker>,
     /// The message under the mouse (thread panel?, ts): it shows the add-reaction button.
     pub hover_msg: Option<(bool, String)>,
+    /// The mouse, while over a reaction pill: the card of who reacted.
+    pub hover_pill: Option<Position>,
     /// The picked message, the edit and the forward dialog.
     pub edit: crate::edit::Edit,
     /// Messages dragged over with the mouse, copied on release.
@@ -716,6 +718,7 @@ impl App {
             slash: crate::slash::Slash::new(cache.commands),
             react: None,
             hover_msg: None,
+            hover_pill: None,
             edit: Default::default(),
             selection: None,
             drag: None,

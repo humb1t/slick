@@ -127,6 +127,21 @@ pub fn standard(name: &str) -> Option<String> {
     Some(e.with_skin_tone(tone).unwrap_or(e).as_str().to_string())
 }
 
+/// Slack's own picture of a standard emoji, the official app's: named by
+/// its code points, the tone right after the base (`270c-1f3fe`).
+pub fn standard_img(name: &str) -> Option<ImgRef> {
+    let code: Vec<String> = standard(name)?.chars().map(|c| format!("{:x}", c as u32)).collect();
+    let code = code.join("-");
+    let url = format!("https://a.slack-edge.com/production-standard-emoji-assets/15.0/apple-large/{code}.png");
+    Some(ImgRef { key: format!("emoji-std-{code}"), url, name: String::new(), link: None })
+}
+
+/// A standard emoji with a skin tone, as a picture: as text the tone gets
+/// lost on the way (multiplexers, terminals without VS16), leaving the plain hand.
+pub fn toned_img(name: &str) -> Option<ImgRef> {
+    name.contains("::skin-tone-").then(|| standard_img(name)).flatten()
+}
+
 /// The terminal, with a skin tone on a text-style base (✌ ☝ ✍) sent as
 /// `✌ FE0F 🏾`. Without the FE0F the terminal draws the plain glyph and drops
 /// the tone; with it in the buffer, ratatui would count four columns where
@@ -489,6 +504,12 @@ impl App {
         }
         // The message under the mouse shows Slack's add-reaction button.
         if m.kind == MouseEventKind::Moved {
+            // A reaction under the mouse: who reacted, over it.
+            let pill = self.areas.reactions.iter().any(|(r, _, n)| n.is_some() && r.contains(at)).then_some(at);
+            if pill.is_some() || self.hover_pill.is_some() {
+                self.hover_pill = pill;
+                self.dirty = true;
+            }
             let thread = self.areas.thread.contains(at);
             let hover = self.areas.message_rows.iter().find(|(r, _)| r.contains(at)).map(|(_, ts)| (thread, ts.clone()));
             let hover = hover.filter(|(t, ts)| self.pane(*t).is_some_and(|(_, l)| l.iter().any(|m| m.ts == *ts)));
