@@ -80,6 +80,8 @@ enum Item {
     /// The keyboard shortcuts guide, as Ctrl+/.
     Shortcuts,
     CheckUpdate,
+    /// A newer version: install it (`update_click`); only while there is one.
+    Update,
     About,
     Logout,
     // The notifications submenu.
@@ -110,6 +112,17 @@ const MAIN: [Item; 15] = [
     Item::About,
     Item::Logout,
 ];
+
+/// The menu's rows: `MAIN`, and the update under "Check for updates" while
+/// there is one to install, as in whatsapp-tui.
+fn main_items(app: &App) -> Vec<Item> {
+    let mut items = MAIN.to_vec();
+    if matches!(app.update, Some(State::Available { .. } | State::Installing { .. })) {
+        let at = items.iter().position(|i| *i == Item::CheckUpdate).map_or(items.len(), |n| n + 1);
+        items.insert(at, Item::Update);
+    }
+    items
+}
 
 impl Item {
     fn in_sub(self) -> bool {
@@ -159,8 +172,9 @@ pub struct Account {
     /// Away set by hand, not just idle.
     pub away: bool,
     pub paused: Option<Paused>,
-    /// Whether the other person of a DM paused their notifications.
-    pub others_paused: std::collections::HashMap<String, bool>,
+    /// When other people pause their notifications, now or next: the start
+    /// and end of it, as Slack's `dnd.info` tells (`DndWindow`).
+    pub others_paused: std::collections::HashMap<String, DndWindow>,
     /// Slack's desktop notification level: everything, mentions, vips or nothing.
     pub level: Option<String>,
     pub menu: Option<Popup>,
@@ -230,7 +244,9 @@ pub enum Ev {
     Pause(crate::pause::Ev),
     Level(Res<String>),
     /// Someone else's pause; on failure the notice just does not show.
-    UserDnd { uid: String, res: Res<bool> },
+    UserDnd { uid: String, res: Res<DndWindow> },
+    /// The pauses of the sidebar's DMs, all in one call.
+    TeamDnd(Res<Vec<(String, DndWindow)>>),
     /// Someone's user object, read again on opening their DM.
     User(Res<serde_json::Value>),
     /// A change made here reached Slack, or not and is undone.
@@ -290,9 +306,42 @@ pub(crate) fn dnd(s: &Slack) -> Res<Option<Paused>> {
     dnd_of(s, &[])
 }
 
+/// Someone else's pause: a snooze until its end, or their schedule.
+#[derive(Clone, Copy, Default, PartialEq)]
+pub struct DndWindow {
+    pub start: i64,
+    pub end: i64,
+}
+
+impl DndWindow {
+    pub(crate) fn of(v: &serde_json::Value) -> Self {
+        let ts = |k: &str| v[k].as_i64().unwrap_or(0);
+        if v["snooze_enabled"].as_bool() == Some(true) {
+            Self { start: 0, end: ts("snooze_endtime") }
+        } else if v["dnd_enabled"].as_bool() == Some(true) {
+            Self { start: ts("next_dnd_start_ts"), end: ts("next_dnd_end_ts") }
+        } else {
+            Self::default()
+        }
+    }
+
+    /// Whether it covers this moment.
+    pub fn now(self) -> bool {
+        let now = Local::now().timestamp();
+        self.start <= now && now < self.end
+    }
+}
+
 /// Someone else's pause, for the notice over the message box of a DM.
-fn user_dnd(s: &Slack, uid: &str) -> Res<bool> {
-    dnd_of(s, &[("user", uid)]).map(|p| p.is_some())
+fn user_dnd(s: &Slack, uid: &str) -> Res<DndWindow> {
+    s.call("dnd.info", &[("user", uid)]).map(|v| DndWindow::of(&v))
+}
+
+/// The pauses of up to 50 people; Slack shows them as a "z" in the dot.
+fn team_dnd(s: &Slack, uids: &[String]) -> Res<Vec<(String, DndWindow)>> {
+    let v = s.call("dnd.teamInfo", &[("users", &uids.join(","))])?;
+    let users = v["users"].as_object().cloned().unwrap_or_default();
+    Ok(users.iter().map(|(uid, d)| (uid.clone(), DndWindow::of(d))).collect())
 }
 
 fn dnd_of(s: &Slack, params: &[(&str, &str)]) -> Res<Option<Paused>> {
@@ -583,6 +632,23 @@ impl App {
         self.spawn(move |s| Event::Account(Ev::DndSaved(resume(s, snooze))));
     }
 
+    /// Everyone's pause in the sidebar's DMs, with their presence.
+    pub(crate) fn refresh_team_dnd(&self, uids: Vec<String>) {
+        if uids.is_empty() {
+            return;
+        }
+        self.spawn(move |s| Event::Account(Ev::TeamDnd(team_dnd(s, &uids[..uids.len().min(50)]))));
+    }
+
+    /// Whether someone has their notifications paused right now: yours from
+    /// your own pause, anyone else's from theirs.
+    pub(crate) fn is_paused(&self, uid: &str) -> bool {
+        if self.is_me(uid) {
+            return self.account.paused.is_some();
+        }
+        self.account.others_paused.get(uid).is_some_and(|w| w.now())
+    }
+
     /// Once per opening of a DM: is the other person paused?
     pub(crate) fn refresh_user_dnd(&self, uid: String) {
         self.spawn(move |s| {
@@ -637,6 +703,9 @@ impl App {
             Ev::UserDnd { uid, res: Err(_) } => {
                 self.account.others_paused.remove(&uid);
             }
+            Ev::TeamDnd(Ok(all)) => self.account.others_paused.extend(all),
+            // What was read before stays.
+            Ev::TeamDnd(Err(_)) => {}
             Ev::User(Ok(u)) => self.on_user(&u),
             // What was read before stays.
             Ev::User(Err(_)) => {}
@@ -689,6 +758,10 @@ impl App {
             Note::Checked(Ok(Some((ver, assets)))) => {
                 self.status = trf!("slick {ver} is available", "slick {ver} disponível");
                 self.update = Some(State::found(self.update.take(), ver, assets));
+                // The menu still open on the check: onto what it found.
+                if let Some(p) = self.account.menu.as_mut().filter(|p| p.sel == Item::CheckUpdate && p.sub.is_none()) {
+                    p.sel = Item::Update;
+                }
             }
             Note::Checked(Ok(None)) => {
                 let v = crate::update::current();
@@ -708,22 +781,25 @@ impl App {
     }
 
     /// "Check for updates": looks now; with one installed already, restarts.
-    fn check_updates(&mut self) {
+    /// True when a check went out.
+    fn check_updates(&mut self) -> bool {
         if matches!(self.update, Some(State::Installed(_))) {
             self.restart = true;
             self.quit = true;
-            return;
+            return false;
         }
         self.error = None;
         if crate::update::check_disabled() {
             self.status = tr("development build: updates are disabled", "build de desenvolvimento: atualizações desligadas").into();
-            return;
+            return false;
         }
         self.status = tr("Checking for updates…", "Procurando atualizações…").into();
         self.spawn(|_| crate::update::check_now());
+        true
     }
 
-    /// The update button: install, or restart once installed.
+    /// The update's row in the menu and the button by your name: install,
+    /// or restart once installed; or how to, when the binary isn't ours.
     fn update_click(&mut self) {
         match self.update.take() {
             Some(State::Available { ver, assets }) => {
@@ -941,7 +1017,12 @@ impl App {
                 self.open_url(&dir.to_string_lossy());
             }
             Item::Shortcuts => self.open_help(),
-            Item::CheckUpdate => self.check_updates(),
+            // Open, so what it finds shows up under it.
+            Item::CheckUpdate => close = !self.check_updates(),
+            Item::Update => {
+                close = false;
+                self.update_click();
+            }
             Item::About => self.account.about = true,
             Item::Logout => {
                 let confirmed = self.account.menu.as_ref().is_some_and(|p| p.confirm);
@@ -1056,7 +1137,7 @@ impl App {
 
     pub(crate) fn account_key(&mut self, k: KeyEvent) {
         let Some(parent) = self.account.menu.as_ref().map(|p| p.sel) else { return };
-        let sub = sub_items(self, parent);
+        let (sub, main) = (sub_items(self, parent), main_items(self));
         let Some(p) = self.account.menu.as_mut() else { return };
         let go = matches!(k.code, KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') | KeyCode::Char(' '));
         match p.sub {
@@ -1068,8 +1149,8 @@ impl App {
                 _ => {}
             },
             None => match k.code {
-                KeyCode::Up | KeyCode::Char('k') => (p.sel, p.confirm) = (step(&MAIN, p.sel, -1), false),
-                KeyCode::Down | KeyCode::Char('j') => (p.sel, p.confirm) = (step(&MAIN, p.sel, 1), false),
+                KeyCode::Up | KeyCode::Char('k') => (p.sel, p.confirm) = (step(&main, p.sel, -1), false),
+                KeyCode::Down | KeyCode::Char('j') => (p.sel, p.confirm) = (step(&main, p.sel, 1), false),
                 KeyCode::Esc => self.account.menu = None,
                 KeyCode::Backspace | KeyCode::Delete if p.sel == Item::Status => self.clear_status(),
                 _ if go => {
@@ -1685,8 +1766,9 @@ fn draw_menu(f: &mut Frame, app: &mut App) {
     let Some(me) = app.me.clone() else { return };
     let area = f.area();
     let b = app.areas.account.button;
+    let items = main_items(app);
     // Photo and name, a gap and the items.
-    let (w, h) = (MENU_W.min(area.width), (MAIN.len() as u16 + 5).min(area.height));
+    let (w, h) = (MENU_W.min(area.width), (items.len() as u16 + 5).min(area.height));
     // Over the button's top line, as if it grew out of it.
     let rect = Rect::new(b.x, b.y.saturating_sub(h).max(area.y), w, h).intersection(area);
     f.render_widget(Clear, rect);
@@ -1723,7 +1805,7 @@ fn draw_menu(f: &mut Frame, app: &mut App) {
     let (emoji, text) = app.my_status();
     let iw = inner.width as usize;
     let mut sub_y = inner.y;
-    for (n, item) in MAIN.iter().enumerate() {
+    for (n, item) in items.iter().enumerate() {
         let row = Rect::new(inner.x, inner.y + 3 + n as u16, inner.width, 1);
         if row.y >= inner.bottom() {
             break;
@@ -1789,6 +1871,17 @@ fn draw_menu(f: &mut Frame, app: &mut App) {
                 padded(tr("Restart to update", "Reinicie para atualizar"), "↻", iw)
             }
             Item::CheckUpdate => padded(tr("Check for updates", "Procurar atualizações"), "", iw),
+            // In green, as what's new; faded while it installs.
+            Item::Update => match app.update.as_ref() {
+                Some(State::Available { ver, .. }) => {
+                    style = style.fg(Color::Green).bold();
+                    padded(&trf!("Update to {ver}", "Atualizar para {ver}"), "↓", iw)
+                }
+                _ => {
+                    style = style.patch(dim());
+                    padded(tr("Updating…", "Atualizando…"), "", iw)
+                }
+            },
             Item::About => padded(tr("About slick", "Sobre o slick"), "", iw),
             Item::Logout if confirm => {
                 style = style.fg(Color::Yellow).bold();

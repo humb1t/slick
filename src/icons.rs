@@ -112,13 +112,13 @@ impl Presence {
 const GREEN: [u8; 3] = [43, 172, 118];
 const GREY: [u8; 3] = [160, 160, 160];
 
-/// The terminal's own green (ANSI 2) and dark grey (ANSI 8), the colours the
-/// text dots use; set once at startup when the terminal tells us.
-static PALETTE: OnceLock<[[u8; 3]; 2]> = OnceLock::new();
+/// The terminal's own green (ANSI 2), dark grey (ANSI 8) and red (ANSI 1), the colours the
+/// text dots and badges use; set once at startup when the terminal tells us.
+static PALETTE: OnceLock<[[u8; 3]; 3]> = OnceLock::new();
 
 /// Remembers the terminal's palette; a missing entry keeps the default.
-pub fn set_palette(green: Option<[u8; 3]>, grey: Option<[u8; 3]>) {
-    let _ = PALETTE.set([green.unwrap_or(GREEN), grey.unwrap_or(GREY)]);
+pub fn set_palette(green: Option<[u8; 3]>, grey: Option<[u8; 3]>, red: Option<[u8; 3]>) {
+    let _ = PALETTE.set([green.unwrap_or(GREEN), grey.unwrap_or(GREY), red.unwrap_or(BADGE_RED)]);
 }
 
 /// How much of a pixel lies inside, from its signed distance to an edge.
@@ -147,7 +147,7 @@ fn dot_at(p: Presence, px: f32, py: f32, cx: f32, cy: f32, r: f32) -> Rgba<u8> {
         0.0
     };
     // Active: the "z" is cut out of the dot; away: drawn inside the ring.
-    let [green, grey] = PALETTE.get().copied().unwrap_or([GREEN, GREY]);
+    let [green, grey, _] = PALETTE.get().copied().unwrap_or([GREEN, GREY, BADGE_RED]);
     let (c, a) = if p.active { (green, disc * (1.0 - z)) } else { (grey, ring.max(z)) };
     Rgba([c[0], c[1], c[2], (a * 255.0) as u8])
 }
@@ -164,9 +164,14 @@ pub fn presence(p: Presence, w: u32, h: u32) -> DynamicImage {
 /// A photo with the presence dot over its bottom-right corner, as Slack
 /// shows it, with a clear gap around the dot.
 pub fn with_presence(img: &DynamicImage, p: Presence) -> DynamicImage {
+    with_presence_by(img, p, 0.2)
+}
+
+/// `with_presence` with the dot's radius as a share of the shorter side.
+pub fn with_presence_by(img: &DynamicImage, p: Presence, share: f32) -> DynamicImage {
     let mut img = img.to_rgba8();
     let (w, h) = img.dimensions();
-    let r = w.min(h) as f32 * 0.2;
+    let r = w.min(h) as f32 * share;
     let (cx, cy) = (w as f32 - r, h as f32 - r);
     let gap = r + (r * 0.35).max(1.0);
     for (x, y, px) in img.enumerate_pixels_mut() {
@@ -197,6 +202,11 @@ pub fn grey() -> [u8; 3] {
 
 const BADGE_RED: [u8; 3] = [224, 30, 90];
 
+/// The terminal's red (ANSI 1), the colour of the sidebar's mention badges.
+fn red() -> [u8; 3] {
+    PALETTE.get().map(|p| p[2]).unwrap_or(BADGE_RED)
+}
+
 /// The workspace icon with a grey card peeking out under it, Slack's sign
 /// that there are other workspaces, on a `w`×`h` canvas whose top two thirds
 /// hold the icon. `dot` puts a red dot over its top-right corner.
@@ -215,6 +225,7 @@ pub fn stacked(img: &DynamicImage, back: [u8; 3], dot: bool, w: u32, h: u32) -> 
     let dr = side as f32 * 0.14;
     let (dx, dy) = (x0 as f32 + side as f32 - dr * 0.8, dr * 0.8);
     let dgap = dr + (dr * 0.35).max(1.0);
+    let red = red();
     let out = RgbaImage::from_fn(w, h, |x, y| {
         let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
         let mut px = Rgba([0, 0, 0, 0]);
@@ -240,12 +251,58 @@ pub fn stacked(img: &DynamicImage, back: [u8; 3], dot: bool, w: u32, h: u32) -> 
             if d <= dgap + 1.0 {
                 px[3] = (px[3] as f32 * (1.0 - cov(dgap - d))) as u8;
                 let a = cov(dr - d);
-                px = over(Rgba([BADGE_RED[0], BADGE_RED[1], BADGE_RED[2], (a * 255.0) as u8]), px);
+                px = over(Rgba([red[0], red[1], red[2], (a * 255.0) as u8]), px);
             }
         }
         px
     });
     DynamicImage::ImageRgba8(out)
+}
+
+/// A picture with Slack's red mention count over its top-right corner and a
+/// clear gap around it: the sidebar's narrow rail has no room beside it.
+pub fn with_badge(img: &DynamicImage, n: u64) -> DynamicImage {
+    let mut img = img.to_rgba8();
+    let (w, h) = img.dimensions();
+    let side = w.min(h);
+    let digits: Vec<usize> = n.min(99).to_string().bytes().map(|b| (b - b'0') as usize).collect();
+    let ph = ((side as f32 * 0.46).round() as u32).max(9);
+    let dot = (ph / 11).max(1);
+    let text_w = digits.len() as u32 * 6 * dot - dot;
+    let gap = (side / 20).max(1);
+    let pw = ph.max(text_w + ph / 2).min(w.saturating_sub(gap));
+    let bx = w - pw;
+    let r = ph as f32 / 2.0;
+    let red = red();
+    for y in 0..(ph + gap).min(h) {
+        for x in (bx - gap)..w {
+            let px = img.get_pixel_mut(x, y);
+            // The gap: the pill grown by `gap`, cut out of the picture.
+            let cut = coverage(x - (bx - gap), y + gap, pw + 2 * gap, ph + 2 * gap, r + gap as f32);
+            px[3] = (px[3] as f32 * (1.0 - cut)) as u8;
+            if x >= bx && y < ph {
+                let a = coverage(x - bx, y, pw, ph, r);
+                *px = over(Rgba([red[0], red[1], red[2], (a * 255.0) as u8]), *px);
+            }
+        }
+    }
+    let (tx, ty) = (bx + (pw - text_w) / 2, (ph - 7 * dot) / 2);
+    for (i, d) in digits.iter().enumerate() {
+        for (row, bits) in DIGITS[*d].iter().enumerate() {
+            for col in 0..5 {
+                if bits & (1 << (4 - col)) == 0 {
+                    continue;
+                }
+                let (x0, y0) = (tx + (i as u32 * 6 + col) * dot, ty + row as u32 * dot);
+                for y in y0..(y0 + dot).min(h) {
+                    for x in x0..(x0 + dot).min(w) {
+                        img.put_pixel(x, y, Rgba([255, 255, 255, 255]));
+                    }
+                }
+            }
+        }
+    }
+    DynamicImage::ImageRgba8(img)
 }
 
 /// `top` laid over `bottom`.

@@ -15,7 +15,7 @@ use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph};
-use ratatui::widgets::ListState;
+use ratatui::widgets::{ListState, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use ratatui::Frame;
 use crate::icons::Presence;
 use ratatui_image::picker::ProtocolType;
@@ -122,6 +122,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         input_box(f, app, input);
     }
     status_line(f, app, status);
+    crate::rail::tooltip(f, app);
     profile(f, app, panel);
     crate::thread::draw(f, app, panel);
     reaction_card(f, app);
@@ -378,6 +379,10 @@ fn login(f: &mut Frame, app: &mut App) {
 // ---- sidebar -----------------------------------------------------------
 
 fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
+    if app.sidebar_width <= crate::rail::WIDTH {
+        return crate::rail::draw(f, app, area);
+    }
+    app.areas.rail.clear();
     // The typing dots move: come back for their next step.
     if !app.typing.is_empty() {
         let at = Instant::now() + TYPING_STEP;
@@ -470,6 +475,9 @@ fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
 
     let rows = app.rows();
     app.fix_selection(&rows);
+    // A long list gives up its last column to the scrollbar.
+    let bar = Rect::new(list_area.right().saturating_sub(1), list_area.y, 1, list_area.height);
+    let list_area = if rows.len() > list_area.height as usize { Rect { width: list_area.width.saturating_sub(1), ..list_area } } else { list_area };
     let width = list_area.width as usize;
     let photos = app.sidebar_avatars && app.picker.is_some();
     let drag = app.drag.filter(|d| d.over.is_some());
@@ -575,6 +583,7 @@ fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
             draw_presence(f, app, p, x, list_area.y + (n - offset) as u16);
         }
     }
+    scrollbar(f, bar, rows.len(), h, app.list.offset());
     if let Some((n, mention)) = up {
         mentions_pill(f, app, list_area, true, mention, n);
     }
@@ -1111,11 +1120,32 @@ fn messages(f: &mut Frame, app: &mut App, area: Rect) {
     app.scroll = select(app, &mut rendered, false, inner, app.scroll);
     flash(app, &mut rendered, inner);
     shade(app, &mut rendered, false, inner);
+    let total = rendered.lines.len();
     app.max_scroll = place(f, app, inner, rendered, app.scroll, true);
     app.scroll = app.scroll.min(app.max_scroll);
+    // In the margin right of the messages.
+    let bar = Rect::new(area.right().saturating_sub(1), inner.y, 1, inner.height);
+    scrollbar(f, bar, total, inner.height as usize, app.max_scroll - app.scroll);
     if app.scroll > inner.height as usize / 2 || app.detached.contains(&chan) {
         latest_button(f, app, inner);
     }
+}
+
+/// A thin vertical scrollbar in the column `bar`, for `total` rows seen
+/// `height` at a time from row `top`; nothing when it all fits.
+pub(crate) fn scrollbar(f: &mut Frame, bar: Rect, total: usize, height: usize, top: usize) {
+    if total <= height || bar.height == 0 {
+        return;
+    }
+    let max = total - height;
+    let mut state = ScrollbarState::new(max + 1).position(top.min(max)).viewport_content_length(height);
+    let sb = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+        .begin_symbol(None)
+        .end_symbol(None)
+        .track_symbol(None)
+        .thumb_symbol("│")
+        .thumb_style(Style::new().fg(Color::Indexed(250)));
+    f.render_stateful_widget(sb, bar, &mut state);
 }
 
 /// Slack's "↓ Latest messages": a pill over the bottom of the conversation.
@@ -1305,7 +1335,7 @@ pub(crate) fn place(f: &mut Frame, app: &mut App, inner: Rect, r: Rendered, scro
 fn paused_peer(app: &App) -> Option<String> {
     let c = app.current.as_ref().and_then(|id| app.convs.iter().find(|c| &c.id == id))?;
     let uid = c.user.as_deref().filter(|u| c.kind == Kind::Direct && !app.users.deleted.contains(*u))?;
-    (app.account.others_paused.get(uid) == Some(&true)).then(|| app.label(c))
+    app.is_paused(uid).then(|| app.label(c))
 }
 
 /// Slack's quiet line over the message box: "Jane has paused their notifications."
@@ -1456,10 +1486,9 @@ pub(crate) fn dot_cell(app: &App) -> Option<(u32, u32)> {
     Some((s.width as u32, s.height as u32))
 }
 
-/// Someone's presence; paused notifications are only known for yourself.
+/// Someone's presence, with the "z" while they paused their notifications.
 pub(crate) fn presence_of(app: &App, uid: &str) -> Presence {
-    let paused = app.is_me(uid) && app.account.paused.is_some();
-    Presence { active: app.presence.get(uid) == Some(&true), paused }
+    Presence { active: app.presence.get(uid) == Some(&true), paused: app.is_paused(uid) }
 }
 
 /// The presence dot as text: a blank cell for the picture `draw_presence`

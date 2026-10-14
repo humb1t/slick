@@ -40,6 +40,8 @@ pub enum Ev {
     Threads,
     /// Your pause was set or ended.
     Dnd,
+    /// Someone else's pause changed (`dnd_updated_user`).
+    UserDnd(String, crate::account::DndWindow),
     /// Your notification preferences changed: a channel muted, or set to mentions only.
     Prefs,
     /// You were added to a conversation or one was created.
@@ -187,6 +189,7 @@ fn classify(v: &Value) -> Option<Ev> {
         "channel_marked" | "group_marked" | "im_marked" | "mpim_marked" | "badge_counts_updated" => Ev::Counts,
         "thread_marked" | "thread_subscribed" | "thread_unsubscribed" | "update_thread_state" => Ev::Threads,
         "dnd_updated" => Ev::Dnd,
+        "dnd_updated_user" => Ev::UserDnd(s("user")?, crate::account::DndWindow::of(&v["dnd_status"])),
         "pref_change" if matches!(v["name"].as_str(), Some("all_notifications_prefs" | "muted_channels")) => Ev::Prefs,
         "channel_joined" | "group_joined" | "im_created" | "mpim_joined" | "mpim_open" | "im_open" | "group_open" | "channel_created" => Ev::Convs,
         "channel_archive" | "group_archive" => Ev::Archived { chan: s("channel")?, archived: true },

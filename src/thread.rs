@@ -423,7 +423,10 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     let scroll = select(app, &mut r, true, body, scroll);
     flash(app, &mut r, body);
     shade(app, &mut r, true, body);
+    let total = r.lines.len();
     let max = place(f, app, body, r, scroll, false);
+    let bar = Rect::new(msgs.right().saturating_sub(1), body.y, 1, body.height);
+    crate::ui::scrollbar(f, bar, total, body.height as usize, max - scroll.min(max));
     if let Some(t) = app.thread.as_mut() {
         t.max_scroll = max;
         t.scroll = scroll.min(max);

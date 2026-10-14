@@ -779,6 +779,8 @@ pub fn find(name: &str, query: &str) -> Option<(u8, Vec<(usize, usize)>)> {
 /// Where a result goes in the search's list; smaller goes first. The rule,
 /// as Slack's, for channels and DMs alike: every active conversation
 /// before any archived channel; within each, a name typed whole on top,
+/// then the conversations named after what was typed before group DMs that
+/// only have someone by that name in them (Slack shows the person first),
 /// then the last message, newest first, those without a known time last.
 /// How well the rest matches only breaks ties (the match is strict enough
 /// to be a filter), then yours before channels you are not in, the most
@@ -787,6 +789,7 @@ pub fn find(name: &str, query: &str) -> Option<(u8, Vec<(usize, usize)>)> {
 pub struct Place {
     archived: bool,
     inexact: bool,
+    group: bool,
     recent: std::cmp::Reverse<i64>,
     tier: u8,
     outside: bool,
@@ -800,11 +803,20 @@ pub fn place(tier: u8, archived: bool, member: bool, latest: i64, members: u32, 
     Place {
         archived,
         inexact: tier > 0,
+        group: false,
         recent: std::cmp::Reverse(latest),
         tier,
         outside: !member,
         crowd: std::cmp::Reverse(members),
         len,
+    }
+}
+
+impl Place {
+    /// A group DM's: after the people and channels the query names.
+    pub fn group(mut self, group: bool) -> Self {
+        self.group = group;
+        self
     }
 }
 

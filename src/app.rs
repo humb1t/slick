@@ -401,6 +401,10 @@ pub struct Areas {
     pub latest: Rect,
     /// "↑ Unread mentions" (or "↑ More unreads") over the sidebar's edges, and the sidebar row each leads to.
     pub mention_pills: Vec<(Rect, usize)>,
+    /// The folded sidebar's entries and the row each is (`rail`); empty when it's open.
+    pub rail: Vec<(Rect, usize)>,
+    /// How far the folded sidebar's list can scroll, in rows.
+    pub rail_max: usize,
     /// The account button, its menu and the status dialog.
     pub account: crate::account::Areas,
     /// The channel details popup.
@@ -566,6 +570,8 @@ pub struct App {
     /// The new-message or new-channel dialog, over everything else.
     pub dialog: Option<crate::compose::Dialog>,
     pub compose_hover: bool,
+    /// The folded sidebar's row under the mouse, named in a tooltip.
+    pub rail_hover: Option<usize>,
     /// Your presence, pause and status, and the menu over the account button.
     pub account: crate::account::Account,
     /// Pictures pasted into the message boxes, waiting to be sent.
@@ -715,7 +721,7 @@ impl App {
             unread_bar: config::unread_bar(),
             unread_background: config::unread_background(),
             boot: cache.boot,
-            sidebar_width: config::sidebar_width().unwrap_or(SIDEBAR_DEFAULT).max(SIDEBAR_MIN),
+            sidebar_width: config::sidebar_width().map_or(SIDEBAR_DEFAULT, |w| if w < SIDEBAR_MIN { crate::rail::WIDTH } else { w }),
             menu: None,
             emoji: cache.emoji,
             complete: emoji::Complete::default(),
@@ -731,6 +737,7 @@ impl App {
             login: None,
             dialog: None,
             compose_hover: false,
+            rail_hover: None,
             account: Default::default(),
             attach: Default::default(),
             details: None,
@@ -1189,7 +1196,11 @@ impl App {
     }
 
     pub fn rows(&self) -> Vec<Row> {
-        self.sidebar_rows(false)
+        let rows = self.sidebar_rows(false);
+        if self.sidebar_width <= crate::rail::WIDTH && self.filter.is_empty() {
+            return crate::rail::rows(self, rows);
+        }
+        rows
     }
 
     /// The sidebar's rows; `unfold` lists folded sections' conversations too
@@ -1382,7 +1393,8 @@ impl App {
             let label = self.label(c);
             let name = crate::text::Folded::new(&label);
             let Some(tier) = crate::text::rank(&q, &name, &mut ranges) else { continue };
-            hits.push((crate::text::place(tier, c.archived, !c.guest, self.last_message(c), 0, name.len()), Row::Conv(i)));
+            let place = crate::text::place(tier, c.archived, !c.guest, self.last_message(c), 0, name.len()).group(c.kind == Kind::Group);
+            hits.push((place, Row::Conv(i)));
         }
         let ours: HashSet<&str> = self.convs.iter().map(|c| c.id.as_str()).collect();
         let chans = &self.directory.chans;
@@ -1826,6 +1838,7 @@ impl App {
     fn refresh_presence(&mut self) {
         let uids = self.presence_uids();
         self.watch_presence(uids.clone());
+        self.refresh_team_dnd(uids.clone());
         if uids.is_empty() || (self.live && self.presence_live) {
             return;
         }
@@ -2169,7 +2182,8 @@ impl App {
 
     fn set_sidebar_width(&mut self, w: u16) {
         let screen = crossterm::terminal::size().map(|s| s.0).unwrap_or(120);
-        self.sidebar_width = w.clamp(SIDEBAR_MIN, (screen / 2).max(SIDEBAR_MIN));
+        // Past the narrowest, a few columns more fold it to the rail.
+        self.sidebar_width = if w + 4 < SIDEBAR_MIN { crate::rail::WIDTH } else { w.clamp(SIDEBAR_MIN, (screen / 2).max(SIDEBAR_MIN)) };
     }
 
     fn profile_url(&self, uid: &str) -> String {
@@ -2663,6 +2677,9 @@ impl App {
                 self.threads_soon();
             }
             Ev::Dnd => self.refresh_dnd(),
+            Ev::UserDnd(uid, w) => {
+                self.account.others_paused.insert(uid, w);
+            }
             Ev::Prefs => self.refresh_prefs(),
             Ev::Convs => self.spawn(|s| Event::Convs(s.conversations())),
             Ev::Ephemeral { chan, msg } => self.on_ephemeral(chan, msg),
@@ -3558,6 +3575,7 @@ impl App {
         if self.selection_mouse(m) {
             return;
         }
+        self.rail_mouse(m);
         if self.compose_mouse(m) || self.account_mouse(m) {
             return;
         }
@@ -3646,7 +3664,11 @@ impl App {
         }
         // Sidebar rows: a click opens, a drag moves, a right click shows the menu.
         let in_side = self.areas.sidebar.contains(at);
-        let row_at = |app: &Self| app.list.offset() + (m.row.saturating_sub(app.areas.sidebar.y)) as usize;
+        let row_at = |app: &Self| match app.areas.rail.is_empty() {
+            true => app.list.offset() + (m.row.saturating_sub(app.areas.sidebar.y)) as usize,
+            // Folded, entries are taller than a row: the one under the mouse, or none.
+            false => app.areas.rail.iter().find(|(r, _)| r.contains(at)).map_or(usize::MAX, |(_, n)| *n),
+        };
         match m.kind {
             MouseEventKind::Down(MouseButton::Left) if in_side => {
                 let row = row_at(self);
@@ -3801,12 +3823,16 @@ impl App {
             MouseEventKind::ScrollDown if in_msgs => self.scroll_down(3),
             MouseEventKind::ScrollUp if in_side => {
                 self.sidebar_wheel = true;
-                *self.list.offset_mut() = self.list.offset().saturating_sub(3);
+                let step = if self.areas.rail.is_empty() { 3 } else { 1 };
+                *self.list.offset_mut() = self.list.offset().saturating_sub(step);
             }
             MouseEventKind::ScrollDown if in_side => {
                 self.sidebar_wheel = true;
-                let max = self.rows().len().saturating_sub(self.areas.sidebar.height as usize);
-                *self.list.offset_mut() = (self.list.offset() + 3).min(max);
+                let (step, max) = match self.areas.rail.is_empty() {
+                    true => (3, self.rows().len().saturating_sub(self.areas.sidebar.height as usize)),
+                    false => (1, self.areas.rail_max),
+                };
+                *self.list.offset_mut() = (self.list.offset() + step).min(max);
             }
             // The box opens the search window; "/" keeps the sidebar's own filter.
             MouseEventKind::Down(MouseButton::Left) if self.areas.search.contains(at) => self.open_search(),

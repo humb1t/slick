@@ -25,6 +25,7 @@ mod markup;
 mod login_window;
 mod pause;
 mod pins;
+mod rail;
 mod rtm;
 mod search;
 mod selection;
@@ -232,8 +233,8 @@ fn main() {
     // run before we start reading input ourselves.
     let picker = ratatui_image::picker::Picker::from_query_stdio().ok();
     // The presence dots are pictures; paint them in the theme's own colours.
-    let palette = query_palette(&[2, 8]);
-    icons::set_palette(palette[0], palette[1]);
+    let palette = query_palette(&[2, 8, 1]);
+    icons::set_palette(palette[0], palette[1], palette[2]);
     // Kitty keyboard protocol tells Shift+Enter apart from Enter. Apart from
     // the rest: the Windows console refuses it, and that would stop the others.
     let _ = crossterm::execute!(
