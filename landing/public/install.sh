@@ -59,17 +59,6 @@ latest() {
         sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1
 }
 
-# The sign-in window is a WebKitGTK window: slick does not start without it.
-# Only a warning, since the package name differs per distro.
-check_webkit() {
-    if has ldconfig && ldconfig -p 2>/dev/null | grep -q 'libwebkit2gtk-4.1'; then return; fi
-    if has pkg-config && pkg-config --exists webkit2gtk-4.1 2>/dev/null; then return; fi
-    say "warning: WebKitGTK 4.1 not found; slick needs it. Install it with one of:"
-    say "  sudo apt install libwebkit2gtk-4.1-0     # Debian/Ubuntu"
-    say "  sudo pacman -S webkit2gtk-4.1            # Arch"
-    say "  sudo dnf install webkit2gtk4.1           # Fedora"
-}
-
 main() {
     tgt=$(target)
     dir="${SLICK_INSTALL_DIR:-$HOME/.local/bin}"
@@ -113,7 +102,6 @@ main() {
             ;;
     esac
 
-    check_webkit
     say "done. Run: slick"
 }
 
