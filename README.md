@@ -85,7 +85,7 @@ The script ([install.sh](install.sh)) downloads the latest
 (built on Ubuntu 24.04, so glibc 2.39 or newer), checks its SHA-256 and puts
 `slick` in `~/.local/bin`, without sudo. It warns when that folder is not on
 your `PATH`. `SLICK_INSTALL_DIR` changes the folder and
-`SLICK_VERSION=v0.4.3` picks a version. Installed this way, slick updates itself
+`SLICK_VERSION=v0.4.4` picks a version. Installed this way, slick updates itself
 (see below).
 
 ### Windows
@@ -103,7 +103,7 @@ irm https://slick.leonavas.com/install.ps1 | iex
 
 The script ([install.ps1](install.ps1)) downloads the latest release, checks its
 SHA-256, puts `slick.exe` in `%LOCALAPPDATA%\Programs\slick` and adds that folder
-to your user `PATH`, without admin rights (`$env:SLICK_VERSION = 'v0.4.3'` picks
+to your user `PATH`, without admin rights (`$env:SLICK_VERSION = 'v0.4.4'` picks
 a version). Open a new terminal and run `slick`. Only x86_64 for now.
 
 ### From source
@@ -257,6 +257,8 @@ on Windows), `key = value` per line:
 | `tray` | `false` hides the system tray icon (Linux; lit with unread DMs and mentions, a click focuses the window on Hyprland); worth turning off when the Omarchy Slack plugin is in the bar; also in Settings, from the account menu |
 | `language` | `en-US` (default) or `pt-BR`; also switchable in Settings, from the account menu, which saves it here |
 | `clock` | `24h` (default, "21:29") or `12h` ("9:29 PM"); also switchable in Settings, from the account menu, which saves it here |
+| `unread_bar` | `false` hides the bar beside unread conversations in the sidebar (on by default; bold stays either way); also in Settings, from the account menu |
+| `unread_background` | `true` tints the row behind unread conversations in the sidebar; also in Settings, from the account menu |
 | `message_spacing` | `comfortable` (default, a blank row between messages) or `compact` (back to back); also switchable in Settings, from the account menu, which saves it here |
 
 The `SLICK_LANG` environment variable (`en-US`, `pt-BR`) takes priority over
