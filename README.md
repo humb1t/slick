@@ -21,7 +21,8 @@ screen (from a local cache) and refreshes in the background.
 ## Features
 
 - Channels, DMs and group DMs, with Slack's sidebar sections, starred
-  conversations and unread counts; drag to reorder, collapse sections.
+  conversations and unread counts; drag to reorder, collapse sections,
+  rename them and pick their emoji, or move a channel from the emoji in its header.
   Dragged past its narrowest, the sidebar folds to a rail of photos, with
   mentions as badges over them.
 - A search window (`Ctrl+K`) over conversations and Slack's message search,
@@ -35,6 +36,7 @@ screen (from a local cache) and refreshes in the background.
 - Inline images (kitty graphics, sixel, iTerm2, or half-blocks as a fallback),
   an image viewer, and opening or downloading shared files.
 - Block Kit and attachments rendered the way Slack draws them, with clickable buttons.
+- Apps' messages with their name and picture; a click opens the app's profile.
 - Message actions: edit, delete, forward, save for later, remind me, mark as
   unread, copy link or text, follow/unfollow a thread.
 - Pinned messages, in their own tab per conversation.
@@ -87,7 +89,7 @@ The script ([install.sh](install.sh)) downloads the latest
 (built on Ubuntu 24.04, so glibc 2.39 or newer), checks its SHA-256 and puts
 `slick` in `~/.local/bin`, without sudo. It warns when that folder is not on
 your `PATH`. `SLICK_INSTALL_DIR` changes the folder and
-`SLICK_VERSION=v0.4.5` picks a version. Installed this way, slick updates itself
+`SLICK_VERSION=v0.4.6` picks a version. Installed this way, slick updates itself
 (see below).
 
 ### Windows
@@ -105,7 +107,7 @@ irm https://slick.leonavas.com/install.ps1 | iex
 
 The script ([install.ps1](install.ps1)) downloads the latest release, checks its
 SHA-256, puts `slick.exe` in `%LOCALAPPDATA%\Programs\slick` and adds that folder
-to your user `PATH`, without admin rights (`$env:SLICK_VERSION = 'v0.4.5'` picks
+to your user `PATH`, without admin rights (`$env:SLICK_VERSION = 'v0.4.6'` picks
 a version). Open a new terminal and run `slick`. Only x86_64 for now.
 
 ### From source
