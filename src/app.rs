@@ -118,6 +118,12 @@ pub enum Event {
     Attach(crate::attach::Ev),
     /// A person or channel a message mentioned: the name, and whether it's private.
     Named { id: String, res: Res<(String, bool)> },
+    /// A section renamed or created (`section`).
+    Section(crate::section::Ev),
+    /// An app whose messages came without its name or picture (`request_names`).
+    Bot { id: String, res: Res<(String, String)> },
+    /// An app's profile, opened from its message: its bot user and that user's profile.
+    AppProfile { bot: String, res: Res<(String, Profile)> },
     /// A channel a message mentioned, looked up (`request_names`).
     ChanNamed { id: String, res: Res<Conversation> },
     /// The DM opened by clicking a mention.
@@ -259,7 +265,8 @@ pub enum Row {
     Threads,
     /// A blank line between sections.
     Gap,
-    Header { key: String, title: String, collapsed: bool, unread: bool },
+    /// `emoji`: the section's shortcode, drawn before the title.
+    Header { key: String, title: String, emoji: String, collapsed: bool, unread: bool },
     Conv(usize),
     /// A search result among the channels the user is not in, an index in `directory`.
     Other(usize),
@@ -283,6 +290,9 @@ pub enum Action {
     SectionUp(String),
     SectionDown(String),
     Collapse(String),
+    RenameSection(String),
+    /// A new section: the conversation to move into it, and the section it goes above.
+    NewSection(Option<String>, Option<String>),
     NewMessage,
     NewChannel,
     /// The message menu's entries.
@@ -348,6 +358,8 @@ pub struct Areas {
     /// The profile panel's buttons and photo.
     pub profile_close: Rect,
     pub profile_browser: Rect,
+    /// An app's "Open app": its DM.
+    pub profile_app: Rect,
     pub profile_photo: Rect,
     pub profile_star: Rect,
     pub profile_vip: Rect,
@@ -407,6 +419,9 @@ pub struct Areas {
     pub rail_max: usize,
     /// The account button, its menu and the status dialog.
     pub account: crate::account::Areas,
+    pub section: crate::section::Areas,
+    /// The header's section emoji, which opens "Move to…".
+    pub header_section: Rect,
     /// The channel details popup.
     pub details: crate::details::Areas,
     /// The Threads view's cards.
@@ -574,6 +589,8 @@ pub struct App {
     pub rail_hover: Option<usize>,
     /// Your presence, pause and status, and the menu over the account button.
     pub account: crate::account::Account,
+    /// The dialog that renames a section or makes a new one.
+    pub section: Option<crate::section::Dialog>,
     /// Pictures pasted into the message boxes, waiting to be sent.
     pub attach: crate::attach::Attach,
     /// The channel details popup, opened from the header's name.
@@ -739,6 +756,7 @@ impl App {
             compose_hover: false,
             rail_hover: None,
             account: Default::default(),
+            section: None,
             attach: Default::default(),
             details: None,
             threads: Default::default(),
@@ -948,6 +966,7 @@ impl App {
     pub fn names(&self) -> crate::text::Names<'_> {
         crate::text::Names {
             users: &self.users.names,
+            apps: &self.users.apps,
             chans: &self.chans,
             emoji: &self.emoji.custom,
             others: &self.others,
@@ -1355,14 +1374,13 @@ impl App {
                 SILENCED => tr("Silenced", "Silenciados").to_string(),
                 _ => s.name.clone(),
             };
-            let emoji = emojis::get_by_shortcode(&s.emoji).map(|e| format!("{} ", e.as_str())).unwrap_or_default();
             let collapsed = if is_silenced { !self.silenced_open } else { self.collapsed.contains(&s.id) };
             // Muted unread doesn't light a folded Silenced; its mentions show anyway.
             let unread = collapsed && !is_silenced && members.iter().any(|i| self.unread(&self.convs[*i].id).0);
             if !rows.is_empty() {
                 rows.push(Row::Gap);
             }
-            rows.push(Row::Header { key: s.id.clone(), title: format!("{emoji}{title}"), collapsed, unread });
+            rows.push(Row::Header { key: s.id.clone(), title, emoji: s.emoji.trim_matches(':').to_string(), collapsed, unread });
             if !collapsed || unfold {
                 rows.extend(members.iter().map(|i| Row::Conv(*i)));
             } else if is_silenced {
@@ -1690,6 +1708,13 @@ impl App {
     }
 
     pub(crate) fn open_profile(&mut self, uid: String) {
+        // An app's message: the app's profile, as Slack's "App" panel.
+        if let Some(bot) = uid.strip_prefix("bot:").map(String::from) {
+            self.close_thread();
+            self.profile = Some((uid, None));
+            self.dirty = true;
+            return self.spawn(move |s| Event::AppProfile { res: s.app_profile(&bot), bot });
+        }
         self.close_thread();
         self.profile = Some((uid.clone(), None));
         self.dirty = true;
@@ -1725,6 +1750,7 @@ impl App {
     /// lists still loading, everyone would look unknown.
     pub fn request_names(&mut self) {
         use crate::blocks::Target;
+        self.request_bots();
         for t in std::mem::take(&mut self.unnamed) {
             let (id, person) = match t {
                 Target::User(id) if !self.users.names.is_empty() => (id, true),
@@ -1744,6 +1770,27 @@ impl App {
                     Event::ChanNamed { id, res }
                 }
             });
+        }
+    }
+
+    /// Apps on screen: named and pictured by what their messages carry, or
+    /// by `bots.info` for those that carry neither (webhooks, old apps).
+    fn request_bots(&mut self) {
+        let thread = self.thread.as_ref().map(|t| t.msgs.as_slice()).unwrap_or_default();
+        let open = self.current.as_ref().and_then(|c| self.messages.get(c)).map(Vec::as_slice).unwrap_or_default();
+        let mut ask = Vec::new();
+        for m in open.iter().chain(thread).filter(|m| m.user.is_none()) {
+            let Some(id) = m.bot_id.as_ref().filter(|id| !self.users.apps.contains_key(*id)) else { continue };
+            match (&m.bot_name, &m.bot_icon) {
+                (Some(name), Some(icon)) => {
+                    self.users.apps.insert(id.clone(), (name.clone(), icon.clone()));
+                }
+                _ if self.asked.insert(id.clone()) => ask.push(id.clone()),
+                _ => {}
+            }
+        }
+        for id in ask {
+            self.spawn(move |s| Event::Bot { res: s.bot(&id), id });
         }
     }
 
@@ -1953,7 +2000,7 @@ impl App {
     }
 
     /// Drag and drop: a conversation onto another section, here and in Slack.
-    fn move_conv(&mut self, id: String, to: String) {
+    pub(crate) fn move_conv(&mut self, id: String, to: String) {
         let kind = self.section_kind(&to);
         // Apps lists app DMs on its own, Silenced the muted channels; nothing
         // is moved into them.
@@ -2104,14 +2151,60 @@ impl App {
             Some(Row::Header { key, collapsed, .. }) if key == SILENCED => {
                 vec![((if *collapsed { tr("Expand", "Expandir") } else { tr("Collapse", "Recolher") }).to_string(), Action::Collapse(key.clone()))]
             }
-            Some(Row::Header { key, collapsed, .. }) => vec![
-                (tr("Move section up", "Mover seção para cima").to_string(), Action::SectionUp(key.clone())),
-                (tr("Move section down", "Mover seção para baixo").to_string(), Action::SectionDown(key.clone())),
-                ((if *collapsed { tr("Expand", "Expandir") } else { tr("Collapse", "Recolher") }).to_string(), Action::Collapse(key.clone())),
-            ],
+            Some(Row::Header { key, collapsed, .. }) => {
+                let custom = self.sections.iter().any(|s| &s.id == key && s.kind == "standard");
+                let mut items = Vec::new();
+                if custom {
+                    items.push((tr("Rename", "Renomear").to_string(), Action::RenameSection(key.clone())));
+                }
+                items.push((tr("Create a new section", "Criar uma nova seção").to_string(), Action::NewSection(None, Some(key.clone()))));
+                items.push(("".to_string(), Action::Separator));
+                items.extend(self.header_items(key, *collapsed));
+                items
+            }
             _ => return,
         };
         self.list.select(Some(row));
+        self.menu = Some(Menu::new(x, y, items));
+    }
+
+    fn header_items(&self, key: &str, collapsed: bool) -> Vec<(String, Action)> {
+        let key = key.to_string();
+        vec![
+            (tr("Move section up", "Mover seção para cima").to_string(), Action::SectionUp(key.clone())),
+            (tr("Move section down", "Mover seção para baixo").to_string(), Action::SectionDown(key.clone())),
+            ((if collapsed { tr("Expand", "Expandir") } else { tr("Collapse", "Recolher") }).to_string(), Action::Collapse(key)),
+        ]
+    }
+
+    /// The header's section emoji clicked: Slack's "Move to…", with the
+    /// section it is in checked, a new one, and out of it.
+    pub(crate) fn open_move_menu(&mut self, x: u16, y: u16) {
+        let Some(id) = self.current.clone() else { return };
+        let Some(here) = self.section_of_conv(&id).map(|s| (s.id.clone(), s.name.clone())) else { return };
+        let glyph = |s: &Section| match self.emoji.glyph(s.emoji.trim_matches(':')) {
+            Some(crate::emoji::Glyph::Text(e)) => format!("{e} "),
+            _ => String::new(),
+        };
+        let mut items: Vec<(String, Action)> = self
+            .section_choices()
+            .into_iter()
+            .map(|(sid, name)| {
+                let mark = if sid == here.0 { "✓ " } else { "  " };
+                let e = self.sections.iter().find(|s| s.id == sid).map(glyph).unwrap_or_default();
+                (format!("{mark}{e}{name}"), Action::MoveTo(id.clone(), sid))
+            })
+            .collect();
+        let back = match self.convs.iter().find(|c| c.id == id).map(|c| c.kind) {
+            Some(Kind::Direct | Kind::Group) => "direct_messages",
+            _ => "channels",
+        };
+        let back = self.sections.iter().find(|s| s.kind == back).map(|s| s.id.clone()).unwrap_or_else(|| back.into());
+        items.extend([
+            ("".to_string(), Action::Separator),
+            (tr("+ Create new section", "+ Criar nova seção").to_string(), Action::NewSection(Some(id.clone()), Some(here.0.clone()))),
+            (trf!("Remove from {}", "Remover de {}", here.1), Action::MoveTo(id, back)),
+        ]);
         self.menu = Some(Menu::new(x, y, items));
     }
 
@@ -2156,6 +2249,8 @@ impl App {
             Action::SectionUp(key) => self.move_section(&key, -1),
             Action::SectionDown(key) => self.move_section(&key, 1),
             Action::Collapse(key) => self.toggle_section(key),
+            Action::RenameSection(key) => self.rename_section(key),
+            Action::NewSection(chan, before) => self.new_section(chan, before),
             Action::NewMessage => self.dialog = Some(crate::compose::Dialog::Message(Default::default())),
             Action::NewChannel => self.dialog = Some(crate::compose::Dialog::Channel(Default::default())),
             Action::Message(it) => close = self.message_action(it),
@@ -2441,7 +2536,8 @@ impl App {
             Event::Replied { chan, ts, text, res } => self.on_replied(chan, ts, text, res),
             Event::Pins { chan, res } => self.on_pins(chan, res),
             Event::Around { chan, ts, res } => self.on_around(chan, ts, res),
-            Event::Users(Ok(users)) => {
+            Event::Users(Ok(mut users)) => {
+                users.apps = std::mem::take(&mut self.users.apps);
                 self.users = users;
                 self.resort();
             }
@@ -2485,6 +2581,29 @@ impl App {
                 self.others.insert(id.clone(), id);
             }
             Event::ChanNamed { id, res: Ok(c) } => self.chan_named(id, c),
+            Event::Bot { id, res: Ok(app) } => {
+                self.users.apps.insert(id, app);
+            }
+            Event::AppProfile { bot, res } => {
+                let key = format!("bot:{bot}");
+                let waiting = self.profile.as_ref().is_some_and(|(u, _)| *u == key);
+                match res {
+                    // With a bot user, the panel is theirs: VIP and its DM work.
+                    Ok((user, p)) if waiting => {
+                        let uid = if user.is_empty() { key } else { user };
+                        self.users.bots.insert(uid.clone());
+                        self.profile = Some((uid, Some(p)));
+                    }
+                    Ok(_) => {}
+                    Err(e) if waiting => {
+                        self.profile = None;
+                        self.error = Some(e);
+                    }
+                    Err(_) => {}
+                }
+            }
+            // The messages keep "bot", and no asking again.
+            Event::Bot { res: Err(_), .. } => {}
             Event::Dm(res) => self.dm_opened(res),
             Event::Slash(e) => self.on_slash(e),
             Event::Details(e) => self.on_details(e),
@@ -2563,6 +2682,7 @@ impl App {
                 Err(e) => self.error = Some(trf!("open file: {e}", "abrir arquivo: {e}")),
             },
             Event::Account(e) => self.on_account(e),
+            Event::Section(e) => self.on_section(e),
             Event::Update(note) => self.on_update(note),
             Event::Edit(e) => self.on_edit(e),
             Event::Downloaded { key, res } => match res {
@@ -3155,6 +3275,9 @@ impl App {
         if self.account.dialog.is_some() {
             return self.status_paste(s);
         }
+        if self.section.is_some() {
+            return self.section_paste(s);
+        }
         // No text to type in the pause dialog.
         if self.account.pause.is_some() {
             return;
@@ -3219,6 +3342,9 @@ impl App {
         }
         if self.account.dialog.is_some() {
             return self.status_key(k);
+        }
+        if self.section.is_some() {
+            return self.section_key(k);
         }
         if self.account.pause.is_some() {
             return self.pause_key(k);
@@ -3550,6 +3676,9 @@ impl App {
         if self.invite.is_some() {
             return self.people_mouse(m);
         }
+        if self.section.is_some() {
+            return self.section_mouse(m);
+        }
         // The workspace dropdown sits over the sidebar: it sees the mouse first.
         if self.team_popup && self.switcher_mouse(m) {
             return;
@@ -3720,6 +3849,12 @@ impl App {
                 self.dirty = true;
                 return;
             }
+            if self.areas.profile_app.contains(at) {
+                self.profile = None;
+                self.open_dm(uid);
+                self.dirty = true;
+                return;
+            }
             if self.areas.profile_browser.contains(at) {
                 return self.open_url(&self.profile_url(&uid));
             }
@@ -3735,6 +3870,7 @@ impl App {
                 return self.open_profile_editor(p);
             }
             if self.areas.profile_id.contains(at) {
+                let uid = uid.strip_prefix("bot:").unwrap_or(&uid).to_string();
                 self.copy(&uid);
                 self.brief_copied(trf!("ID {uid} copied", "ID {uid} copiado"));
                 self.copied = Some(("id", Instant::now()));
@@ -3789,6 +3925,12 @@ impl App {
             }
             if let Some((_, r)) = self.areas.images.iter().find(|(rect, _)| rect.contains(at)) {
                 self.viewer = Some(r.clone());
+                self.dirty = true;
+                return;
+            }
+            if self.areas.header_section.contains(at) {
+                let r = self.areas.header_section;
+                self.open_move_menu(r.x, r.y + 1);
                 self.dirty = true;
                 return;
             }

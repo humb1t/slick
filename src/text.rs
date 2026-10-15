@@ -6,6 +6,8 @@ use std::collections::{HashMap, HashSet};
 
 pub struct Names<'a> {
     pub users: &'a HashMap<String, String>,
+    /// bot id → (name, icon) of the apps that post here.
+    pub apps: &'a HashMap<String, (String, String)>,
     pub chans: &'a HashMap<String, String>,
     /// The workspace's custom emoji: name → image URL.
     pub emoji: &'a HashMap<String, String>,

@@ -69,6 +69,9 @@ pub struct Users {
     /// workspace's list doesn't have (aliases, another org's emoji).
     #[serde(default)]
     pub status_image: HashMap<String, String>,
+    /// bot id → (name, icon), for app messages that came without `bot_profile`.
+    #[serde(default)]
+    pub apps: HashMap<String, (String, String)>,
 }
 
 impl Users {
@@ -317,6 +320,12 @@ pub struct Message {
     pub ts: String,
     pub user: Option<String>,
     pub bot_name: Option<String>,
+    /// An app's message: whose, to name it when `bot_name` is missing.
+    #[serde(default)]
+    pub bot_id: Option<String>,
+    /// The app's picture: the one the message set, else its profile's.
+    #[serde(default)]
+    pub bot_icon: Option<String>,
     pub subtype: Option<String>,
     pub text: String,
     #[serde(default)]
@@ -660,6 +669,36 @@ impl Slack {
         Ok(users)
     }
 
+    /// An app's name and picture, for its messages that don't carry them.
+    pub fn bot(&self, id: &str) -> Res<(String, String)> {
+        let v = self.call("bots.info", &[("bot", id)])?;
+        let b = &v["bot"];
+        Ok((str_of(&b["name"]), icon_of(&b["icons"]).unwrap_or_default()))
+    }
+
+    /// The app behind a bot, as Slack's "App" panel shows it: name,
+    /// description, icon (`apps.profile.get`, undocumented, the web client's),
+    /// and its bot user, empty for those without one (webhooks).
+    pub fn app_profile(&self, bot: &str) -> Res<(String, Profile)> {
+        let v = self.call("bots.info", &[("bot", bot)])?;
+        let b = &v["bot"];
+        let app = str_of(&b["app_id"]);
+        let user = str_of(&b["user_id"]);
+        let a = if app.is_empty() { Value::Null } else { self.call("apps.profile.get", &[("app", &app)]).map(|v| v["app_profile"].clone()).unwrap_or_default() };
+        let user = a["bot_user"]["id"].as_str().filter(|u| !u.is_empty()).map(String::from).unwrap_or(user);
+        let pick = |icons: &Value, keys: &[&str]| keys.iter().find_map(|k| icons[*k].as_str().filter(|u| u.starts_with("http")).map(String::from));
+        let (icons, own) = (&a["icons"], &b["icons"]);
+        let thumb = pick(icons, &["image_72", "image_64", "image_48"]).or_else(|| icon_of(own)).unwrap_or_default();
+        Ok((user, Profile {
+            name: a["name"].as_str().filter(|n| !n.is_empty()).map(String::from).unwrap_or_else(|| str_of(&b["name"])),
+            title: str_of(&a["desc"]),
+            avatar: pick(icons, &["image_512", "image_192", "image_128"]).unwrap_or_else(|| thumb.clone()),
+            photo: pick(icons, &["image_1024", "image_original", "image_512"]).unwrap_or_else(|| thumb.clone()),
+            thumb,
+            ..Default::default()
+        }))
+    }
+
     /// One person's user object as it is now, for `Users::apply`.
     pub fn user(&self, uid: &str) -> Res<Value> {
         let v = self.call("users.info", &[("user", uid)])?;
@@ -914,6 +953,20 @@ impl Slack {
             .map(|_| ())
     }
 
+    /// A new custom section, empty, right before `next`; its id. Undocumented,
+    /// like `sections`: the calls are the web client's.
+    pub fn create_section(&self, name: &str, emoji: &str, next: &str) -> Res<String> {
+        let v = self.call("users.channelSections.create", &[("name", name), ("emoji", emoji), ("next_channel_section_id", next)])?;
+        Ok(str_of(&v["channel_section_id"]))
+    }
+
+    /// A custom section's new name and emoji (a shortcode without colons;
+    /// empty: none). `set` also places it, so `next` keeps it where it is.
+    pub fn rename_section(&self, id: &str, name: &str, emoji: &str, next: &str) -> Res<()> {
+        let p = [("channel_section_id", id), ("name", name), ("emoji", emoji), ("next_channel_section_id", next)];
+        self.call("users.channelSections.set", &p).map(|_| ())
+    }
+
     /// Moves the read cursor so the official clients stop flagging it unread.
     pub fn mark(&self, chan: &str, ts: &str) -> Res<()> {
         self.call("conversations.mark", &[("channel", chan), ("ts", ts)]).map(|_| ())
@@ -997,6 +1050,8 @@ pub(crate) fn parse_message(m: &Value) -> Message {
         ts: str_of(&m["ts"]),
         user: m["user"].as_str().map(String::from),
         bot_name,
+        bot_id: m["bot_id"].as_str().filter(|s| !s.is_empty()).map(String::from),
+        bot_icon: [&m["icons"], &m["bot_profile"]["icons"]].iter().find_map(|i| icon_of(i)),
         subtype: m["subtype"].as_str().map(String::from),
         text: str_of(&m["text"]),
         blocks: m["blocks"].clone(),
@@ -1015,6 +1070,11 @@ pub(crate) fn parse_message(m: &Value) -> Message {
             System { topic: s("topic"), purpose: s("purpose"), name: s("name"), old_name: s("old_name"), inviter: s("inviter") }
         }),
     }
+}
+
+/// The 72px picture of an `icons` object, or the nearest size it has.
+fn icon_of(icons: &Value) -> Option<String> {
+    ["image_72", "image_64", "image_48", "image_36"].iter().find_map(|k| icons[*k].as_str().filter(|u| u.starts_with("http")).map(String::from))
 }
 
 fn parse_file(f: &Value) -> File {

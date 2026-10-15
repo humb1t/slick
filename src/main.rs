@@ -28,6 +28,7 @@ mod pins;
 mod rail;
 mod rtm;
 mod search;
+mod section;
 mod selection;
 mod slack;
 mod slash;

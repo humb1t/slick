@@ -133,6 +133,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     team_popup(f, app);
     menu(f, app);
     crate::account::draw(f, app);
+    crate::section::draw(f, app);
     crate::details::draw(f, app);
     crate::invite::draw(f, app);
     react_picker(f, app);
@@ -694,10 +695,16 @@ fn sidebar_row<'a>(app: &App, row: &Row, width: usize, photos: bool) -> (ListIte
     match row {
         Row::Gap => (ListItem::new(""), None),
         Row::Threads => (crate::threads::sidebar_row(app, width), None),
-        Row::Header { title, collapsed, unread, .. } => {
+        Row::Header { title, emoji, collapsed, unread, .. } => {
             let arrow = if *collapsed { "▸" } else { "▾" };
             let style = if *unread { Style::new().bold() } else { dim().bold() };
-            (ListItem::new(Line::from(format!(" {arrow} {title}")).style(style)), None)
+            // A custom emoji is a picture over two blank cells.
+            let (face, pic) = match app.emoji.glyph(emoji).filter(|_| !emoji.is_empty()) {
+                Some(emoji::Glyph::Text(e)) => (format!("{e} "), None),
+                Some(emoji::Glyph::Image(img)) if app.picker.is_some() => ("   ".into(), Some((3, img))),
+                _ => (String::new(), None),
+            };
+            (ListItem::new(Line::from(format!(" {arrow} {face}{title}")).style(style)), pic)
         }
         Row::Conv(i) => conv_row(app, &app.convs[*i], width, photos),
         // A channel you are not in, found by searching: drawn as the one its preview opens.
@@ -839,6 +846,7 @@ fn conversation_header(f: &mut Frame, app: &mut App, area: Rect) {
     app.areas.header_star = Rect::default();
     app.areas.header_user = None;
     app.areas.header_name = Rect::default();
+    app.areas.header_section = Rect::default();
     app.areas.pins.tabs.clear();
     let block = Block::new().borders(Borders::BOTTOM).border_style(dim());
     let inner = block.inner(area);
@@ -876,20 +884,33 @@ fn conversation_header(f: &mut Frame, app: &mut App, area: Rect) {
     let name = label.strip_suffix(you).unwrap_or(&label);
     // Same for an archived channel's " (archived)", a deactivated account's " (deactivated)".
     let you = app.gone_suffix(c).unwrap_or(you);
+    // Like Slack: the emoji of the section it is in, to move it elsewhere.
+    let section = app.section_of_conv(&c.id).map(|s| s.emoji.trim_matches(':').to_string()).filter(|e| !e.is_empty());
+    let (face, section_pic) = match section.as_deref().and_then(|e| app.emoji.glyph(e)) {
+        Some(emoji::Glyph::Text(e)) => (format!("{e} "), None),
+        Some(emoji::Glyph::Image(img)) if app.picker.is_some() => ("   ".into(), Some(img)),
+        _ => (String::new(), None),
+    };
+    let face_w = face.width() as u16;
     let line = Line::from(vec![
         Span::raw(" "),
         star,
         Span::raw("  "),
+        Span::raw(face),
         icon,
         Span::styled(name.to_string(), Style::new().bold()),
         Span::styled(you, dim()),
         Span::raw(status.unwrap_or_default()),
     ]);
-    let name_x = inner.x + 4 + line.spans[3].width() as u16;
-    let name_w = (line.spans[4].width() + line.spans[5].width()) as u16;
-    let icon_w = line.spans[3].width() as u16;
-    let pic_x = inner.x + line.spans[..6].iter().map(|s| s.width() as u16).sum::<u16>() + 1;
+    let name_x = inner.x + 4 + face_w + line.spans[4].width() as u16;
+    let name_w = (line.spans[5].width() + line.spans[6].width()) as u16;
+    let icon_w = line.spans[4].width() as u16;
+    let pic_x = inner.x + line.spans[..7].iter().map(|s| s.width() as u16).sum::<u16>() + 1;
     f.render_widget(Paragraph::new(line), inner);
+    if face_w > 0 && !c.guest {
+        app.areas.header_section = Rect::new(inner.x + 4, inner.y, face_w.saturating_sub(1).max(1), 1);
+    }
+
     if !c.guest {
         app.areas.header_star = Rect::new(inner.x, inner.y, 3, 1);
     }
@@ -902,7 +923,10 @@ fn conversation_header(f: &mut Frame, app: &mut App, area: Rect) {
     }
     if let Some(uid) = person {
         let p = presence_of(app, &uid);
-        draw_presence(f, app, p, inner.x + 4, inner.y);
+        draw_presence(f, app, p, inner.x + 4 + face_w, inner.y);
+    }
+    if let Some(img) = section_pic {
+        draw_image(f, app, &img, Rect::new(inner.x + 4, inner.y, 2, 1));
     }
     if let Some(img) = pic.filter(|_| pic_x + 2 <= inner.right()) {
         draw_image(f, app, &img, Rect::new(pic_x, inner.y, 2, 1));
@@ -1785,6 +1809,7 @@ fn menu(f: &mut Frame, app: &mut App) {
 fn profile(f: &mut Frame, app: &mut App, area: Rect) {
     app.areas.profile_close = Rect::default();
     app.areas.profile_browser = Rect::default();
+    app.areas.profile_app = Rect::default();
     app.areas.profile_photo = Rect::default();
     app.areas.profile_star = Rect::default();
     app.areas.profile_vip = Rect::default();
@@ -1792,6 +1817,9 @@ fn profile(f: &mut Frame, app: &mut App, area: Rect) {
     app.areas.profile_email = Rect::default();
     app.areas.profile_edit = Rect::default();
     let Some((uid, data)) = app.profile.clone() else { return };
+    // An app, as Slack calls its profile; opened from its message before
+    // its bot user is known, the id says so.
+    let is_app = uid.starts_with("bot:") || (app.users.bots.contains(&uid) && uid != "USLACKBOT");
     let block = Block::new().borders(Borders::LEFT).border_style(dim());
     let inner = block.inner(area).inner(ratatui::layout::Margin { horizontal: 2, vertical: 0 });
     f.render_widget(block, area);
@@ -1801,7 +1829,8 @@ fn profile(f: &mut Frame, app: &mut App, area: Rect) {
 
     let close = Rect::new(inner.x + inner.width - 1, inner.y, 1, 1);
     app.areas.profile_close = close;
-    f.render_widget(Paragraph::new(Line::from(tr(" Profile", " Perfil")).bold()), Rect::new(inner.x, inner.y, inner.width - 2, 1));
+    let heading = if is_app { " App" } else { tr(" Profile", " Perfil") };
+    f.render_widget(Paragraph::new(Line::from(heading).bold()), Rect::new(inner.x, inner.y, inner.width - 2, 1));
     f.render_widget(Paragraph::new("✕").style(dim()), close);
     f.render_widget(
         Block::new().borders(Borders::BOTTOM).border_style(dim()),
@@ -1906,14 +1935,14 @@ fn profile(f: &mut Frame, app: &mut App, area: Rect) {
         }
         None => {}
     }
-    if let Some(tz) = chrono::FixedOffset::east_opt(p.tz_offset).filter(|_| !gone) {
+    if let Some(tz) = chrono::FixedOffset::east_opt(p.tz_offset).filter(|_| !gone && !is_app) {
         let local = i18n::clock(&chrono::Utc::now().with_timezone(&tz));
         lines.push(Line::from(trf!("🕐 {local} local time", "🕐 {local} hora local")));
     }
     // The member ID, click to copy (as in Slack's "Copy member ID").
     lines.push(Line::from(""));
     let id_row = lines.len() as u16;
-    let id_text = format!("ID {uid}");
+    let id_text = format!("ID {}", uid.strip_prefix("bot:").unwrap_or(&uid));
     let (copy, copy_style) = copy_hint(app, "id");
     lines.push(Line::from(vec![Span::styled(id_text.clone(), dim()), Span::styled(copy, copy_style)]));
     let n = lines.len() as u16;
@@ -1938,12 +1967,18 @@ fn profile(f: &mut Frame, app: &mut App, area: Rect) {
     let starred = dm.as_ref().is_some_and(|id| app.stars.contains(id));
     let vip = app.vips.contains(&uid);
     let mut buttons: Vec<(Line, u8)> = Vec::new();
+    // Slack's "Open App": its DM, with its Home and Messages.
+    // Without a bot user (a webhook) there is no DM, VIP or page to open.
+    let no_user = uid.starts_with("bot:");
+    if is_app && !gone && !no_user {
+        buttons.push((Line::from(tr(" ⠿ Open app ", " ⠿ Abrir app ")), 3));
+    }
     if dm.is_some() {
         let (icon, style, text) =
             if starred { (STAR_ON, Style::new().fg(Color::Yellow), tr(" Starred", " Favorito")) } else { (STAR_OFF, Style::new(), tr(" Star", " Favoritar")) };
         buttons.push((Line::from(vec![Span::raw(" "), Span::styled(icon, style), Span::raw(format!("{text} "))]), 0));
     }
-    if !app.is_me(&uid) && !app.users.bots.contains(&uid) && !gone {
+    if !app.is_me(&uid) && (is_app || !app.users.bots.contains(&uid)) && !gone && !no_user {
         let line = if vip {
             Line::from(vec![Span::styled(" ✓", Style::new().fg(Color::Green)), Span::raw(" VIP ")])
         } else {
@@ -1951,7 +1986,9 @@ fn profile(f: &mut Frame, app: &mut App, area: Rect) {
         };
         buttons.push((line, 1));
     }
-    buttons.push((Line::from(tr(" Open in browser ", " Abrir no navegador ")), 2));
+    if !no_user {
+        buttons.push((Line::from(tr(" Open in browser ", " Abrir no navegador ")), 2));
+    }
     let mut x = inner.x;
     let mut row_used = false;
     for (line, kind) in buttons {
@@ -1968,6 +2005,7 @@ fn profile(f: &mut Frame, app: &mut App, area: Rect) {
         match kind {
             0 => app.areas.profile_star = button,
             1 => app.areas.profile_vip = button,
+            3 => app.areas.profile_app = button,
             _ => app.areas.profile_browser = button,
         }
         x += bw + 1;
@@ -2238,11 +2276,26 @@ fn lines_with(
             ]));
             if let Some(uid) = &m.user {
                 people.push((lines.len() - 1, gutter as u16, author.width() as u16, uid.clone()));
+            } else if let Some(b) = &m.bot_id {
+                // An app's name and its "APP" open its profile.
+                people.push((lines.len() - 1, gutter as u16, (author.width() + bot.width()) as u16, format!("bot:{b}")));
             }
             if let (Some(cols), Some(url)) = (avatar_cols, m.user.as_ref().and_then(|u| app.users.avatars.get(u))) {
                 let uid = m.user.as_deref().unwrap_or("");
                 let user = Some(uid.to_string());
                 slots.push(Slot { line: lines.len() - 1, x: 0, cols, rows: 2, img: ImgRef::avatar_px(uid, url, 2 * font.map_or(0, |f| f.1 as u32)), full: None, user });
+            } else if let (Some(cols), None) = (avatar_cols, &m.user) {
+                // An app: the picture its message set, else the one it has.
+                let id = m.bot_id.as_deref().unwrap_or("app");
+                let known = m.bot_id.as_ref().and_then(|b| names.apps.get(b)).map(|(_, i)| i).filter(|i| !i.is_empty());
+                if let Some(url) = m.bot_icon.as_ref().or(known) {
+                    use std::hash::{Hash, Hasher};
+                    let mut h = std::collections::hash_map::DefaultHasher::new();
+                    url.hash(&mut h);
+                    let key = format!("bot-{id}-{:x}", h.finish());
+                    let user = m.bot_id.as_ref().map(|b| format!("bot:{b}"));
+                    slots.push(Slot { line: lines.len() - 1, x: 0, cols, rows: 2, img: ImgRef::avatar(&key, url), full: None, user });
+                }
             }
         }
         prev = Some(m);
@@ -2488,6 +2541,7 @@ pub(crate) fn author(m: &Message, names: &Names) -> String {
         .as_deref()
         .map(|u| names.users.get(u).cloned().unwrap_or_else(|| u.to_string()))
         .or_else(|| m.bot_name.clone())
+        .or_else(|| m.bot_id.as_ref().and_then(|b| names.apps.get(b)).map(|(n, _)| n.clone()).filter(|n| !n.is_empty()))
         .unwrap_or_else(|| "bot".into())
 }
 
@@ -2495,7 +2549,7 @@ pub(crate) fn author(m: &Message, names: &Names) -> String {
 /// minutes, and not pinned (a pinned message gets its own header).
 pub(crate) fn grouped(app: &App, prev: Option<&Message>, m: &Message) -> bool {
     let Some(p) = prev else { return false };
-    let key = |m: &Message| m.user.clone().or_else(|| m.bot_name.clone()).unwrap_or_default();
+    let key = |m: &Message| m.user.clone().or_else(|| m.bot_name.clone()).or_else(|| m.bot_id.clone()).unwrap_or_default();
     let day = |m: &Message| Local.timestamp_opt(secs(&m.ts), 0).single().map(|t| t.date_naive());
     let pinned = app.current.as_ref().is_some_and(|c| m.pinned_to.contains(c));
     !pinned && key(p) == key(m) && day(p) == day(m) && secs(&m.ts) - secs(&p.ts) < 300
