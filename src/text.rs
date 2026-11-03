@@ -835,7 +835,8 @@ pub fn find(name: &str, query: &str) -> Option<(u8, Vec<(usize, usize)>)> {
 
 /// Where a result goes in the search's list; smaller goes first. The rule,
 /// as Slack's, for channels and DMs alike: every active conversation
-/// before any archived channel; within each, a name typed whole on top,
+/// before any archived channel, and a deactivated account's DM after every
+/// active one; within each, a name typed whole on top,
 /// then the conversations named after what was typed before group DMs that
 /// only have someone by that name in them (Slack shows the person first),
 /// then the last message, newest first, those without a known time last.
@@ -845,6 +846,7 @@ pub fn find(name: &str, query: &str) -> Option<(u8, Vec<(usize, usize)>)> {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Place {
     archived: bool,
+    gone: bool,
     inexact: bool,
     group: bool,
     recent: std::cmp::Reverse<i64>,
@@ -859,6 +861,7 @@ pub struct Place {
 pub fn place(tier: u8, archived: bool, member: bool, latest: i64, members: u32, len: usize) -> Place {
     Place {
         archived,
+        gone: false,
         inexact: tier > 0,
         group: false,
         recent: std::cmp::Reverse(latest),
@@ -873,6 +876,12 @@ impl Place {
     /// A group DM's: after the people and channels the query names.
     pub fn group(mut self, group: bool) -> Self {
         self.group = group;
+        self
+    }
+
+    /// A deactivated account's DM: after the active ones.
+    pub fn gone(mut self, gone: bool) -> Self {
+        self.gone = gone;
         self
     }
 }

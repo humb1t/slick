@@ -37,6 +37,12 @@ const BOX_OFF: &str = "\u{f096}";
 const BOX_ON: &str = "\u{f14a}";
 /// The notification levels' dropdown.
 const LEVELS: [Notify; 3] = [Notify::All, Notify::Mentions, Notify::Mute];
+/// The role Slack's own client gives a channel's managers.
+const MANAGER_ROLE: &str = "Rl0A";
+/// At most this many people from outside the channel under a search.
+const OUTSIDE_HITS: usize = 30;
+/// nf-md-dots_vertical, a member's menu.
+const MORE: &str = "\u{f01d9}";
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Tab {
@@ -91,12 +97,43 @@ enum Item {
     Add,
     /// An index into the members shown.
     Member(usize),
+    /// An index into the people found outside the channel.
+    Outside(usize),
     CopyNames,
     CopyEmails,
     Private,
     Archive,
     Unarchive,
     Delete,
+}
+
+/// What a member's menu offers.
+#[derive(Clone, Copy, PartialEq)]
+enum Act {
+    /// Make (true) or unmake a channel manager.
+    Manager(bool),
+    Remove,
+    /// "Add to Channel", for someone outside it.
+    Add,
+}
+
+impl Act {
+    fn label(self) -> &'static str {
+        match self {
+            Act::Manager(true) => tr("Make Channel Manager", "Tornar gerente do canal"),
+            Act::Manager(false) => tr("Remove as Channel Manager", "Remover como gerente do canal"),
+            Act::Remove => tr("Remove from channel", "Remover do canal"),
+            Act::Add => tr("Add to Channel", "Adicionar ao canal"),
+        }
+    }
+}
+
+/// A member's menu, open: whose, the highlighted entry and where it goes.
+struct MemberMenu {
+    uid: String,
+    sel: usize,
+    x: u16,
+    y: u16,
 }
 
 /// What `conversations.info` says about the channel.
@@ -132,6 +169,13 @@ pub struct Details {
     adding: Option<NewMessage>,
     /// "Delete channel?", open over the details.
     delete: Option<Delete>,
+    /// The channel managers (role Rl0A), and whether you're a workspace
+    /// admin, who may name them as managers do.
+    managers: Vec<String>,
+    admin: bool,
+    menu: Option<MemberMenu>,
+    /// "Remove from channel" picked for this member: its row asks first.
+    kick: Option<String>,
     busy: bool,
 }
 
@@ -155,11 +199,14 @@ pub enum Job {
     Private,
     Invite(Vec<String>),
     Notify(Notify),
+    Kick(String),
+    Manager(String, bool),
 }
 
 pub enum Ev {
     Info { chan: String, res: Res<Info> },
     Members { chan: String, res: Res<Vec<String>> },
+    Managers { chan: String, managers: Vec<String>, admin: bool },
     Done { chan: String, job: Job, res: Res<()> },
     /// The members' addresses, for "Copy member email addresses".
     Emails(Res<Vec<String>>),
@@ -181,6 +228,14 @@ pub struct Areas {
     picks: Vec<(Rect, usize)>,
     chips: Vec<(Rect, usize)>,
     invite: Rect,
+    /// A member's menu: the ⋮ of the selected row, the menu and its entries,
+    /// the "Add to Channel" buttons, and the removal's "Remove" (any other
+    /// click cancels it).
+    more: Rect,
+    menu: Rect,
+    acts: Vec<(Rect, usize)>,
+    adds: Vec<(Rect, String)>,
+    kick_ok: Rect,
     /// "Delete channel?": the dialog, its ✕, the box, the link and the buttons.
     del: Rect,
     del_close: Rect,
@@ -216,6 +271,27 @@ fn info(s: &Slack, chan: &str) -> Res<Info> {
 fn members(s: &Slack, chan: &str) -> Res<Vec<String>> {
     let list = s.paginate("conversations.members", &[("channel", chan), ("limit", "200")], "members")?;
     Ok(list.iter().filter_map(|m| m.as_str().map(String::from)).collect())
+}
+
+/// The channel's managers, as Slack's own client lists them, and whether
+/// you're a workspace admin or owner. Neither is an error: without the
+/// call (a free workspace) nobody is a manager.
+fn managers(s: &Slack, chan: &str, me: &str) -> (Vec<String>, bool) {
+    let managers = s
+        .call("admin.roles.entity.listAssignments", &[("entity_id", chan)])
+        .map(|v| {
+            let all = v["role_assignments"].as_array().cloned().unwrap_or_default();
+            all.iter()
+                .filter(|a| a["role_id"] == MANAGER_ROLE)
+                .flat_map(|a| a["users"].as_array().cloned().unwrap_or_default())
+                .filter_map(|u| u.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let admin = s
+        .call("users.info", &[("user", me)])
+        .is_ok_and(|v| ["is_admin", "is_owner", "is_primary_owner"].iter().any(|k| v["user"][k] == true));
+    (managers, admin)
 }
 
 /// The addresses of these people, in their order; only those Slack shows
@@ -284,6 +360,12 @@ fn run(s: &Slack, chan: &str, job: &Job) -> Res<()> {
         Job::Private => call("conversations.convertToPrivate", &[]),
         Job::Invite(users) => call("conversations.invite", &[("users", &users.join(","))]),
         Job::Notify(n) => set_notify(s, chan, *n),
+        Job::Kick(user) => call("conversations.kick", &[("user", user)]),
+        // As the web client grants and takes the role.
+        Job::Manager(user, on) => {
+            let method = if *on { "admin.roles.addAssignments" } else { "admin.roles.removeAssignments" };
+            s.call(method, &[("role_id", MANAGER_ROLE), ("entity_id", chan), ("entity_ids", chan), ("user_ids", user)]).map(|_| ())
+        }
     }
 }
 
@@ -307,6 +389,9 @@ fn friendly(e: &str) -> String {
         "cant_archive_general" => tr("The general channel can't be archived.", "O canal geral não pode ser arquivado."),
         "last_member" => tr("You're the last member: archive the channel instead.", "Você é o último membro: arquive o canal."),
         "already_in_channel" => tr("They're already in the channel.", "Já estão no canal."),
+        "cant_kick_from_general" => tr("No one can be removed from the general channel.", "Ninguém pode ser removido do canal geral."),
+        "cant_kick_self" => tr("Leave the channel instead.", "Saia do canal em vez disso."),
+        "not_in_channel" => tr("They're not in the channel anymore.", "Já não estão no canal."),
         "unknown_method" | "method_deprecated" => tr("Slack doesn't offer that here.", "O Slack não oferece isso aqui."),
         _ => return e.to_string(),
     };
@@ -364,11 +449,22 @@ impl App {
             confirm: None,
             adding: None,
             delete: None,
+            managers: Vec::new(),
+            admin: false,
+            menu: None,
+            kick: None,
             busy: false,
         });
         self.dirty = true;
         let chan = c.id.clone();
         self.spawn(move |s| Event::Details(Ev::Info { res: info(s, &chan), chan }));
+        if c.kind != Kind::Group {
+            let (chan, me) = (c.id.clone(), self.me.as_ref().map(|m| m.user_id.clone()).unwrap_or_default());
+            self.spawn(move |s| {
+                let (managers, admin) = managers(s, &chan, &me);
+                Event::Details(Ev::Managers { chan, managers, admin })
+            });
+        }
         self.refresh_members(c.id);
     }
 
@@ -398,6 +494,11 @@ impl App {
                 }
                 Err(e) => self.error = Some(friendly(&e)),
             },
+            Ev::Managers { chan, managers, admin } => {
+                if let Some(d) = self.details.as_mut().filter(|d| d.chan == chan) {
+                    (d.managers, d.admin) = (managers, admin);
+                }
+            }
             Ev::Emails(res) => match res {
                 Ok(list) if list.is_empty() => {
                     self.error = Some(tr("Slack didn't show their email addresses.", "O Slack não mostrou os e-mails dessas pessoas.").into())
@@ -416,6 +517,7 @@ impl App {
         if let Some(d) = self.details.as_mut().filter(|d| d.chan == chan) {
             d.busy = false;
             d.confirm = None;
+            d.kick = None;
         }
         if let Err(e) = res {
             // A refused delete reads in its dialog.
@@ -471,8 +573,39 @@ impl App {
                 if let Some(d) = self.details.as_mut().filter(|d| d.chan == chan) {
                     d.adding = None;
                 }
-                self.brief(trf!("{} added to the channel", "{} adicionado(s) ao canal", users.len()), 3);
+                let text = match users.as_slice() {
+                    [one] => trf!("{} was added to the channel", "{} foi adicionado ao canal", self.person_name(one)),
+                    _ => trf!("{} added to the channel", "{} adicionado(s) ao canal", users.len()),
+                };
+                self.brief(text, 3);
                 self.refresh_members(chan);
+            }
+            Job::Kick(uid) => {
+                if let Some(d) = self.details.as_mut().filter(|d| d.chan == chan) {
+                    if let Some(m) = d.members.as_mut() {
+                        m.retain(|u| *u != uid);
+                        if let Some(i) = d.info.as_mut() {
+                            i.members = Some(m.len() as u64);
+                        }
+                    }
+                    d.managers.retain(|u| *u != uid);
+                }
+                self.brief(trf!("{} was removed from the channel", "{} foi removido do canal", self.person_name(&uid)), 3);
+            }
+            Job::Manager(uid, on) => {
+                if let Some(d) = self.details.as_mut().filter(|d| d.chan == chan) {
+                    d.managers.retain(|u| *u != uid);
+                    if on {
+                        d.managers.push(uid.clone());
+                    }
+                }
+                let name = self.person_name(&uid);
+                let text = if on {
+                    trf!("{name} is now a Channel Manager", "{name} agora é gerente do canal")
+                } else {
+                    trf!("{name} is no longer a Channel Manager", "{name} não é mais gerente do canal")
+                };
+                self.brief(text, 3);
             }
             // Already in place: the sidebar moved when it was picked.
             Job::Notify(_) => {}
@@ -578,28 +711,142 @@ impl App {
         self.set_star(chan, on);
     }
 
+    /// Someone's name, else their id.
+    fn person_name(&self, uid: &str) -> String {
+        self.users.names.get(uid).or_else(|| self.others.get(uid)).cloned().unwrap_or_else(|| uid.to_string())
+    }
+
+    /// How well the search matches someone's names, best 0; none when it
+    /// doesn't. Everyone matches no search.
+    fn member_rank(&self, uid: &str, q: &str) -> Option<u8> {
+        if q.is_empty() {
+            return Some(0);
+        }
+        let (n, real) = (self.person_name(uid), self.users.real.get(uid).map(String::as_str).unwrap_or(""));
+        [n.as_str(), real].iter().filter_map(|s| crate::text::search(s, q)).map(|(r, _)| r).min()
+    }
+
     /// The members as listed: by name, or the best match to the search;
-    /// deactivated accounts left out.
+    /// deactivated accounts after the active ones.
     fn shown_members(&self, d: &Details) -> Vec<String> {
         let Some(all) = &d.members else { return Vec::new() };
-        let name = |u: &String| self.users.names.get(u).cloned().or_else(|| self.others.get(u).cloned()).unwrap_or_else(|| u.clone());
         let q = d.filter.trim();
-        let mut hits: Vec<(u8, String, &String)> = all
+        let mut hits: Vec<(bool, u8, String, &String)> = all
             .iter()
-            .filter(|u| !self.users.deleted.contains(*u))
-            .filter_map(|u| {
-                let n = name(u);
-                let rank = if q.is_empty() {
-                    0
-                } else {
-                    let real = self.users.real.get(u).map(String::as_str).unwrap_or("");
-                    [n.as_str(), real].iter().filter_map(|s| crate::text::search(s, q)).map(|(r, _)| r).min()?
-                };
-                Some((rank, n.to_lowercase(), u))
-            })
+            .filter_map(|u| Some((self.users.deleted.contains(u), self.member_rank(u, q)?, self.person_name(u).to_lowercase(), u)))
             .collect();
         hits.sort();
-        hits.into_iter().map(|(_, _, u)| u.clone()).collect()
+        hits.into_iter().map(|(_, _, _, u)| u.clone()).collect()
+    }
+
+    /// Under a search, the people it finds who aren't in the channel, to add
+    /// from the list as in Slack; none where no one can be added.
+    fn outside_people(&self, d: &Details) -> Vec<String> {
+        let q = d.filter.trim();
+        let kind = self.details_kind().unwrap_or(Kind::Channel);
+        if q.is_empty() || kind == Kind::Group || self.details_archived() {
+            return Vec::new();
+        }
+        let Some(all) = &d.members else { return Vec::new() };
+        let inside: HashSet<&String> = all.iter().collect();
+        let mut hits: Vec<(u8, String, &String)> = self
+            .users
+            .names
+            .keys()
+            .filter(|u| !inside.contains(u) && !self.users.bots.contains(*u) && !self.users.deleted.contains(*u) && !self.is_me(u))
+            .filter_map(|u| Some((self.member_rank(u, q)?, self.person_name(u).to_lowercase(), u)))
+            .collect();
+        hits.sort();
+        hits.into_iter().take(OUTSIDE_HITS).map(|(_, _, u)| u.clone()).collect()
+    }
+
+    /// The person on a row of the members tab, in the channel or not.
+    fn person_at(&self, d: &Details, item: Item) -> Option<String> {
+        match item {
+            Item::Member(i) => self.shown_members(d).get(i).cloned(),
+            Item::Outside(i) => self.outside_people(d).get(i).cloned(),
+            _ => None,
+        }
+    }
+
+    /// A person's menu: make or unmake channel manager (admins and
+    /// managers), remove from the channel (not the general one); someone
+    /// outside, add. Nothing for you, in a group DM, an archived channel or
+    /// one you aren't in.
+    fn member_acts(&self, d: &Details, uid: &str) -> Vec<Act> {
+        let Some(all) = &d.members else { return Vec::new() };
+        let me = self.me.as_ref().map(|m| m.user_id.as_str()).unwrap_or("");
+        let kind = self.details_kind().unwrap_or(Kind::Channel);
+        if kind == Kind::Group || self.details_archived() || uid == me || !all.iter().any(|u| u == me) {
+            return Vec::new();
+        }
+        if !all.iter().any(|u| u == uid) {
+            return vec![Act::Add];
+        }
+        let mut v = Vec::new();
+        let manager = d.managers.iter().any(|u| u == uid);
+        if (d.admin || d.managers.iter().any(|u| u == me)) && (manager || !self.users.deleted.contains(uid)) {
+            v.push(Act::Manager(!manager));
+        }
+        if !d.info.as_ref().is_some_and(|i| i.general) {
+            v.push(Act::Remove);
+        }
+        v
+    }
+
+    /// Opens the selected person's menu: at the mouse, or under the row.
+    fn open_member_menu(&mut self, at: Option<(u16, u16)>) {
+        let Some(d) = self.details.as_ref() else { return };
+        let items = self.details_items(d);
+        let Some(&item) = items.get(d.sel.min(items.len().saturating_sub(1))) else { return };
+        let Some(uid) = self.person_at(d, item) else { return };
+        if self.member_acts(d, &uid).is_empty() {
+            return;
+        }
+        let row = self.areas.details.rows.iter().find(|(_, i)| *i == item).map(|(r, _)| *r).unwrap_or_default();
+        let (x, y) = at.unwrap_or((row.right().saturating_sub(32), row.y + 1));
+        if let Some(d) = self.details.as_mut() {
+            (d.menu, d.kick) = (Some(MemberMenu { uid, sel: 0, x, y }), None);
+        }
+    }
+
+    fn member_act(&mut self, uid: String, act: Act) {
+        let Some(d) = self.details.as_mut() else { return };
+        d.menu = None;
+        match act {
+            Act::Manager(on) => self.details_job(Job::Manager(uid, on)),
+            Act::Remove => d.kick = Some(uid),
+            Act::Add => self.details_job(Job::Invite(vec![uid])),
+        }
+    }
+
+    /// The menu's highlighted entry picked.
+    fn pick_member_act(&mut self) {
+        let Some(d) = self.details.as_ref() else { return };
+        let Some(m) = d.menu.as_ref() else { return };
+        let (uid, sel) = (m.uid.clone(), m.sel);
+        match self.member_acts(d, &uid).get(sel).copied() {
+            Some(act) => self.member_act(uid, act),
+            None => {
+                if let Some(d) = self.details.as_mut() {
+                    d.menu = None;
+                }
+            }
+        }
+    }
+
+    /// A search typed: the cursor on the first person it finds, in the
+    /// channel or not; back on top without one.
+    fn first_hit(&mut self) {
+        let Some(d) = self.details.as_ref() else { return };
+        let sel = if d.filter.is_empty() {
+            0
+        } else {
+            self.details_items(d).iter().position(|i| matches!(i, Item::Member(_) | Item::Outside(_))).unwrap_or(0)
+        };
+        if let Some(d) = self.details.as_mut() {
+            (d.sel, d.kick) = (sel, None);
+        }
     }
 
     fn details_items(&self, d: &Details) -> Vec<Item> {
@@ -621,6 +868,7 @@ impl App {
                     v.push(Item::Add);
                 }
                 v.extend((0..self.shown_members(d).len()).map(Item::Member));
+                v.extend((0..self.outside_people(d).len()).map(Item::Outside));
                 v
             }
             Tab::Settings => {
@@ -648,7 +896,7 @@ impl App {
         let kind = self.details_kind().unwrap_or(Kind::Channel);
         let Some(d) = self.details.as_mut() else { return };
         if tabs(kind).contains(&tab) {
-            (d.tab, d.sel, d.confirm, d.edit, d.adding) = (tab, 0, None, None, None);
+            (d.tab, d.sel, d.confirm, d.edit, d.adding, d.menu, d.kick) = (tab, 0, None, None, None, None, None);
         }
     }
 
@@ -665,7 +913,7 @@ impl App {
         let names = self.names();
         let Some(d) = self.details.as_ref() else { return };
         let info = d.info.clone().unwrap_or_default();
-        let shown = self.shown_members(d);
+        let person = self.person_at(d, item);
         let confirmed = d.confirm == Some(item);
         let chan = d.chan.clone();
         let edit = |text: String| {
@@ -701,8 +949,8 @@ impl App {
                 self.copied = Some(("chan", Instant::now()));
             }
             Item::Add => d.adding = Some(NewMessage::default()),
-            Item::Member(i) => {
-                if let Some(uid) = shown.get(i).cloned() {
+            Item::Member(_) | Item::Outside(_) => {
+                if let Some(uid) = person {
                     self.details = None;
                     self.open_profile(uid);
                 }
@@ -778,7 +1026,7 @@ impl App {
             a.sel = 0;
         } else if d.tab == Tab::Members {
             d.filter.push_str(line);
-            d.sel = 0;
+            self.first_hit();
         }
     }
 
@@ -787,7 +1035,28 @@ impl App {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         let alt = k.modifiers.contains(KeyModifiers::ALT);
         let (group, archived) = (self.details_kind() == Some(Kind::Group), self.details_archived());
+        let acts = self.details.as_ref().and_then(|d| d.menu.as_ref().map(|m| self.member_acts(d, &m.uid).len())).unwrap_or(0);
         let Some(d) = self.details.as_mut() else { return };
+        if let Some(m) = d.menu.as_mut() {
+            match k.code {
+                KeyCode::Up | KeyCode::Char('k') => m.sel = m.sel.saturating_sub(1),
+                KeyCode::Down | KeyCode::Char('j') => m.sel = (m.sel + 1).min(acts.saturating_sub(1)),
+                KeyCode::Enter | KeyCode::Char(' ') => self.pick_member_act(),
+                KeyCode::Esc | KeyCode::Char('q') => d.menu = None,
+                _ => {}
+            }
+            return;
+        }
+        // "Remove from #channel?" in a member's row: Enter removes, anything
+        // else lets it be.
+        if let Some(uid) = d.kick.clone() {
+            match k.code {
+                KeyCode::Enter => return self.details_job(Job::Kick(uid)),
+                KeyCode::Esc => return d.kick = None,
+                _ if d.busy => return,
+                _ => d.kick = None,
+            }
+        }
         if let Some(del) = d.delete.as_mut() {
             match k.code {
                 _ if d.busy => {}
@@ -832,6 +1101,7 @@ impl App {
                 KeyCode::Char('1') => self.set_details_tab(Tab::About),
                 KeyCode::Char('2') => self.set_details_tab(Tab::Members),
                 KeyCode::Char('3') => self.set_details_tab(Tab::Settings),
+                KeyCode::Char('m') if d.tab == Tab::Members => self.open_member_menu(None),
                 _ => {}
             }
             return;
@@ -871,12 +1141,16 @@ impl App {
             // In Members, typing searches; the first match gets the cursor.
             KeyCode::Backspace if tab == Tab::Members => {
                 d.filter.pop();
-                d.sel = 0;
+                self.first_hit();
             }
             KeyCode::Char('u') if ctrl && tab == Tab::Members => (d.filter, d.sel) = (String::new(), 0),
+            // A member's menu: `m` on a member picked with the arrows (a
+            // search takes the letter), the Menu key anywhere.
+            KeyCode::Menu if tab == Tab::Members => self.open_member_menu(None),
+            KeyCode::Char('m') if tab == Tab::Members && !filtering && matches!(items.get(sel), Some(Item::Member(_))) => self.open_member_menu(None),
             KeyCode::Char(c) if tab == Tab::Members && !ctrl => {
                 d.filter.push(c);
-                d.sel = usize::from(items.first() == Some(&Item::Add));
+                self.first_hit();
             }
             KeyCode::Char('q') => self.details = None,
             _ => {}
@@ -981,6 +1255,9 @@ impl App {
         let (inside, in_dropdown) = (a.modal.contains(at), a.dropdown.contains(at));
         let (in_del, del_close, del_check) = (a.del.contains(at), a.del_close.contains(at), a.del_check.contains(at));
         let (del_archive, del_cancel, del_ok) = (a.del_archive.contains(at), a.del_cancel.contains(at), a.del_ok.contains(at));
+        let act = a.acts.iter().find(|(r, _)| r.contains(at)).map(|(_, i)| *i);
+        let add = a.adds.iter().find(|(r, _)| r.contains(at)).map(|(_, u)| u.clone());
+        let (in_menu, more, kick_ok) = (a.menu.contains(at), a.more.contains(at), a.kick_ok.contains(at));
         let picks = self.invite_candidates();
         let Some(d) = self.details.as_mut() else { return };
         self.dirty = true;
@@ -1012,6 +1289,28 @@ impl App {
             }
             return;
         }
+        if let Some(menu) = d.menu.as_mut() {
+            match m.kind {
+                MouseEventKind::Moved if act.is_some() => menu.sel = act.unwrap_or(0),
+                _ if left && act.is_some() => {
+                    menu.sel = act.unwrap_or(0);
+                    self.pick_member_act();
+                }
+                MouseEventKind::Down(_) if !in_menu => d.menu = None,
+                _ => {}
+            }
+            return;
+        }
+        if left && d.kick.is_some() {
+            if kick_ok && !d.busy {
+                if let Some(uid) = d.kick.clone() {
+                    self.details_job(Job::Kick(uid));
+                }
+                return;
+            }
+            // Cancel, or any click elsewhere, lets it be.
+            return d.kick = None;
+        }
         let items_len = {
             let Some(d) = self.details.as_ref() else { return };
             self.details_items(d).len()
@@ -1034,6 +1333,15 @@ impl App {
             MouseEventKind::Moved => {
                 if let (Some(i), Some(a)) = (pick, d.adding.as_mut()) {
                     a.sel = i;
+                }
+            }
+            // A right click on a person: their menu, where the mouse is.
+            MouseEventKind::Down(MouseButton::Right) if d.adding.is_none() && matches!(row, Some(Item::Member(_) | Item::Outside(_))) => {
+                let Some(d) = self.details.as_ref() else { return };
+                let i = self.details_items(d).iter().position(|x| Some(*x) == row);
+                if let (Some(i), Some(d)) = (i, self.details.as_mut()) {
+                    d.sel = i;
+                    self.open_member_menu(Some((m.column, m.row + 1)));
                 }
             }
             _ if !left => {}
@@ -1059,6 +1367,8 @@ impl App {
             }
             _ if d.edit.is_some() => {}
             _ if edit.is_some() => self.activate_detail(edit.unwrap_or(Item::Name)),
+            _ if more => self.open_member_menu(None),
+            _ if add.is_some() => self.details_job(Job::Invite(add.into_iter().collect())),
             _ => {
                 let Some(item) = row else { return };
                 let Some(d) = self.details.as_ref() else { return };
@@ -1187,6 +1497,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         tr("Enter saves · Esc cancels", "Enter salva · Esc cancela")
     } else if app.details.as_ref().is_some_and(|d| d.adding.is_some()) {
         tr("Enter picks · Enter on empty adds · Esc back", "Enter escolhe · Enter vazio adiciona · Esc volta")
+    } else if app.details.as_ref().is_some_and(|d| d.menu.is_some()) {
+        tr("↑↓ move · Enter picks · Esc closes", "↑↓ move · Enter escolhe · Esc fecha")
+    } else if app.details.as_ref().is_some_and(|d| d.kick.is_some()) {
+        tr("Enter removes · Esc cancels", "Enter remove · Esc cancela")
+    } else if tab == Tab::Members {
+        tr("Type to search · ↑↓ move · Enter opens · m or right-click menu · Esc closes", "Digite para buscar · ↑↓ move · Enter abre · m ou botão direito menu · Esc fecha")
     } else {
         tr("Tab tabs · ↑↓ move · Enter picks · Alt+S star · Alt+N notifications · Esc closes", "Tab abas · ↑↓ move · Enter escolhe · Alt+S favorito · Alt+N notificações · Esc fecha")
     };
@@ -1195,6 +1511,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if let Some(sel) = notify {
         dropdown(f, app, level, sel);
     }
+    member_menu(f, app);
     if app.details.as_ref().is_some_and(|d| d.delete.is_some()) {
         delete_dialog(f, app);
     }
@@ -1540,45 +1857,145 @@ fn members_tab(f: &mut Frame, app: &mut App, area: Rect) {
     if loading {
         return f.render_widget(Paragraph::new(tr("  loading…", "  carregando…")).style(dim()), list);
     }
-    let photos = app.sidebar_avatars && app.picker.is_some();
-    let offset = (sel + 1).saturating_sub(list.height as usize);
-    for (n, item) in items.iter().enumerate().skip(offset).take(list.height as usize) {
-        let y = list.y + (n - offset) as u16;
-        let rect = Rect::new(list.x, y, list.width, 1);
-        let reversed = if n == sel { Style::new().add_modifier(Modifier::REVERSED) } else { Style::new() };
-        let line = match item {
-            Item::Add => Line::from(vec![Span::raw("  "), Span::styled(format!("＋ {}", tr("Add people", "Adicionar pessoas")), Style::new().fg(Color::Cyan).bold())]),
-            Item::Member(i) => {
-                let uid = &shown[*i];
-                let name = app.users.names.get(uid).or_else(|| app.others.get(uid)).cloned().unwrap_or_else(|| {
-                    app.unnamed.push(crate::blocks::Target::User(uid.clone()));
-                    uid.clone()
-                });
-                let p = presence_of(app, uid);
-                let dot = if photos && app.users.avatars.contains_key(uid) { Span::raw("  ") } else { presence_span(app, p) };
-                // " (you)" quieter than the name, as in the sidebar.
-                let you = if app.is_me(uid) { tr(" (you)", " (você)") } else { "" };
-                let room = (list.width as usize).saturating_sub(6 + you.width());
-                Line::from(vec![Span::raw("  "), dot, Span::raw(" "), Span::styled(truncate(&name, room), Style::new().bold()), Span::styled(you, dim())])
-            }
-            _ => continue,
-        };
-        f.render_widget(Paragraph::new(line.patch_style(reversed)), rect);
-        app.areas.details.rows.push((rect, *item));
-        if let Item::Member(i) = item {
-            let uid = shown[*i].clone();
-            let p = presence_of(app, &uid);
-            match app.users.avatars.get(&uid).cloned().filter(|_| photos) {
-                Some(url) => draw_avatar(f, app, &uid, &url, p, Rect::new(list.x + 2, y, 2, 1)),
-                None => draw_presence(f, app, p, list.x + 2, y),
-            }
+
+    // As Slack lists a search: Add people, the members it finds (or "No
+    // matches"), then "Not in this channel" with the people outside it.
+    let mut slots: Vec<Option<Item>> = Vec::new();
+    let mut notes: Vec<(usize, Line<'static>)> = Vec::new();
+    for item in &items {
+        if matches!(item, Item::Outside(0)) {
+            slots.push(None);
+            notes.push((slots.len(), Line::from(Span::styled(format!("  {}", tr("Not in this channel", "Fora deste canal")), dim().bold()))));
+            slots.push(None);
+        }
+        slots.push(Some(*item));
+        if *item == Item::Add && shown.is_empty() && !filter.is_empty() {
+            notes.push((slots.len(), Line::from(Span::styled(format!("  {}", tr("No matches", "Nenhum resultado")), dim()))));
+            slots.push(None);
         }
     }
-    if shown.is_empty() && !filter.is_empty() {
-        let y = list.y + items.len() as u16;
-        if y < list.bottom() {
-            f.render_widget(Paragraph::new(tr("  No one found", "  Ninguém encontrado")).style(dim()), Rect::new(list.x, y, list.width, 1));
+    if items.first() != Some(&Item::Add) && shown.is_empty() && !filter.is_empty() {
+        notes.insert(0, (0, Line::from(Span::styled(format!("  {}", tr("No matches", "Nenhum resultado")), dim()))));
+        slots.insert(0, None);
+    }
+    let picked = items.get(sel).copied();
+    let at = slots.iter().position(|s| s.is_some() && *s == picked).unwrap_or(0);
+    let offset = (at + 1).saturating_sub(list.height as usize);
+
+    let Some(d) = app.details.as_ref() else { return };
+    let (kick, busy) = (d.kick.clone(), d.busy);
+    let chan = d.info.as_ref().map(|i| format!("#{}", i.name)).unwrap_or_default();
+    let outside = app.outside_people(d);
+    let photos = app.sidebar_avatars && app.picker.is_some();
+    for (n, slot) in slots.iter().enumerate().skip(offset).take(list.height as usize) {
+        let y = list.y + (n - offset) as u16;
+        let rect = Rect::new(list.x, y, list.width, 1);
+        let Some(item) = *slot else {
+            if let Some((_, line)) = notes.iter().find(|(i, _)| *i == n) {
+                f.render_widget(Paragraph::new(line.clone()), rect);
+            }
+            continue;
+        };
+        let selected = Some(item) == picked;
+        let reversed = if selected { Style::new().add_modifier(Modifier::REVERSED) } else { Style::new() };
+        let uid = match item {
+            Item::Member(i) => shown[i].clone(),
+            Item::Outside(i) => outside[i].clone(),
+            _ => {
+                let add = Line::from(vec![Span::raw("  "), Span::styled(format!("＋ {}", tr("Add people", "Adicionar pessoas")), Style::new().fg(Color::Cyan).bold())]);
+                f.render_widget(Paragraph::new(add.patch_style(reversed)), rect);
+                app.areas.details.rows.push((rect, item));
+                continue;
+            }
+        };
+        let name = app.users.names.get(&uid).or_else(|| app.others.get(&uid)).cloned().unwrap_or_else(|| {
+            app.unnamed.push(crate::blocks::Target::User(uid.clone()));
+            uid.clone()
+        });
+        let p = presence_of(app, &uid);
+        let dot = if photos && app.users.avatars.contains_key(&uid) { Span::raw("  ") } else { presence_span(app, p) };
+
+        // What goes on the right: the removal's buttons, "Add to Channel",
+        // or the selected member's ⋮.
+        let confirming = kick.as_deref() == Some(uid.as_str());
+        let mut right: Vec<(Line<'static>, u8)> = Vec::new();
+        if confirming {
+            right.push((pill(tr(" Cancel ", " Cancelar "), Style::new().bg(BUTTON_BG).bold()), 1));
+            let ok = if busy { tr(" Removing… ", " Removendo… ") } else { tr(" Remove ", " Remover ") };
+            right.push((pill(ok, Style::new().fg(Color::White).bg(Color::Red).bold()), 2));
+        } else if matches!(item, Item::Outside(_)) {
+            let label = if busy { tr(" Adding… ", " Adicionando… ") } else { tr(" Add to Channel ", " Adicionar ao canal ") };
+            right.push((pill(label, Style::new().bg(BUTTON_BG).bold()), 3));
+        } else if selected && app.details.as_ref().is_some_and(|d| !app.member_acts(d, &uid).is_empty()) {
+            right.push((Line::from(Span::styled(format!(" {MORE} "), Style::new().fg(Color::Cyan).bold())), 4));
         }
+        let right_w: u16 = right.iter().map(|(l, _)| l.width() as u16 + 1).sum();
+
+        let line = if confirming {
+            let ask = trf!("Remove {name} from {chan}?", "Remover {name} de {chan}?");
+            let room = (list.width as usize).saturating_sub(5 + right_w as usize);
+            Line::from(vec![Span::raw("  "), dot, Span::raw(" "), Span::styled(truncate(&ask, room), Style::new().fg(Color::Red).bold())])
+        } else {
+            // " (you)" and the tags quieter than the name, as in the sidebar.
+            let you = if app.is_me(&uid) { tr(" (you)", " (você)") } else { "" };
+            let gone = app.users.deleted.contains(&uid);
+            let mut tags = String::new();
+            if gone {
+                tags.push_str(tr(" · deactivated", " · desativado"));
+            }
+            if matches!(item, Item::Member(_)) && app.details.as_ref().is_some_and(|d| d.managers.contains(&uid)) {
+                tags.push_str(tr(" · Channel Manager", " · Gerente do canal"));
+            }
+            let room = (list.width as usize).saturating_sub(6 + you.width() + right_w as usize).saturating_sub(tags.width());
+            let face = if gone { dim() } else { Style::new().bold() };
+            Line::from(vec![Span::raw("  "), dot, Span::raw(" "), Span::styled(truncate(&name, room), face), Span::styled(you, dim()), Span::styled(tags, dim())])
+        };
+        f.render_widget(Paragraph::new(line.patch_style(reversed)), rect);
+        app.areas.details.rows.push((rect, item));
+        match app.users.avatars.get(&uid).cloned().filter(|_| photos) {
+            Some(url) => draw_avatar(f, app, &uid, &url, p, Rect::new(list.x + 2, y, 2, 1)),
+            None => draw_presence(f, app, p, list.x + 2, y),
+        }
+        let mut x = rect.right().saturating_sub(right_w);
+        for (l, what) in right {
+            let r = Rect::new(x, y, l.width() as u16, 1).intersection(rect);
+            f.render_widget(Paragraph::new(l), r);
+            let a = &mut app.areas.details;
+            match what {
+                1 => {}
+                2 => a.kick_ok = r,
+                3 => a.adds.push((r, uid.clone())),
+                _ => a.more = r,
+            }
+            x += r.width + 1;
+        }
+    }
+}
+
+/// A person's menu, at the mouse or under their row.
+fn member_menu(f: &mut Frame, app: &mut App) {
+    let Some(d) = app.details.as_ref() else { return };
+    let Some(m) = d.menu.as_ref() else { return };
+    let acts = app.member_acts(d, &m.uid);
+    let (sel, x, y) = (m.sel, m.x, m.y);
+    let area = f.area();
+    let w = acts.iter().map(|a| a.label().width()).max().unwrap_or(10) as u16 + 4;
+    let h = acts.len() as u16 + 2;
+    let rect = Rect::new(x.min(area.right().saturating_sub(w)), y.min(area.bottom().saturating_sub(h)), w.min(area.width), h.min(area.height));
+    f.render_widget(Clear, rect);
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(dim());
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+    app.areas.details.menu = rect;
+    for (n, act) in acts.iter().enumerate() {
+        let r = Rect::new(inner.x, inner.y + n as u16, inner.width, 1).intersection(inner);
+        let style = match act {
+            _ if n == sel => Style::new().add_modifier(Modifier::REVERSED),
+            Act::Remove => Style::new().fg(Color::Red),
+            _ => Style::new(),
+        };
+        f.render_widget(Paragraph::new(format!(" {} ", act.label())).style(style), r);
+        app.areas.details.acts.push((r, n));
     }
 }
 
