@@ -37,6 +37,7 @@ mod switcher;
 mod text;
 mod thread;
 mod threads;
+mod wheel;
 #[cfg(target_os = "linux")]
 mod tray;
 mod ui;
@@ -268,6 +269,8 @@ fn main() {
                 let _ = terminal.clear();
             }
         }
+        // The wheel's glide moves before the draw that shows it.
+        ws.active_mut().wheel_frame();
         if ws.dirty() {
             ws.fill_infos();
             // Turned on or off in the settings: dropping it takes it off the bar.
@@ -318,7 +321,13 @@ fn main() {
             Some(t) => (t - now).min(Duration::from_millis(50)),
             None => Duration::from_millis(50),
         };
-        if event::poll(wait).unwrap_or(false) {
+        let wait = app.wheel.due().map_or(wait, |t| wait.min(t.saturating_duration_since(now)));
+        // All that is waiting is taken before the next draw: a fast spin's
+        // notches add up into one move instead of a draw each.
+        let mut taken = 0;
+        while taken < 64 && event::poll(if taken == 0 { wait } else { Duration::ZERO }).unwrap_or(false) {
+            taken += 1;
+            let app = ws.active_mut();
             let ev = event::read();
             // Typing or clicking means the window is seen, also in terminals
             // that never report focus.

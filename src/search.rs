@@ -836,14 +836,19 @@ impl App {
         self.search.reset();
     }
 
+    /// The wheel's move on the list, `delta` lines down.
+    pub(crate) fn scroll_search(&mut self, delta: isize) {
+        let s = &mut self.search;
+        (s.scroll, s.wheel) = (s.scroll.saturating_add_signed(delta).min(s.max_scroll), true);
+    }
+
     /// The wheel scrolls the list; a click picks a result, a second one
     /// opens it; one on a tab shows it; one outside closes.
     pub(crate) fn search_mouse(&mut self, m: MouseEvent) {
         let at = Position::new(m.column, m.row);
         let s = &mut self.search;
         match m.kind {
-            MouseEventKind::ScrollUp => (s.scroll, s.wheel) = (s.scroll.saturating_sub(3), true),
-            MouseEventKind::ScrollDown => (s.scroll, s.wheel) = ((s.scroll + 3).min(s.max_scroll), true),
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => self.wheel(&m, crate::wheel::Pane::Search),
             MouseEventKind::Down(_) if !s.rect.contains(at) => return self.close_search(),
             MouseEventKind::Down(MouseButton::Left) => {
                 if let Some(tab) = s.tabs.iter().find(|(r, _)| r.contains(at)).map(|(_, t)| *t) {

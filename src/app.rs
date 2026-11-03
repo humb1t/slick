@@ -7,6 +7,7 @@ use crate::config;
 use crate::files;
 use crate::i18n::tr;
 use crate::slack::{AuthInfo, Boot, Conversation, Count, Creds, Directory, File, Kind, Message, Res, Profile, Section, Slack, Users, HISTORY_LIMIT};
+use crate::wheel::{page, Pane};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use image::DynamicImage;
 use ratatui::layout::{Position, Rect};
@@ -525,6 +526,8 @@ pub struct App {
     /// Set by the mouse wheel: the list stays where it was scrolled instead of
     /// jumping back to the selected row; moving the selection clears it.
     pub sidebar_wheel: bool,
+    /// The wheel's glide, eased over a few frames.
+    pub wheel: crate::wheel::Wheel,
     pub filter: String,
     pub editor: Editor,
     /// Set by the last draw: the text width of the message box.
@@ -726,6 +729,7 @@ impl App {
             list: ListState::default(),
             sel_row: None,
             sidebar_wheel: false,
+            wheel: Default::default(),
             filter: String::new(),
             editor: Editor::default(),
             input_width: 40,
@@ -3417,6 +3421,8 @@ impl App {
 
     pub fn on_key(&mut self, k: KeyEvent) {
         self.dirty = true;
+        // A key takes over from the wheel's glide.
+        self.wheel.stop();
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         // Ctrl+Shift+C, where the terminal lets it through, is code in the box.
         let code = k.modifiers.contains(KeyModifiers::SHIFT) && self.typing_editor().is_some();
@@ -3557,10 +3563,13 @@ impl App {
                 self.dir_force = true;
                 return self.refresh();
             }
-            (KeyCode::PageUp, _) if self.focus == Focus::Thread => return self.scroll_thread(10),
-            (KeyCode::PageDown, _) if self.focus == Focus::Thread => return self.scroll_thread(-10),
-            (KeyCode::PageUp, _) => return self.scroll_by(10),
-            (KeyCode::PageDown, _) => return self.scroll_down(10),
+            // A page, less a few lines that stay on screen to read on from.
+            (KeyCode::PageUp | KeyCode::PageDown, _) if self.focus == Focus::Thread => {
+                let page = self.thread.as_ref().map_or(10, |t| page(t.height)) as isize;
+                return self.scroll_thread(if k.code == KeyCode::PageUp { page } else { -page });
+            }
+            (KeyCode::PageUp, _) => return self.scroll_by(page(self.areas.messages.height as usize)),
+            (KeyCode::PageDown, _) => return self.scroll_down(page(self.areas.messages.height as usize)),
             (KeyCode::Tab, _) => {
                 self.focus = match self.focus {
                     Focus::Input if self.thread.is_some() => Focus::Thread,
@@ -3677,7 +3686,7 @@ impl App {
         true
     }
 
-    fn scroll_by(&mut self, n: usize) {
+    pub(crate) fn scroll_by(&mut self, n: usize) {
         self.scroll = (self.scroll + n).min(self.max_scroll);
         if self.scroll == self.max_scroll {
             if let Some(chan) = self.current.clone() {
@@ -3690,7 +3699,7 @@ impl App {
 
     /// Toward the newest messages; at the end of a stretch away from the
     /// present, loads what came after it.
-    fn scroll_down(&mut self, n: usize) {
+    pub(crate) fn scroll_down(&mut self, n: usize) {
         self.scroll = self.scroll.saturating_sub(n);
         if self.scroll == 0 {
             if let Some(chan) = self.current.clone().filter(|c| self.detached.contains(c)) {
@@ -4088,20 +4097,9 @@ impl App {
         let in_side = self.areas.sidebar.contains(at);
         let in_msgs = self.areas.messages.contains(at);
         match m.kind {
-            MouseEventKind::ScrollUp if in_msgs => self.scroll_by(3),
-            MouseEventKind::ScrollDown if in_msgs => self.scroll_down(3),
-            MouseEventKind::ScrollUp if in_side => {
-                self.sidebar_wheel = true;
-                let step = if self.areas.rail.is_empty() { 3 } else { 1 };
-                *self.list.offset_mut() = self.list.offset().saturating_sub(step);
-            }
-            MouseEventKind::ScrollDown if in_side => {
-                self.sidebar_wheel = true;
-                let (step, max) = match self.areas.rail.is_empty() {
-                    true => (3, self.rows().len().saturating_sub(self.areas.sidebar.height as usize)),
-                    false => (1, self.areas.rail_max),
-                };
-                *self.list.offset_mut() = (self.list.offset() + step).min(max);
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown if in_msgs => self.wheel(&m, Pane::Messages),
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown if in_side => {
+                self.wheel(&m, if self.areas.rail.is_empty() { Pane::Sidebar } else { Pane::Rail });
             }
             // The box opens the search window; "/" keeps the sidebar's own filter.
             MouseEventKind::Down(MouseButton::Left) if self.areas.search.contains(at) => self.open_search(),

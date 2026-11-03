@@ -550,7 +550,7 @@ impl App {
         }
     }
 
-    fn scroll_threads(&mut self, delta: isize) {
+    pub(crate) fn scroll_threads(&mut self, delta: isize) {
         let t = &mut self.threads;
         t.top = t.top.saturating_add_signed(delta).min(t.max_top);
     }
@@ -611,8 +611,7 @@ impl App {
             return false;
         }
         match m.kind {
-            MouseEventKind::ScrollUp => self.scroll_threads(-3),
-            MouseEventKind::ScrollDown => self.scroll_threads(3),
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => self.wheel(&m, crate::wheel::Pane::Threads),
             MouseEventKind::Down(MouseButton::Left) => {
                 let a = &self.areas.threads;
                 if a.pill_close.contains(at) {

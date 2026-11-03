@@ -727,6 +727,14 @@ impl App {
         a.top = a.top.saturating_add_signed(delta).min(a.max_top);
     }
 
+    /// The wheel: down to the end of the list asks for more of it.
+    pub(crate) fn wheel_activity(&mut self, delta: isize) {
+        self.scroll_activity(delta);
+        if delta > 0 && self.activity.top >= self.activity.max_top {
+            self.activity.at_end = true;
+        }
+    }
+
     /// Keys for the view. True when handled.
     pub(crate) fn activity_key(&mut self, k: KeyEvent, ctrl: bool) -> bool {
         if !self.activity.open || self.focus != Focus::Input || ctrl || k.code == KeyCode::Tab {
@@ -780,13 +788,7 @@ impl App {
         }
         let row = a.rows.iter().find(|(r, _)| r.contains(at)).map(|(_, i)| *i);
         match m.kind {
-            MouseEventKind::ScrollUp => self.scroll_activity(-3),
-            MouseEventKind::ScrollDown => {
-                self.scroll_activity(3);
-                if self.activity.top >= self.activity.max_top {
-                    self.activity.at_end = true;
-                }
-            }
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => self.wheel(&m, crate::wheel::Pane::Activity),
             MouseEventKind::Down(MouseButton::Left) => {
                 self.focus = Focus::Input;
                 if let Some(i) = row {

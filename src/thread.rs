@@ -32,6 +32,8 @@ pub struct Thread {
     pub scroll: usize,
     /// Set by the last draw: how far `scroll` can go.
     pub max_scroll: usize,
+    /// Set by the last draw: the lines the replies show at once.
+    pub height: usize,
     /// A reply to scroll to once the replies are loaded.
     pub jump: Option<String>,
     /// Set by the last draw: the text width of the reply box.
@@ -106,6 +108,7 @@ impl App {
             broadcast: false,
             scroll: 0,
             max_scroll: 0,
+            height: 0,
             jump: None,
             input_width: 40,
             inline,
@@ -323,8 +326,7 @@ impl App {
         let close = self.areas.thread_close.contains(at);
         let broadcast = self.areas.thread_broadcast.contains(at);
         match m.kind {
-            MouseEventKind::ScrollUp => self.scroll_thread(3),
-            MouseEventKind::ScrollDown => self.scroll_thread(-3),
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => self.wheel(&m, crate::wheel::Pane::Thread),
             _ if !left => return false,
             _ if close => self.close_thread(),
             _ if broadcast => self.thread.iter_mut().for_each(|t| t.broadcast = !t.broadcast),
@@ -429,6 +431,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     crate::ui::scrollbar(f, bar, total, body.height as usize, max - scroll.min(max));
     if let Some(t) = app.thread.as_mut() {
         t.max_scroll = max;
+        t.height = body.height as usize;
         t.scroll = scroll.min(max);
         t.input_width = input_w;
     }
