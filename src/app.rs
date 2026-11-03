@@ -134,6 +134,9 @@ pub enum Event {
     AppProfile { bot: String, res: Res<(String, Profile)> },
     /// A channel a message mentioned, looked up (`request_names`).
     ChanNamed { id: String, res: Res<Conversation> },
+    /// A shared message's or permalink's conversation, not ours nor listed,
+    /// looked up to open it at the message (`open_original`).
+    Original { chan: String, ts: String, thread: Option<String>, res: Res<Conversation> },
     /// The DM opened by clicking a mention.
     Dm(Res<Conversation>),
     /// Slash commands: the list, and one run (`slash`).
@@ -2803,6 +2806,7 @@ impl App {
                 self.others.insert(id.clone(), id);
             }
             Event::ChanNamed { id, res: Ok(c) } => self.chan_named(id, c),
+            Event::Original { chan, ts, thread, res } => self.on_original(chan, ts, thread, res),
             Event::Bot { id, res: Ok(app) } => {
                 self.users.apps.insert(id, app);
             }
@@ -3117,13 +3121,66 @@ impl App {
     }
 
     /// A shared message's original: its conversation scrolled to it, with its
-    /// thread open at it when it is a reply. One we can't open (a private
-    /// channel we're not in) goes to the browser.
+    /// thread open at it when it is a reply. One neither ours nor listed (a
+    /// channel joined since, one the directory hasn't fetched) is looked up
+    /// first; only what Slack won't show us (a private channel we're not in,
+    /// another workspace's) goes to the browser.
     pub(crate) fn open_original(&mut self, chan: String, ts: String, thread: Option<String>) {
         if !self.convs.iter().any(|c| c.id == chan) && self.directory.find(&chan).is_none() {
-            let url = self.message_url(&chan, &ts);
-            return self.open_url(&url);
+            self.status = tr("loading the message…", "carregando a mensagem…").into();
+            self.dirty = true;
+            return self.spawn(move |s| {
+                let res = s.conversation(&chan);
+                Event::Original { chan, ts, thread, res }
+            });
         }
+        self.show_original(chan, ts, thread);
+    }
+
+    fn on_original(&mut self, chan: String, ts: String, thread: Option<String>, res: Res<Conversation>) {
+        self.status.clear();
+        let mut c = match res {
+            Ok(c) => c,
+            Err(_) => {
+                let url = self.message_url(&chan, &ts);
+                return self.open_url(&url);
+            }
+        };
+        if !self.convs.iter().any(|x| x.id == chan) {
+            if c.id.is_empty() {
+                c.id = chan.clone();
+            }
+            // A public channel comes as a preview, as from the search; any
+            // other Slack showed us is one we're in.
+            c.guest = c.kind == Kind::Channel;
+            self.convs.push(c);
+            self.resort();
+        }
+        self.show_original(chan, ts, thread);
+    }
+
+    /// A Slack link to this workspace (a message's, a conversation's): where
+    /// it points, to open here.
+    pub(crate) fn own_permalink(&self, url: &str) -> Option<crate::blocks::Permalink> {
+        let me = self.me.as_ref()?;
+        let host = url.split_once("://")?.1.split('/').next()?;
+        let ours = (!me.domain.is_empty() && host == format!("{}.slack.com", me.domain))
+            || (host == "app.slack.com" && url.contains(&format!("/client/{}/", me.team_id)));
+        ours.then(|| crate::blocks::permalink(url)).flatten()
+    }
+
+    /// A link clicked in a message: one to this workspace opens here.
+    pub(crate) fn follow_link(&mut self, url: &str) {
+        match self.own_permalink(url) {
+            Some(crate::blocks::Permalink { chan, ts: Some(ts), thread }) => self.open_original(chan, ts, thread),
+            Some(crate::blocks::Permalink { chan, ts: None, .. }) if self.convs.iter().any(|c| c.id == chan) || self.directory.find(&chan).is_some() => {
+                self.open(chan)
+            }
+            _ => self.open_url(url),
+        }
+    }
+
+    fn show_original(&mut self, chan: String, ts: String, thread: Option<String>) {
         self.open(chan.clone());
         self.flash = Some((ts.clone(), Instant::now()));
         match thread {
@@ -4201,7 +4258,8 @@ impl App {
             }
             if let Some((_, t)) = self.areas.buttons.iter().find(|(rect, _)| rect.contains(at)) {
                 let url = match t {
-                    crate::blocks::Target::Link(u) => u.clone(),
+                    // A permalink to this workspace opens here, as in Slack.
+                    crate::blocks::Target::Link(u) => return self.follow_link(&u.clone()),
                     crate::blocks::Target::Button(b) => match &b.url {
                         Some(u) => u.clone(),
                         None => self.message_url(self.current.as_deref().unwrap_or(""), &b.ts),

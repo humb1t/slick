@@ -546,13 +546,8 @@ fn attachment(a: &Value, n: &Names, ts: &str) -> Vec<Piece> {
 /// text (the original's blocks, else its mrkdwn) and its files.
 fn share(a: &Value, n: &Names) -> Share {
     let get = |k: &str| a[k].as_str().filter(|s| !s.is_empty());
-    // Else from its link: …/archives/C0123/p1760000000000100.
-    let link = get("from_url").and_then(|u| u.split('?').next()).and_then(|u| u.split_once("/archives/")).map(|(_, p)| p);
-    let from_link = link.and_then(|p| p.split_once("/p")).filter(|(_, d)| d.len() > 6 && d.bytes().all(|b| b.is_ascii_digit()));
-    let chan = get("channel_id").or(from_link.map(|(c, _)| c)).unwrap_or("");
-    let ts_link = from_link.map(|(_, d)| format!("{}.{}", &d[..d.len() - 6], &d[d.len() - 6..]));
-    let ts = get("ts").map(String::from).or(ts_link).unwrap_or_default();
-    let ts = ts.as_str();
+    let (chan, ts, reply, open) = origin(a);
+    let (chan, ts) = (chan.as_str(), ts.as_str());
     let user = get("author_id").map(String::from);
     let author = user.as_deref().and_then(|u| n.user(u)).or(get("author_name")).or(get("author_subname")).unwrap_or("").to_string();
     let photo = match (&user, user.as_ref().and_then(|u| n.avatars.get(u)).map(String::as_str).or(get("author_icon"))) {
@@ -564,14 +559,7 @@ fn share(a: &Value, n: &Names) -> Share {
         }
         _ => None,
     };
-    // A reply: Slack's footer says "Thread in …"; its link has the thread's ts.
-    let from_url = get("from_url");
-    let thread_ts = get("thread_ts")
-        .or_else(|| from_url.and_then(|u| u.split_once('?')).and_then(|(_, q)| q.split('&').find_map(|kv| kv.strip_prefix("thread_ts="))))
-        .filter(|t| !t.is_empty());
     let footer = get("footer").unwrap_or("");
-    let lower = footer.to_lowercase();
-    let reply = a["is_reply_unfurl"] == true || lower.starts_with("thread") || lower.starts_with("conversa") || thread_ts.is_some_and(|t| t != ts);
     let place = match n.place(chan) {
         Some((kind, name)) => {
             let lead = if reply { tr("Thread in ", "Conversa em ") } else { tr("Posted in ", "Publicada em ") };
@@ -602,11 +590,72 @@ fn share(a: &Value, n: &Names) -> Share {
         }
     }
     let files = a["files"].as_array().into_iter().flatten().filter(|f| f["mode"] != "tombstone").map(crate::slack::parse_file).collect();
-    let open = (!chan.is_empty() && !ts.is_empty()).then(|| {
-        let thread = reply.then(|| thread_ts.unwrap_or(ts).to_string());
-        Target::Open { chan: chan.to_string(), ts: ts.to_string(), thread }
-    });
     Share { author, user, photo, when: stamp(ts), place, body, files, open }
+}
+
+/// A shared message's original, from its attachment: its conversation and
+/// ts, whether it is a reply, and the card's click (`Target::Open`, with the
+/// thread's ts for a reply) when both are known.
+fn origin(a: &Value) -> (String, String, bool, Option<Target>) {
+    let get = |k: &str| a[k].as_str().filter(|s| !s.is_empty());
+    // Else from its link: …/archives/C0123/p1760000000000100?thread_ts=….
+    let link = get("from_url").or(get("original_url")).and_then(permalink);
+    let chan = get("channel_id").map(String::from).or(link.as_ref().map(|l| l.chan.clone())).unwrap_or_default();
+    let ts = get("ts").map(String::from).or(link.as_ref().and_then(|l| l.ts.clone())).unwrap_or_default();
+    // A reply: Slack's footer says "Thread in …"; its link has the thread's ts.
+    let thread_ts = get("thread_ts").or(link.as_ref().and_then(|l| l.thread.as_deref()));
+    let lower = get("footer").unwrap_or("").to_lowercase();
+    let reply = a["is_reply_unfurl"] == true || lower.starts_with("thread") || lower.starts_with("conversa") || thread_ts.is_some_and(|t| t != ts);
+    let open = (!chan.is_empty() && !ts.is_empty()).then(|| {
+        let thread = reply.then(|| thread_ts.unwrap_or(&ts).to_string());
+        Target::Open { chan: chan.clone(), ts: ts.clone(), thread }
+    });
+    (chan, ts, reply, open)
+}
+
+/// The original of the first message a message shares (Enter on it, as a
+/// click on its card).
+pub fn shared_original(m: &Message) -> Option<Target> {
+    let shares = m.attachments.as_array().into_iter().flatten().filter(|a| a["is_share"] == true || a["is_msg_unfurl"] == true);
+    shares.filter_map(|a| origin(a).3).next()
+}
+
+/// Where a Slack permalink points: the conversation, the message and its
+/// thread. …/archives/C0123/p1760000000000100?thread_ts=1760000000.000050,
+/// or the web app's …/client/T0123/C0123 (/thread/C0123-1760000000.000050).
+pub struct Permalink {
+    pub chan: String,
+    pub ts: Option<String>,
+    pub thread: Option<String>,
+}
+
+pub fn permalink(url: &str) -> Option<Permalink> {
+    let (path, query) = url.split_once('?').unwrap_or((url, ""));
+    let (host, path) = path.split_once("://")?.1.split_once('/')?;
+    if host != "slack.com" && !host.ends_with(".slack.com") {
+        return None;
+    }
+    let rest = match path.split_once('/')? {
+        ("archives", rest) => rest,
+        // client/T0123/C0123/…
+        ("client", rest) => rest.split_once('/')?.1,
+        _ => return None,
+    };
+    let mut parts = rest.split('/').filter(|p| !p.is_empty());
+    let chan = parts.next().filter(|c| c.len() > 1 && c.bytes().all(|b| b.is_ascii_alphanumeric()))?.to_string();
+    let stamp = |d: &str| (d.len() > 6 && d.bytes().all(|b| b.is_ascii_digit())).then(|| format!("{}.{}", &d[..d.len() - 6], &d[d.len() - 6..]));
+    let digits = |t: &&str| !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit() || b == b'.');
+    let (mut ts, mut thread) = (None, None);
+    match parts.next() {
+        Some(p) if p.starts_with('p') => ts = stamp(&p[1..]),
+        Some("thread") => thread = parts.next().and_then(|t| t.rsplit_once('-')).map(|(_, t)| t).filter(digits).map(String::from),
+        _ => {}
+    }
+    let query = query.split('#').next().unwrap_or("");
+    thread = thread.or_else(|| query.split('&').find_map(|kv| kv.strip_prefix("thread_ts=")).filter(digits).map(String::from));
+    // A thread's own link is at its first message.
+    let ts = ts.or_else(|| thread.clone());
+    Some(Permalink { chan, ts, thread })
 }
 
 /// When a shared message was posted: "Today at 15:13", "October 22nd at

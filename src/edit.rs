@@ -362,6 +362,17 @@ impl App {
                 return true;
             }
             KeyCode::PageUp | KeyCode::PageDown => return false,
+            // A shared message: Enter opens its original, as a click on its card.
+            KeyCode::Enter if k.modifiers.is_empty() => {
+                let open = self.message(&chan, &sel.ts).and_then(|m| crate::blocks::shared_original(&m));
+                let Some(crate::blocks::Target::Open { chan, ts, thread }) = open else {
+                    self.edit.selected = None;
+                    return false;
+                };
+                self.edit.selected = None;
+                self.open_original(chan, ts, thread);
+                return true;
+            }
             // Ctrl+Delete is the box's: a word.
             KeyCode::Delete if !ctrl => Act::Delete,
             KeyCode::Menu => {
