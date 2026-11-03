@@ -308,7 +308,7 @@ impl App {
     fn pick_section_emoji(&mut self, i: usize) {
         let Some(d) = self.section.as_mut() else { return };
         let Some((query, _)) = d.picker.take() else { return };
-        if let Some((name, _)) = self.emoji.search(&query, emoji::ROWS).into_iter().nth(i) {
+        if let Some(emoji::Found { name, .. }) = self.emoji.search(&query, emoji::ROWS).into_iter().nth(i) {
             d.emoji = name;
         }
         d.field = 1;
@@ -498,12 +498,12 @@ fn draw_picker(f: &mut Frame, app: &mut App, query: &str, sel: usize, below: Rec
     if hits.is_empty() {
         f.render_widget(Paragraph::new(tr(" no emoji", " nenhum emoji")).style(dim()), Rect::new(inner.x, inner.y + 2, inner.width, 1));
     }
-    for (n, (name, glyph)) in hits.iter().enumerate() {
+    for (n, emoji::Found { name, glyph, hl }) in hits.iter().enumerate() {
         let row = Rect::new(inner.x, inner.y + 2 + n as u16, inner.width, 1);
         if row.y >= inner.bottom() {
             break;
         }
-        emoji_row(f, app, row, name, glyph, n == sel);
+        emoji_row(f, app, row, name, glyph, hl, n == sel);
         app.areas.section.picker_rows.push((row, n));
     }
 }

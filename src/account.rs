@@ -425,7 +425,7 @@ fn save_profile(s: &Slack, uid: &str, fields: [String; 3], photo: Option<std::pa
 
 /// A path as typed or dropped on the terminal: quotes, `file://`, `~` and
 /// escaped spaces undone.
-fn photo_path(s: &str) -> std::path::PathBuf {
+pub(crate) fn photo_path(s: &str) -> std::path::PathBuf {
     let s = s.trim().trim_matches(['"', '\'']).trim_start_matches("file://").replace("\\ ", " ");
     match s.strip_prefix("~/").or_else(|| s.strip_prefix("~\\")) {
         Some(rest) => crate::config::home().join(rest),
@@ -1204,7 +1204,7 @@ impl App {
     fn pick_emoji(&mut self, i: usize) {
         let Some(d) = self.account.dialog.as_mut() else { return };
         let Some(p) = d.picker.take() else { return };
-        if let Some((name, _)) = self.emoji.search(&p.query, emoji::ROWS).into_iter().nth(i) {
+        if let Some(emoji::Found { name, .. }) = self.emoji.search(&p.query, emoji::ROWS).into_iter().nth(i) {
             d.emoji = name;
         }
         d.field = 1;
@@ -2085,12 +2085,12 @@ fn draw_picker(f: &mut Frame, app: &mut App, query: &str, sel: usize, below: Rec
     if hits.is_empty() {
         f.render_widget(Paragraph::new(tr(" no emoji", " nenhum emoji")).style(dim()), Rect::new(inner.x, inner.y + 2, inner.width, 1));
     }
-    for (n, (name, glyph)) in hits.iter().enumerate() {
+    for (n, emoji::Found { name, glyph, hl }) in hits.iter().enumerate() {
         let row = Rect::new(inner.x, inner.y + 2 + n as u16, inner.width, 1);
         if row.y >= inner.bottom() {
             break;
         }
-        emoji_row(f, app, row, name, glyph, n == sel);
+        emoji_row(f, app, row, name, glyph, hl, n == sel);
         app.areas.account.picker_rows.push((row, n));
     }
 }

@@ -128,6 +128,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     profile(f, app, panel);
     crate::thread::draw(f, app, panel);
     reaction_card(f, app);
+    emoji_tip(f, app);
     // After the thread panel: they may sit over its reply box.
     emoji_popup(f, app);
     crate::mention::draw(f, app);
@@ -139,6 +140,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     crate::details::draw(f, app);
     crate::invite::draw(f, app);
     react_picker(f, app);
+    add_emoji_dialog(f, app);
     crate::edit::draw(f, app);
     viewer(f, app);
     crate::compose::draw(f, app);
@@ -1073,6 +1075,7 @@ fn messages(f: &mut Frame, app: &mut App, area: Rect) {
     app.areas.avatars.clear();
     app.areas.thread_links.clear();
     app.areas.reactions.clear();
+    app.areas.quick.clear();
     app.areas.message_rows.clear();
     app.areas.buttons.clear();
     app.areas.shares.clear();
@@ -1323,20 +1326,49 @@ pub(crate) fn place(f: &mut Frame, app: &mut App, inner: Rect, r: Rendered, scro
             Hit::Message { lines, ts } => {
                 let (a, b) = (lines.start.max(start), lines.end.min(end));
                 if a < b {
-                    // Under the mouse: Slack's add-reaction button, top right.
+                    // Under the mouse: Slack's one-click reactions and its
+                    // add-reaction button, top right.
                     if hover.as_deref() == Some(ts.as_str()) {
                         let (fg, bg) = PILL_ADD;
                         let label = format!(" {ADD_REACTION} ");
-                        let w = label.width() as u16 + 2;
+                        // Each one-click reaction takes four cells: a space each side.
+                        let quick: Vec<(String, Option<emoji::Glyph>)> = app
+                            .emoji
+                            .quick()
+                            .into_iter()
+                            .map(|n| {
+                                let toned = emoji::toned_img(&n).filter(|i| app.picker.is_some() && !matches!(app.images.get(&i.key), Some(Img::Failed)));
+                                let g = toned.map(emoji::Glyph::Image).or_else(|| app.emoji.glyph(&n));
+                                (n, g)
+                            })
+                            .filter(|(_, g)| matches!(g, Some(emoji::Glyph::Text(_))) || (g.is_some() && app.picker.is_some()))
+                            .collect();
+                        let w = label.width() as u16 + 2 + 4 * quick.len() as u16;
                         let rect = Rect::new(inner.right().saturating_sub(w + 1), row(a), w, 1).intersection(inner);
-                        let line = Line::from(vec![
-                            Span::styled(blocks::CAP_L, Style::new().fg(bg)),
-                            Span::styled(label, Style::new().fg(fg).bg(bg)),
-                            Span::styled(blocks::CAP_R, Style::new().fg(bg)),
-                        ]);
+                        let mut spans = vec![Span::styled(blocks::CAP_L, Style::new().fg(bg))];
+                        let mut pics = Vec::new();
+                        for (k, (name, g)) in quick.iter().enumerate() {
+                            let x = rect.x + 1 + 4 * k as u16;
+                            let shown = match g {
+                                Some(emoji::Glyph::Text(e)) => format!(" {e}{} ", " ".repeat(2usize.saturating_sub(e.width()))),
+                                _ => "    ".into(),
+                            };
+                            spans.push(Span::styled(shown, Style::new().fg(fg).bg(bg)));
+                            if let Some(emoji::Glyph::Image(img)) = g {
+                                pics.push((img.clone(), Rect::new(x + 1, rect.y, 2, 1)));
+                            }
+                            app.areas.quick.push((Rect::new(x, rect.y, 4, 1).intersection(inner), ts.clone(), name.clone()));
+                        }
+                        spans.push(Span::styled(label, Style::new().fg(fg).bg(bg)));
+                        spans.push(Span::styled(blocks::CAP_R, Style::new().fg(bg)));
                         f.render_widget(Clear, rect);
-                        f.render_widget(Paragraph::new(line), rect);
-                        app.areas.reactions.push((rect, ts.clone(), None));
+                        f.render_widget(Paragraph::new(Line::from(spans)), rect);
+                        for (img, r) in pics {
+                            draw_image(f, app, &img, r.intersection(inner));
+                        }
+                        let add_x = rect.x + 1 + 4 * quick.len() as u16;
+                        let add = Rect::new(add_x, rect.y, rect.right().saturating_sub(add_x), 1);
+                        app.areas.reactions.push((add, ts.clone(), None));
                     }
                     app.areas.message_rows.push((Rect::new(inner.x, row(a), inner.width, (b - a) as u16), ts));
                 }
@@ -3156,7 +3188,6 @@ fn card_image(app: &mut App, img: &ImgRef, (w, h): (u32, u32)) -> Option<ImgRef>
     Some(ImgRef { key, ..img.clone() })
 }
 
-/// One row of the autocomplete or the picker: the emoji, then `:name:`.
 /// The "copy" link beside an ID or e-mail, or the confirmation for a
 /// moment after a click.
 pub(crate) fn copy_hint(app: &App, what: &str) -> (&'static str, Style) {
@@ -3166,13 +3197,35 @@ pub(crate) fn copy_hint(app: &App, what: &str) -> (&'static str, Style) {
     }
 }
 
-pub(crate) fn emoji_row(f: &mut Frame, app: &mut App, rect: Rect, name: &str, glyph: &emoji::Glyph, selected: bool) {
+/// One row of the autocomplete or the picker: the emoji, then `:name:`
+/// with what matched the search lit (`hl`, byte ranges of the name).
+pub(crate) fn emoji_row(f: &mut Frame, app: &mut App, rect: Rect, name: &str, glyph: &emoji::Glyph, hl: &[(usize, usize)], selected: bool) {
     let shown = match glyph {
         emoji::Glyph::Text(e) => format!("{e}{}", " ".repeat(2usize.saturating_sub(e.width()))),
         emoji::Glyph::Image(_) => "  ".into(),
     };
-    let label = truncate(&format!(":{name}:"), (rect.width as usize).saturating_sub(5));
-    let mut line = Line::from(format!(" {shown} {label:<w$}", w = (rect.width as usize).saturating_sub(4)));
+    let room = (rect.width as usize).saturating_sub(5);
+    let label = truncate(&format!(":{name}:"), room);
+    let mut spans = vec![Span::raw(format!(" {shown} "))];
+    if label.width() == name.width() + 2 {
+        // Whole: the matched stretches in yellow.
+        let lit = Style::new().fg(Color::Yellow).bold();
+        spans.push(Span::raw(":"));
+        let mut at = 0;
+        for &(a, b) in hl.iter().filter(|(a, b)| a < b && *b <= name.len() && name.is_char_boundary(*a) && name.is_char_boundary(*b)) {
+            if a < at {
+                continue;
+            }
+            spans.push(Span::raw(name[at..a].to_string()));
+            spans.push(Span::styled(name[a..b].to_string(), lit));
+            at = b;
+        }
+        spans.push(Span::raw(format!("{}:", &name[at..])));
+    } else {
+        spans.push(Span::raw(label.clone()));
+    }
+    spans.push(Span::raw(" ".repeat((rect.width as usize).saturating_sub(4 + label.width()))));
+    let mut line = Line::from(spans);
     if selected {
         mark_selected(&mut line);
     }
@@ -3187,7 +3240,7 @@ fn emoji_popup(f: &mut Frame, app: &mut App) {
     app.areas.emoji_rows.clear();
     let Some(hits) = app.completions() else { return };
     let input = app.typing_area();
-    let w = (hits.iter().map(|(n, _)| n.width()).max().unwrap_or(0) as u16 + 9).max(24).min(input.width.saturating_sub(2));
+    let w = (hits.iter().map(|h| h.name.width()).max().unwrap_or(0) as u16 + 9).max(24).min(input.width.saturating_sub(2));
     let h = hits.len() as u16 + 2;
     if input.y < h || w < 10 {
         return;
@@ -3198,9 +3251,9 @@ fn emoji_popup(f: &mut Frame, app: &mut App) {
     let inner = block.inner(rect);
     f.render_widget(block, rect);
     let sel = app.complete.sel;
-    for (n, (name, glyph)) in hits.iter().enumerate() {
+    for (n, emoji::Found { name, glyph, hl }) in hits.iter().enumerate() {
         let row = Rect::new(inner.x, inner.y + n as u16, inner.width, 1);
-        emoji_row(f, app, row, name, glyph, n == sel);
+        emoji_row(f, app, row, name, glyph, hl, n == sel);
         app.areas.emoji_rows.push((row, n));
     }
 }
@@ -3213,7 +3266,7 @@ fn react_picker(f: &mut Frame, app: &mut App) {
     let (query, sel, x, y) = (p.query.clone(), p.sel, p.x, p.y);
     let hits = app.emoji.search(&query, emoji::ROWS);
     let area = f.area();
-    let (w, h) = (34.min(area.width), (hits.len().max(1) as u16 + 4).min(area.height));
+    let (w, h) = (34.min(area.width), (hits.len().max(1) as u16 + 6).min(area.height));
     let rect = Rect::new(x.min(area.right().saturating_sub(w)), y.min(area.bottom().saturating_sub(h)), w, h);
     f.render_widget(Clear, rect);
     let block = Block::bordered().border_type(BorderType::Rounded).border_style(dim()).title(Line::from(tr(" React ", " Reagir ")).bold());
@@ -3230,12 +3283,102 @@ fn react_picker(f: &mut Frame, app: &mut App) {
     if hits.is_empty() {
         f.render_widget(Paragraph::new(tr(" no emoji", " nenhum emoji")).style(dim()), Rect::new(inner.x, inner.y + 2, inner.width, 1));
     }
-    for (n, (name, glyph)) in hits.iter().enumerate() {
+    for (n, emoji::Found { name, glyph, hl }) in hits.iter().enumerate() {
         let row = Rect::new(inner.x, inner.y + 2 + n as u16, inner.width, 1);
-        if row.y >= inner.bottom() {
+        if row.y + 2 >= inner.bottom() {
             break;
         }
-        emoji_row(f, app, row, name, glyph, n == sel);
+        emoji_row(f, app, row, name, glyph, hl, n == sel);
         app.areas.picker_rows.push((row, n));
     }
+    // Slack's "Add Emoji", at the foot.
+    let foot = Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.width, 1);
+    f.render_widget(Paragraph::new("─".repeat(inner.width as usize)).style(dim()), Rect::new(inner.x, foot.y.saturating_sub(1), inner.width, 1));
+    let label = tr(" + Add Emoji", " + Adicionar emoji");
+    let line = Line::from(vec![Span::styled(label, Style::new().fg(Color::Cyan)), Span::styled("  Ctrl+E", dim())]);
+    f.render_widget(Paragraph::new(line), foot);
+    app.areas.picker_add = Rect::new(foot.x, foot.y, label.width() as u16, 1);
+}
+
+/// The :name: of the emoji under the mouse, in a small card over it.
+fn emoji_tip(f: &mut Frame, app: &mut App) {
+    let Some(at) = app.hover_emoji.filter(|_| app.react.is_none() && app.hover_pill.is_none()) else { return };
+    let Some((r, name, _)) = app.emoji_at(at) else { return };
+    let text = format!(" :{name}: ");
+    let area = f.area();
+    let (w, h) = ((text.width() as u16 + 2).min(area.width), 3);
+    let x = (r.x + r.width / 2).saturating_sub(w / 2).min(area.right().saturating_sub(w));
+    // Above it, like Slack; under it when there's no room.
+    let y = if r.y >= area.y + h { r.y - h } else { r.y + 1 };
+    let rect = Rect::new(x, y, w, h).intersection(area);
+    f.render_widget(Clear, rect);
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(dim());
+    f.render_widget(Paragraph::new(Line::from(text).bold()).block(block), rect);
+}
+
+/// The "Add Emoji" dialog: the picture's path and the emoji's :name:.
+fn add_emoji_dialog(f: &mut Frame, app: &mut App) {
+    app.areas.add_fields.clear();
+    let Some(d) = &app.add_emoji else { return };
+    let (field, saving, error) = (d.field, d.saving, d.error.clone());
+    let fields = d.fields.clone();
+    let area = f.area();
+    let w = 64.min(area.width.saturating_sub(4));
+    let iw = w.saturating_sub(4) as usize;
+    let h = 13u16.min(area.height.saturating_sub(2));
+    let rect = Rect::new(area.x + (area.width.saturating_sub(w)) / 2, area.y + (area.height.saturating_sub(h)) / 2, w, h);
+    f.render_widget(Clear, rect);
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(dim()).title(Line::from(tr(" Add emoji ", " Adicionar emoji ")).bold());
+    let inner = block.inner(rect).inner(ratatui::layout::Margin { horizontal: 1, vertical: 0 });
+    f.render_widget(block, rect);
+    if inner.width < 20 || inner.height < 10 {
+        return;
+    }
+    let mark = |n: usize| if n == field { Span::styled("› ", Style::new().fg(Color::Cyan).bold()) } else { Span::raw("  ") };
+    let put = |f: &mut Frame, y: u16, line: Line| f.render_widget(Paragraph::new(line), Rect::new(inner.x, inner.y + y, inner.width, 1));
+    let hint = tr(
+        "Square pictures under 128KB with transparent backgrounds work best.",
+        "Imagens quadradas com menos de 128KB e fundo transparente funcionam melhor.",
+    );
+    put(f, 1, Line::from(Span::styled(tr("1. Image (JPG, PNG or GIF)", "1. Imagem (JPG, PNG ou GIF)"), Style::new().bold())));
+    put(f, 3, Line::from(Span::styled(truncate(hint, iw), dim())));
+    put(f, 5, Line::from(Span::styled(tr("2. Give it a name", "2. Dê um nome"), Style::new().bold())));
+    put(f, 7, Line::from(Span::styled(truncate(tr("This is what you'll type to add it to messages.", "É o que você vai digitar para usá-lo nas mensagens."), iw), dim())));
+    for (i, y) in [(0usize, 2u16), (1, 6)] {
+        // A shaded box as wide as the dialog, the cursor in it; the name between colons.
+        let fw = inner.width.saturating_sub(2);
+        let (pre, post) = if i == 1 { (":", ":") } else { ("", "") };
+        let (_, shown, cx) = crate::account::window(&fields[i], fw.saturating_sub(4) as usize);
+        let text = format!(" {pre}{shown}{post}");
+        let pad = (fw as usize).saturating_sub(text.width());
+        let bg = Style::new().bg(Color::Indexed(236));
+        put(f, y, Line::from(vec![mark(i), Span::styled(format!("{text}{}", " ".repeat(pad)), bg)]));
+        let boxed = Rect::new(inner.x + 2, inner.y + y, fw, 1);
+        app.areas.add_fields.push((boxed, i));
+        if i == field && !saving {
+            f.set_cursor_position(((boxed.x + 1 + pre.len() as u16 + cx as u16).min(boxed.right().saturating_sub(1)), boxed.y));
+        }
+    }
+    if let Some(e) = error {
+        put(f, 8, Line::from(Span::styled(truncate(&e, iw), Style::new().fg(Color::Red))));
+    }
+    // Hint, then Cancel and Save on the right.
+    let by = inner.bottom().saturating_sub(1);
+    let save = if saving { tr(" Saving… ", " Salvando… ") } else { tr(" Save ", " Salvar ") };
+    let cancel = tr(" Cancel ", " Cancelar ");
+    let save_r = Rect::new(inner.right().saturating_sub(save.width() as u16 + 2), by, save.width() as u16 + 2, 1);
+    let cancel_r = Rect::new(save_r.x.saturating_sub(cancel.width() as u16 + 3), by, cancel.width() as u16 + 2, 1);
+    let pill = |label: &str, fg: Color, bg: Color| {
+        Line::from(vec![
+            Span::styled(blocks::CAP_L, Style::new().fg(bg)),
+            Span::styled(label.to_string(), Style::new().fg(fg).bg(bg).bold()),
+            Span::styled(blocks::CAP_R, Style::new().fg(bg)),
+        ])
+    };
+    f.render_widget(Paragraph::new(pill(save, Color::Black, Color::Green)), save_r);
+    f.render_widget(Paragraph::new(pill(cancel, Color::Reset, Color::Indexed(236))), cancel_r);
+    let hint_w = cancel_r.x.saturating_sub(inner.x + 1);
+    let keys = tr("Tab fields · Enter saves · Esc cancels", "Tab campos · Enter salva · Esc cancela");
+    f.render_widget(Paragraph::new(truncate(keys, hint_w as usize)).style(dim()), Rect::new(inner.x, by, hint_w, 1));
+    (app.areas.add_save, app.areas.add_cancel) = (save_r, cancel_r);
 }

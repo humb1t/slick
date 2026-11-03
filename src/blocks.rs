@@ -220,6 +220,8 @@ pub enum Target {
     CopyLink(String),
     /// A card's Refresh (`chat.refreshUnfurl`).
     Refresh { ts: String, entity: String },
+    /// An emoji: its name, for the tooltip, and what a click copies.
+    Emoji(String, String),
 }
 
 /// Where an image goes, in cells from the top left of the laid-out text.
@@ -809,7 +811,8 @@ fn inline(s: &str, style: Style, n: &Names, out: &mut Vec<Seg>) {
 /// Two cells the custom emoji's picture is drawn over; an ideographic space
 /// is one "word" two cells wide, so wrapping keeps it whole.
 fn custom_emoji(name: &str, url: &str, style: Style) -> Seg {
-    Seg { text: "\u{3000}".into(), style, emoji: Some(crate::emoji::img(name, url)), ..Default::default() }
+    let target = Some(Target::Emoji(name.to_string(), format!(":{name}:")));
+    Seg { text: "\u{3000}".into(), style, emoji: Some(crate::emoji::img(name, url)), target, url: None }
 }
 
 /// Text with the workspace's `:name:` emoji split out as pictures.
@@ -825,7 +828,7 @@ fn emojify(s: &str, style: Style, n: &Names, out: &mut Vec<Seg>) {
             Some(name) => {
                 plain.push_str(&rest[..a]);
                 if !plain.is_empty() {
-                    out.push(Seg::new(std::mem::take(&mut plain), style));
+                    standard_emoji(&std::mem::take(&mut plain), style, out);
                 }
                 out.push(custom_emoji(name, &n.emoji[name], style));
                 rest = &after[name.len() + 1..];
@@ -838,7 +841,57 @@ fn emojify(s: &str, style: Style, n: &Names, out: &mut Vec<Seg>) {
     }
     plain.push_str(rest);
     if !plain.is_empty() {
-        out.push(Seg::new(plain, style));
+        standard_emoji(&plain, style, out);
+    }
+}
+
+/// Text with its standard emoji split out, each knowing its name: hovered
+/// it shows, clicked the emoji is copied.
+fn standard_emoji(s: &str, style: Style, out: &mut Vec<Seg>) {
+    let chars: Vec<(usize, char)> = s.char_indices().collect();
+    let (mut from, mut i) = (0, 0);
+    while i < chars.len() {
+        let (at, c) = chars[i];
+        let flag = ('\u{1f1e6}'..='\u{1f1ff}').contains(&c);
+        let starts = flag
+            || (!c.is_ascii() && (emojis::get(c.encode_utf8(&mut [0; 4])).is_some() || emojis::get(&format!("{c}\u{fe0f}")).is_some()));
+        if !starts {
+            i += 1;
+            continue;
+        }
+        // The sequence: modifiers, joined emoji, a flag's second letter.
+        let mut j = i + 1;
+        while j < chars.len() {
+            match chars[j].1 {
+                '\u{fe0f}' | '\u{20e3}' | '\u{1f3fb}'..='\u{1f3ff}' | '\u{e0020}'..='\u{e007f}' => j += 1,
+                '\u{200d}' if j + 1 < chars.len() => j += 2,
+                '\u{1f1e6}'..='\u{1f1ff}' if flag && j == i + 1 => j += 1,
+                _ => break,
+            }
+        }
+        let end = chars.get(j).map_or(s.len(), |(k, _)| *k);
+        let run = &s[at..end];
+        let tone = run.chars().find_map(|c| match c {
+            '\u{1f3fb}'..='\u{1f3ff}' => Some(c as u32 - 0x1f3fb + 2),
+            _ => None,
+        });
+        let plain: String = run.chars().filter(|c| !('\u{1f3fb}'..='\u{1f3ff}').contains(c)).collect();
+        let found = emojis::get(&plain).or_else(|| emojis::get(&plain.replace('\u{fe0f}', ""))).and_then(|e| e.shortcode());
+        if let Some(code) = found {
+            if from < at {
+                out.push(Seg::new(&s[from..at], style));
+            }
+            let name = match tone {
+                Some(t) => format!("{code}::skin-tone-{t}"),
+                None => code.to_string(),
+            };
+            out.push(Seg { target: Some(Target::Emoji(name, run.to_string())), ..Seg::new(run, style) });
+            from = end;
+        }
+        i = j;
+    }
+    if from < s.len() {
+        out.push(Seg::new(&s[from..], style));
     }
 }
 
@@ -988,7 +1041,13 @@ fn rich_inline(e: &Value, base: Style, n: &Names, out: &mut Vec<Seg>) {
         "usergroup" => mention(tr("@group", "@grupo").into(), style, false, None),
         "broadcast" => mention(format!("@{}", s("range")), style, true, None),
         "emoji" => match (text::emoji(s("unicode")), n.emoji.get(s("name"))) {
-            (Some(u), _) => Seg::new(u, style),
+            (Some(u), _) => {
+                let name = match e["skin_tone"].as_u64() {
+                    Some(t) => format!("{}::skin-tone-{t}", s("name")),
+                    None => s("name").to_string(),
+                };
+                Seg { target: Some(Target::Emoji(name, u.clone())), ..Seg::new(u, style) }
+            }
             (None, Some(url)) => custom_emoji(s("name"), url, style),
             (None, None) => Seg::new(text::shortcodes(&format!(":{}:", s("name"))), style),
         },
@@ -1353,7 +1412,7 @@ fn jumbo_items(paras: &[Para]) -> Option<Vec<Big>> {
                 n += 1;
                 continue;
             }
-            if s.url.is_some() || s.target.is_some() {
+            if s.url.is_some() || s.target.as_ref().is_some_and(|t| !matches!(t, Target::Emoji(..))) {
                 return None;
             }
             for (j, line) in s.text.split('\n').enumerate() {
