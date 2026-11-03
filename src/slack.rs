@@ -622,37 +622,41 @@ impl Slack {
         })
     }
 
-    /// Your own photo. `users.setPhoto` only takes multipart, which ureq 2
-    /// lacks, so the body is put together by hand.
+    /// Your own photo.
     pub fn set_photo(&self, path: &std::path::Path) -> Res<()> {
+        let mime = image_mime(path).ok_or_else(|| tr("the photo must be a JPG, PNG or GIF", "a foto precisa ser JPG, PNG ou GIF").to_string())?;
+        self.multipart("users.setPhoto", &[], "image", path, mime).map(|_| ())
+    }
+
+    /// A call carrying a file, such as `users.setPhoto` and `emoji.add`:
+    /// they only take multipart, which ureq 2 lacks, so the body is put
+    /// together by hand.
+    pub fn multipart(&self, method: &str, params: &[(&str, &str)], field: &str, path: &std::path::Path, mime: &str) -> Res<Value> {
         let data = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
-        let mime = match ext.as_str() {
-            "png" => "image/png",
-            "jpg" | "jpeg" => "image/jpeg",
-            "gif" => "image/gif",
-            _ => return Err(tr("the photo must be a JPG, PNG or GIF", "a foto precisa ser JPG, PNG ou GIF").into()),
-        };
-        let file = path.file_name().map(|n| n.to_string_lossy().replace('"', "")).unwrap_or_else(|| "photo".into());
+        let file = path.file_name().map(|n| n.to_string_lossy().replace('"', "")).unwrap_or_else(|| "image".into());
         let boundary = format!("slick{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
         let creds = self.creds();
         let mut body = Vec::new();
+        let mut fields: Vec<(&str, &str)> = params.to_vec();
         if creds.cookie.is_some() {
-            write!(body, "--{boundary}\r\nContent-Disposition: form-data; name=\"token\"\r\n\r\n{}\r\n", creds.token).map_err(|e| e.to_string())?;
+            fields.push(("token", &creds.token));
         }
-        write!(body, "--{boundary}\r\nContent-Disposition: form-data; name=\"image\"; filename=\"{file}\"\r\nContent-Type: {mime}\r\n\r\n")
+        for (k, v) in fields {
+            write!(body, "--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n").map_err(|e| e.to_string())?;
+        }
+        write!(body, "--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"; filename=\"{file}\"\r\nContent-Type: {mime}\r\n\r\n")
             .map_err(|e| e.to_string())?;
         body.extend_from_slice(&data);
         write!(body, "\r\n--{boundary}--\r\n").map_err(|e| e.to_string())?;
-        let req = self.authed(self.agent.post("https://slack.com/api/users.setPhoto"));
+        let req = self.authed(self.agent.post(&format!("https://slack.com/api/{method}")));
         let resp = req
             .set("Content-Type", &format!("multipart/form-data; boundary={boundary}"))
             .send_bytes(&body)
-            .map_err(|e| format!("users.setPhoto: {e}"))?;
+            .map_err(|e| format!("{method}: {e}"))?;
         let v: Value = resp.into_json().map_err(|e| e.to_string())?;
         match v["ok"].as_bool() {
-            Some(true) => Ok(()),
-            _ => Err(format!("users.setPhoto: {}", v["error"].as_str().unwrap_or(tr("unknown error", "erro desconhecido")))),
+            Some(true) => Ok(v),
+            _ => Err(format!("{method}: {}", v["error"].as_str().unwrap_or(tr("unknown error", "erro desconhecido")))),
         }
     }
 
@@ -1002,6 +1006,17 @@ impl Slack {
             return Err(tr("Slack didn't hand over the file (session expired?)", "o Slack não entregou o arquivo (sessão expirada?)").into());
         }
         std::io::copy(&mut resp.into_reader(), out).map_err(|e| e.to_string())
+    }
+}
+
+/// A picture's type by its extension: JPG, PNG or GIF, what Slack takes for
+/// photos and emoji.
+pub fn image_mime(path: &std::path::Path) -> Option<&'static str> {
+    match path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase().as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        _ => None,
     }
 }
 

@@ -400,8 +400,16 @@ pub struct Areas {
     /// The reaction picker and its rows.
     pub picker: Rect,
     pub picker_rows: Vec<(Rect, usize)>,
+    /// The picker's "Add Emoji".
+    pub picker_add: Rect,
+    /// The "Add Emoji" dialog's fields and buttons.
+    pub add_fields: Vec<(Rect, usize)>,
+    pub add_save: Rect,
+    pub add_cancel: Rect,
     /// Reaction pills: the message's ts and the emoji (`None`: the "+" pill).
     pub reactions: Vec<(Rect, String, Option<String>)>,
+    /// The one-click reactions on a hovered message: its ts and the emoji.
+    pub quick: Vec<(Rect, String, String)>,
     /// Each message's lines on screen, for the right click that reacts.
     pub message_rows: Vec<(Rect, String)>,
     pub viewer_save: Rect,
@@ -575,6 +583,10 @@ pub struct App {
     pub hover_msg: Option<(bool, String)>,
     /// The mouse, while over a reaction pill: the card of who reacted.
     pub hover_pill: Option<Position>,
+    /// The mouse, while over an emoji in a message: its :name: over it.
+    pub hover_emoji: Option<Position>,
+    /// The "Add Emoji" dialog, opened from the picker.
+    pub add_emoji: Option<emoji::AddDialog>,
     /// The picked message, the edit and the forward dialog.
     pub edit: crate::edit::Edit,
     /// Messages dragged over with the mouse, copied on release.
@@ -747,6 +759,8 @@ impl App {
             react: None,
             hover_msg: None,
             hover_pill: None,
+            hover_emoji: None,
+            add_emoji: None,
             edit: Default::default(),
             selection: None,
             drag: None,
@@ -927,6 +941,7 @@ impl App {
         self.spawn(|s| Event::Boot(s.boot()));
         self.spawn(|s| Event::TeamIcon(s.team_icon()));
         self.spawn(|s| Event::Emoji(emoji::Ev::List(emoji::fetch(s))));
+        self.spawn(|s| Event::Emoji(emoji::Ev::Uses(emoji::uses(s))));
         self.spawn(|s| Event::Slash(crate::slash::Ev::List(crate::slash::fetch(s))));
         self.refresh_account(true);
         self.refresh_prefs();
@@ -951,6 +966,7 @@ impl App {
         self.spawn(|s| Event::Vips(s.vips()));
         self.spawn(|s| Event::Boot(s.boot()));
         self.spawn(|s| Event::Emoji(emoji::Ev::List(emoji::fetch(s))));
+        self.spawn(|s| Event::Emoji(emoji::Ev::Uses(emoji::uses(s))));
         self.spawn(|s| Event::Slash(crate::slash::Ev::List(crate::slash::fetch(s))));
         self.refresh_account(true);
         self.spawn(|s| Event::Edit(crate::edit::Ev::Saved(s.saved())));
@@ -3285,6 +3301,9 @@ impl App {
         if self.account.profile.is_some() {
             return self.profile_paste(s);
         }
+        if self.add_emoji.is_some() {
+            return self.add_emoji_paste(s);
+        }
         if self.details.is_some() {
             return self.details_paste(s);
         }
@@ -3351,6 +3370,9 @@ impl App {
         }
         if self.account.profile.is_some() {
             return self.profile_key(k);
+        }
+        if self.add_emoji.is_some() {
+            return self.add_emoji_key(k);
         }
         if self.account.about {
             return self.about_key(k);
@@ -3679,6 +3701,9 @@ impl App {
         if self.section.is_some() {
             return self.section_mouse(m);
         }
+        if self.add_emoji.is_some() {
+            return self.add_emoji_mouse(m);
+        }
         // The workspace dropdown sits over the sidebar: it sees the mouse first.
         if self.team_popup && self.switcher_mouse(m) {
             return;
@@ -3916,6 +3941,14 @@ impl App {
                         self.brief_copied(tr("code copied", "código copiado").into());
                         self.copied = Some(("code", Instant::now()));
                         self.copied_code = text;
+                        self.dirty = true;
+                        return;
+                    }
+                    // An emoji: the character, or a custom one's :name:.
+                    crate::blocks::Target::Emoji(name, text) => {
+                        let (name, text) = (name.clone(), text.clone());
+                        self.copy(&text);
+                        self.brief_copied(trf!(":{name}: copied", ":{name}: copiado"));
                         self.dirty = true;
                         return;
                     }

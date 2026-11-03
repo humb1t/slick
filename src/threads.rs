@@ -892,6 +892,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     a.avatars.clear();
     a.thread_links.clear();
     a.reactions.clear();
+    a.quick.clear();
     a.message_rows.clear();
     a.buttons.clear();
     a.file_buttons.clear();
