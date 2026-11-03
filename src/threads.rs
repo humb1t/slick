@@ -478,6 +478,7 @@ impl App {
         self.edit.forget_thread();
         self.filter.clear();
         self.threads.open = true;
+        self.activity.open = false;
         // Cards read last time take their place among the read ones.
         self.threads.kept.clear();
         let t = &mut self.threads;

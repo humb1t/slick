@@ -131,6 +131,11 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
                 let badge = if t.mentions > 0 { Some((t.mentions, Color::Red)) } else { (t.new > 0).then_some((t.new, Color::Rgb(0x12, 0x64, 0xA3))) };
                 tile(f, Rect::new(x, y, PIC.0, 3), crate::threads::ICON, CHANNEL_TONE, badge);
             }
+            Row::Activity => {
+                shade(f, rect, picked || app.activity.open);
+                let (_, mentions) = crate::activity::attention(app);
+                tile(f, Rect::new(x, y, PIC.0, 3), crate::activity::ICON, CHANNEL_TONE, (mentions > 0).then_some((mentions, Color::Red)));
+            }
             Row::Conv(i) => {
                 let c = app.convs[*i].clone();
                 conv(f, app, &c, rect, x, picked, photos);
@@ -218,6 +223,7 @@ pub fn tooltip(f: &mut Frame, app: &mut App) {
     let Some(&(rect, _)) = app.areas.rail.iter().find(|(_, i)| *i == n) else { return };
     let label = match app.rows().get(n) {
         Some(Row::Threads) => crate::i18n::tr("Threads", "Conversas").to_string(),
+        Some(Row::Activity) => crate::i18n::tr("Activity", "Atividade").to_string(),
         Some(Row::Conv(i)) => app.label(&app.convs[*i]),
         Some(Row::Other(j)) => app.label(&app.directory.conv(*j)),
         _ => return,

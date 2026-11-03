@@ -142,6 +142,8 @@ pub enum Event {
     Search(crate::search::Ev),
     /// The threads you follow: their counts, the list, one marked read (`threads`).
     Threads(crate::threads::Ev),
+    /// Slack's Activity: the feed, its counts, the messages it points at (`activity`).
+    Activity(crate::activity::Ev),
     /// "Invite people": your address's domain and the invitations sent (`invite`).
     Invite(crate::invite::Ev),
 }
@@ -263,6 +265,8 @@ pub enum Focus {
 pub enum Row {
     /// "Threads", on top: the threads you follow (`threads`).
     Threads,
+    /// "Activity", under it: Slack's Activity (`activity`).
+    Activity,
     /// A blank line between sections.
     Gap,
     /// `emoji`: the section's shortcode, drawn before the title.
@@ -297,6 +301,8 @@ pub enum Action {
     NewChannel,
     /// The message menu's entries.
     Message(crate::edit::Item),
+    /// An Activity row's entries.
+    Activity(crate::activity::Act),
 }
 
 /// The right-click menu; a submenu keeps the menu it came from.
@@ -426,6 +432,8 @@ pub struct Areas {
     pub details: crate::details::Areas,
     /// The Threads view's cards.
     pub threads: crate::threads::Areas,
+    /// The Activity view's tabs and rows.
+    pub activity: crate::activity::Areas,
     /// The invite modal.
     pub invite: crate::invite::Areas,
     /// The workspace switcher's rows and "Add a workspace".
@@ -597,6 +605,8 @@ pub struct App {
     pub details: Option<crate::details::Details>,
     /// The threads you follow, and their view in the main pane.
     pub threads: crate::threads::Threads,
+    /// Slack's Activity, and its view in the main pane.
+    pub activity: crate::activity::Activity,
     /// "Invite people to …", opened from the account menu.
     pub invite: Option<crate::invite::Invite>,
     /// The keyboard shortcuts guide (Ctrl+/), over everything but sign-in.
@@ -760,6 +770,7 @@ impl App {
             attach: Default::default(),
             details: None,
             threads: Default::default(),
+            activity: Default::default(),
             invite: None,
             help: None,
             owner: cache.owner,
@@ -858,7 +869,7 @@ impl App {
     /// conversation): its default channel, as Slack does, or else the
     /// sidebar's first conversation.
     pub(crate) fn open_default(&mut self) {
-        if self.current.is_some() || self.threads.open || self.background || self.login.is_some() || self.reopen.is_some() {
+        if self.current.is_some() || self.threads.open || self.activity.open || self.background || self.login.is_some() || self.reopen.is_some() {
             return;
         }
         let rows = self.rows();
@@ -1351,7 +1362,7 @@ impl App {
             Section { id: SILENCED.into(), kind: SILENCED.into(), name: String::new(), emoji: String::new(), ids: Vec::new() };
         order.push(&silenced_section);
         // Like Slack: Threads first, above every section.
-        let mut rows = vec![Row::Threads];
+        let mut rows = vec![Row::Threads, Row::Activity];
         for s in order {
             let all: &[usize] = match s.kind.as_str() {
                 "direct_messages" => &dms,
@@ -1437,6 +1448,7 @@ impl App {
             Row::Other(j) => Some(self.directory.chans[*j].id.clone()),
             Row::Header { key, .. } => Some(format!("section:{key}")),
             Row::Threads => Some("threads".into()),
+            Row::Activity => Some("activity".into()),
             Row::Gap => None,
         };
         // Same index as last draw but another row there: the list reordered
@@ -1496,6 +1508,10 @@ impl App {
                 self.open_threads();
                 self.list.select(Some(row));
             }
+            Some(Row::Activity) => {
+                self.open_activity();
+                self.list.select(Some(row));
+            }
             _ => {}
         }
     }
@@ -1519,7 +1535,7 @@ impl App {
             rows.iter().position(|r| match (r, sel) {
                 (Row::Conv(a), Row::Conv(b)) => a == b,
                 (Row::Header { key: a, .. }, Row::Header { key: b, .. }) => a == b,
-                (Row::Threads, Row::Threads) => true,
+                (Row::Threads, Row::Threads) | (Row::Activity, Row::Activity) => true,
                 _ => false,
             })
         })
@@ -1645,6 +1661,7 @@ impl App {
         self.stay = None;
         self.thread = None;
         self.threads.open = false;
+        self.activity.open = false;
         self.pins.tab = crate::pins::Tab::Messages;
         self.focus = Focus::Input;
         self.filter.clear();
@@ -2254,6 +2271,7 @@ impl App {
             Action::NewMessage => self.dialog = Some(crate::compose::Dialog::Message(Default::default())),
             Action::NewChannel => self.dialog = Some(crate::compose::Dialog::Channel(Default::default())),
             Action::Message(it) => close = self.message_action(it),
+            Action::Activity(a) => self.activity_action(a),
         }
         if close {
             self.menu = None;
@@ -2427,6 +2445,7 @@ impl App {
             self.poll_thread();
         }
         self.poll_threads();
+        self.poll_activity();
         if self.copied.is_some_and(|(_, at)| at.elapsed() >= COPIED_FOR) {
             self.copied = None;
             self.dirty = true;
@@ -2513,6 +2532,7 @@ impl App {
                     self.current = None;
                     self.thread = None;
                     self.threads = Default::default();
+                    self.activity = Default::default();
                     self.pins = Default::default();
                     self.focus = Focus::Sidebar;
                 }
@@ -2613,6 +2633,7 @@ impl App {
             Event::Entered { id, res } => self.entered(id, res),
             Event::Search(e) => self.on_search(e),
             Event::Threads(e) => self.on_threads(e),
+            Event::Activity(e) => self.on_activity(e),
             Event::Live(ev) => self.on_live(ev),
             // Sections and counts are session-token only; without them the
             // sidebar falls back to favourites, DMs and channels.
@@ -3194,6 +3215,7 @@ impl App {
         self.polling = false;
         (self.boot, self.team_icon, self.current, self.profile, self.thread, self.viewer) = (None, None, None, None, None, None);
         self.threads = Default::default();
+        self.activity = Default::default();
         (self.menu, self.react, self.dialog) = (None, None, None);
         self.account = Default::default();
         self.editor = Editor::default();
@@ -3431,7 +3453,7 @@ impl App {
         if self.thread.is_some() && k.code == KeyCode::Esc && self.focus != Focus::Thread {
             return self.close_thread();
         }
-        if self.threads_key(k, ctrl) || self.pins_key(k) {
+        if self.threads_key(k, ctrl) || self.activity_key(k, ctrl) || self.pins_key(k) {
             return;
         }
         match (k.code, ctrl) {
@@ -3531,6 +3553,14 @@ impl App {
                 self.open_threads();
                 let rows = self.rows();
                 if let Some(pos) = rows.iter().position(|r| matches!(r, Row::Threads)) {
+                    self.list.select(Some(pos));
+                }
+            }
+            // Slack's Activity.
+            KeyCode::Char('m' | 'M') if ctrl && shift => {
+                self.open_activity();
+                let rows = self.rows();
+                if let Some(pos) = rows.iter().position(|r| matches!(r, Row::Activity)) {
                     self.list.select(Some(pos));
                 }
             }
@@ -3954,7 +3984,7 @@ impl App {
                 return;
             }
         }
-        if self.pins_mouse(m, at) || self.thread_mouse(m, at) || self.threads_mouse(m, at) {
+        if self.pins_mouse(m, at) || self.thread_mouse(m, at) || self.threads_mouse(m, at) || self.activity_mouse(m, at) {
             self.dirty = true;
             return;
         }
