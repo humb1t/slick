@@ -39,6 +39,8 @@ const REST_AFTER: Duration = Duration::from_secs(10);
 /// How soon a change in the sidebar's DMs reaches the presence subscription.
 const WATCH_EVERY: Duration = Duration::from_secs(5);
 const COUNTS_EVERY: Duration = Duration::from_secs(15);
+/// Slack's logo, the picture of "Slack" (USLACK).
+const SLACK_LOGO_PNG: &[u8] = include_bytes!("../assets/slack-logo.png");
 /// The workspace's public channels (`Directory`) are read again this often.
 const DIRECTORY_EVERY: Duration = Duration::from_secs(6 * 3600);
 /// How long after start they're asked for: the sidebar's own requests go first.
@@ -734,7 +736,7 @@ impl App {
             slack,
             tx,
             me: None,
-            users: cache.users,
+            users: cache.users.with_system(),
             chans: HashMap::new(),
             private: HashSet::new(),
             others: HashMap::new(),
@@ -1961,6 +1963,12 @@ impl App {
                 continue;
             }
             self.images.insert(r.key.clone(), Img::Loading);
+            // Slack's logo is bundled, and drawn as it is, without rounding.
+            if r.url == crate::slack::SLACK_LOGO {
+                let res = image::load_from_memory(SLACK_LOGO_PNG).map_err(|e| e.to_string());
+                self.images.insert(r.key, res.map(Img::Ready).unwrap_or(Img::Failed));
+                continue;
+            }
             self.spawn(move |s| {
                 let path = cache::image_path(&r.key);
                 let bytes = std::fs::read(&path).inspect(|_| cache::touch(&path)).or_else(|_| {

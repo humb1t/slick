@@ -76,7 +76,18 @@ pub struct Users {
     pub apps: HashMap<String, (String, String)>,
 }
 
+/// The "picture address" of Slack's logo, drawn from the bundled file.
+pub const SLACK_LOGO: &str = "slick:slack-logo";
+
 impl Users {
+    /// "Slack" (USLACK, its system notices) is no one users.list names: an
+    /// app, its picture Slack's logo.
+    pub fn with_system(mut self) -> Self {
+        self.bots.insert("USLACK".into());
+        self.avatars.insert("USLACK".into(), SLACK_LOGO.into());
+        self
+    }
+
     /// Someone's status, unless it has expired meanwhile.
     pub fn status(&self, uid: &str) -> Option<&(String, String)> {
         let s = self.statuses.get(uid)?;
@@ -113,7 +124,7 @@ impl Users {
             Some(false) => self.deleted.remove(&id),
             None => false,
         };
-        if let Some(img) = p["image_72"].as_str() {
+        if let Some(img) = p["image_72"].as_str().filter(|_| id != "USLACK") {
             self.avatars.insert(id.clone(), img.to_string());
         }
         // A profile without the status fields says nothing about it.
@@ -704,7 +715,7 @@ impl Slack {
                 users.names.insert(id.to_string(), "?".into());
             }
         }
-        Ok(users)
+        Ok(users.with_system())
     }
 
     /// An app's name and picture, for its messages that don't carry them.
