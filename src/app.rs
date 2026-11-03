@@ -283,6 +283,9 @@ pub enum Action {
     /// Opens the list of sections to move the conversation to.
     MoveMenu(String),
     MoveTo(String, String),
+    /// Opens a section's filters (`section::FILTERS`).
+    FilterMenu(String),
+    SetFilter(String, &'static str),
     CopyName(String),
     CopyLink(String),
     Browser(String),
@@ -1366,6 +1369,15 @@ impl App {
             if members.is_empty() {
                 continue;
             }
+            // The section's filter; one it empties keeps its header (what
+            // muting empties still goes). Silenced has none of its own: the
+            // global "Active only" thins it, starred ones aside.
+            let members = if is_silenced {
+                let thin = self.boot.as_ref().is_some_and(|b| b.sidebar_behavior == "hide_inactive_channels");
+                members.into_iter().filter(|&i| !thin || self.stars.contains(&self.convs[i].id) || self.section_keeps(&self.convs[i], "active")).collect()
+            } else {
+                self.section_filtered(&s.id, &s.kind, &members)
+            };
             let title = match s.kind.as_str() {
                 "stars" => tr("Starred", "Favoritos").to_string(),
                 "direct_messages" => tr("Direct messages", "Mensagens diretas").to_string(),
@@ -2160,6 +2172,13 @@ impl App {
                 items.push((tr("Create a new section", "Criar uma nova seção").to_string(), Action::NewSection(None, Some(key.clone()))));
                 items.push(("".to_string(), Action::Separator));
                 items.extend(self.header_items(key, *collapsed));
+                // Slack's "Section settings" → Filter, the current one beside it.
+                if self.can_filter(key) {
+                    let show = crate::section::filter_name(self.section_show(key, &self.section_kind(key)));
+                    items.push(("".to_string(), Action::Separator));
+                    let label = tr("Section settings: Filter", "Configurações da seção: Filtro");
+                    items.push((format!("{label}\t{show}  ›"), Action::FilterMenu(key.clone())));
+                }
                 items
             }
             _ => return,
@@ -2237,6 +2256,27 @@ impl App {
                 }
             }
             Action::MoveTo(id, to) => self.move_conv(id, to),
+            Action::FilterMenu(key) => {
+                close = false;
+                if let Some(parent) = self.menu.take() {
+                    let kind = self.section_kind(&key);
+                    let show = self.section_show(&key, &kind);
+                    let items = crate::section::filters_for(&kind)
+                        .into_iter()
+                        .map(|f| {
+                            let mark = if f == show { "✓ " } else { "  " };
+                            let desc = if f == "active" { tr("New activity within the last 30 days", "Nova atividade nos últimos 30 dias") } else { "" };
+                            (format!("{mark}{}\t{desc}", crate::section::filter_name(f)), Action::SetFilter(key.clone(), f))
+                        })
+                        .collect();
+                    let x = self.areas.menu.right();
+                    let y = self.areas.menu.y + parent.sel as u16;
+                    let mut sub = Menu::new(x, y, items);
+                    sub.parent = Some(Box::new(parent));
+                    self.menu = Some(sub);
+                }
+            }
+            Action::SetFilter(key, f) => self.set_section_filter(key, f),
             Action::CopyName(t) | Action::CopyLink(t) => self.copy(&t),
             Action::Browser(url) => self.open_url(&url),
             Action::File(click) => self.file_click(click, 0, 0),
@@ -2801,6 +2841,7 @@ impl App {
                 self.account.others_paused.insert(uid, w);
             }
             Ev::Prefs => self.refresh_prefs(),
+            Ev::SidebarPrefs => self.spawn(|s| Event::Boot(s.boot())),
             Ev::Convs => self.spawn(|s| Event::Convs(s.conversations())),
             Ev::Ephemeral { chan, msg } => self.on_ephemeral(chan, msg),
             Ev::User(user) => self.on_user(&user),
