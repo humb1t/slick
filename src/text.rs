@@ -1,6 +1,6 @@
 //! Turns Slack's message payloads (mrkdwn, Block Kit, attachments) into plain text.
 
-use crate::slack::Message;
+use crate::slack::{Conversation, Kind, Message};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
@@ -20,9 +20,38 @@ pub struct Names<'a> {
     pub directory: &'a crate::slack::Directory,
     /// Your user id: mentions of you stand out.
     pub me: &'a str,
+    /// People's photos (user id → URL) and handles (handle → user id).
+    pub avatars: &'a HashMap<String, String>,
+    pub handles: &'a HashMap<String, String>,
+    /// The conversations we're in, for where a shared message was posted.
+    pub convs: &'a [Conversation],
 }
 
 impl Names<'_> {
+    /// Where a conversation is, as a shared message's card says it: its kind
+    /// and its name (a DM: the other person; a group DM: who is in it).
+    pub fn place(&self, id: &str) -> Option<(Kind, String)> {
+        let Some(c) = self.convs.iter().find(|c| c.id == id) else {
+            let kind = if self.private.contains(id) { Kind::Private } else { Kind::Channel };
+            return self.chan(id).map(|n| (kind, n.to_string()));
+        };
+        let label = match c.kind {
+            Kind::Channel | Kind::Private => c.name.clone(),
+            Kind::Direct => c.user.as_deref().map(|u| self.user(u).unwrap_or(u).to_string()).unwrap_or_default(),
+            // mpdm-ana--bruno.silva--leonavas-1 → Ana, Bruno Silva
+            Kind::Group => {
+                let s = c.name.trim_start_matches("mpdm-");
+                let s = s.rsplit_once('-').map(|(a, _)| a).unwrap_or(s);
+                s.split("--")
+                    .filter(|h| self.handles.get(*h).map(String::as_str) != Some(self.me))
+                    .map(|h| self.handles.get(h).and_then(|id| self.user(id)).unwrap_or(h).to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }
+        };
+        Some((c.kind, label))
+    }
+
     pub fn user(&self, id: &str) -> Option<&str> {
         self.users.get(id).or_else(|| self.others.get(id)).map(String::as_str)
     }
@@ -176,6 +205,14 @@ fn attachment(a: &Value, n: &Names) -> String {
     let mut out = String::new();
     if let Some(b) = a["blocks"].as_array() {
         out = blocks(b, n, false);
+    }
+    // A shared message's own rich text.
+    if out.is_empty() {
+        for mb in a["message_blocks"].as_array().into_iter().flatten() {
+            if let Some(b) = mb["message"]["blocks"].as_array() {
+                push_line(&mut out, &blocks(b, n, false));
+            }
+        }
     }
     // Shared messages carry the same content as blocks and as text.
     let keys: &[&str] = if out.is_empty() { &["pretext", "title", "text"] } else { &["pretext", "title"] };

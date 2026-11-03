@@ -1068,6 +1068,7 @@ fn messages(f: &mut Frame, app: &mut App, area: Rect) {
     app.areas.reactions.clear();
     app.areas.message_rows.clear();
     app.areas.buttons.clear();
+    app.areas.shares.clear();
     app.areas.file_buttons.clear();
     app.areas.latest = Rect::default();
     let inner = area.inner(ratatui::layout::Margin { horizontal: 1, vertical: 0 });
@@ -1346,7 +1347,11 @@ pub(crate) fn place(f: &mut Frame, app: &mut App, inner: Rect, r: Rendered, scro
             app.unnamed.push(h.target.clone());
         }
         let rect = Rect::new(inner.x + h.x, inner.y + (pad + h.line - start) as u16, h.w, 1).intersection(inner);
-        app.areas.buttons.push((rect, h.target));
+        // A shared message's card answers after everything on it (`App::on_mouse`).
+        match h.target {
+            blocks::Target::Open { .. } => app.areas.shares.push((rect, h.target)),
+            t => app.areas.buttons.push((rect, t)),
+        }
     }
     for h in files.into_iter().filter(|h| h.line >= start && h.line < end) {
         let rect = Rect::new(inner.x + h.x, inner.y + (pad + h.line - start) as u16, h.w, 1).intersection(inner);
@@ -2326,13 +2331,25 @@ fn lines_with(
         }
         let (top, dx) = (lines.len(), gutter as u16);
         for p in rich.pics {
-            slots.push(Slot { line: top + p.line, x: dx + p.x, cols: p.cols, rows: p.rows, full: Some(p.img.clone()), img: p.img, user: None });
+            // A photo opens its profile; any other picture enlarges.
+            let full = p.user.is_none().then(|| p.full.unwrap_or_else(|| p.img.clone()));
+            slots.push(Slot { line: top + p.line, x: dx + p.x, cols: p.cols, rows: p.rows, full, img: p.img, user: p.user });
         }
         buttons.extend(rich.hits.into_iter().map(|h| blocks::Hit { line: top + h.line, x: dx + h.x, ..h }));
         lines.extend(rich.lines.into_iter().map(|mut l| {
             l.spans.insert(0, Span::raw(indent.clone()));
             l
         }));
+        // A shared message's files: their cards on the lines kept for them.
+        for c in rich.cards {
+            let (card, h) = files::card(&c.file, app.downloads.get(&c.file.id), "", c.w as usize, 0);
+            for (k, l) in card.into_iter().enumerate() {
+                if let Some(line) = lines.get_mut(top + c.line + k) {
+                    line.spans.extend(l.spans);
+                }
+            }
+            file_hits.extend(h.into_iter().map(|h| files::Hit { line: top + c.line + h.line, x: dx + c.x + h.x, ..h }));
+        }
         if m.edited.is_some() {
             edited_mark(&mut lines, top, width, &indent);
         }
