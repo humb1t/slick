@@ -207,6 +207,12 @@ enum Opt {
     UnreadBackground,
     #[cfg(target_os = "linux")]
     Tray,
+    /// Desktop notifications, on or off.
+    #[cfg(target_os = "linux")]
+    Notify,
+    /// The notifications' sound: none, or one of `notify::SOUNDS`.
+    #[cfg(target_os = "linux")]
+    Sound(Option<usize>),
     /// Slack's own account settings, in the browser.
     Slack,
 }
@@ -217,7 +223,12 @@ fn opts() -> Vec<Opt> {
     v.extend([Opt::Spacing(false), Opt::Spacing(true)]);
     v.extend([Opt::Photos, Opt::UnreadBar, Opt::UnreadBackground]);
     #[cfg(target_os = "linux")]
-    v.push(Opt::Tray);
+    {
+        v.push(Opt::Tray);
+        v.push(Opt::Notify);
+        v.push(Opt::Sound(None));
+        v.extend((0..crate::notify::SOUNDS.len()).map(|i| Opt::Sound(Some(i))));
+    }
     v.push(Opt::Slack);
     v
 }
@@ -1107,6 +1118,26 @@ impl App {
                     self.error = Some(trf!("didn't save the setting: {e}", "não salvou a configuração: {e}"));
                 }
             }
+            #[cfg(target_os = "linux")]
+            Opt::Notify => {
+                let on = !crate::notify::enabled();
+                crate::notify::set_enabled(on);
+                if let Err(e) = crate::config::set(&[("notifications", on.to_string())]) {
+                    self.error = Some(trf!("didn't save the setting: {e}", "não salvou a configuração: {e}"));
+                }
+            }
+            #[cfg(target_os = "linux")]
+            Opt::Sound(i) => {
+                let name = i.map(|i| crate::notify::SOUNDS[i].0);
+                // Picked, it plays once, to hear what it is.
+                if let Some(n) = name {
+                    crate::notify::play(n);
+                }
+                crate::notify::set_sound(name.map(String::from));
+                if let Err(e) = crate::config::set(&[("notification_sound", name.unwrap_or("none").to_string())]) {
+                    self.error = Some(trf!("didn't save the setting: {e}", "não salvou a configuração: {e}"));
+                }
+            }
             Opt::Slack => {
                 if let Some(u) = self.team_url() {
                     self.open_url(&format!("{u}/account/settings"));
@@ -1499,7 +1530,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     crate::pause::draw(f, app);
 }
 
-/// slick's settings: the language, the clock, the message spacing, the sidebar's photos and unread marks, the tray icon and a way to Slack's own.
+/// slick's settings: the language, the clock, the message spacing, the sidebar's photos and unread marks, the tray icon, notifications and their sound, and a way to Slack's own.
 fn draw_settings(f: &mut Frame, app: &mut App) {
     let Some(sel) = app.account.settings else { return };
     let all = opts();
@@ -1515,7 +1546,9 @@ fn draw_settings(f: &mut Frame, app: &mut App) {
             Opt::Photos | Opt::UnreadBar | Opt::UnreadBackground => 3,
             #[cfg(target_os = "linux")]
             Opt::Tray => 4,
-            Opt::Slack => 5,
+            #[cfg(target_os = "linux")]
+            Opt::Notify | Opt::Sound(_) => 5,
+            Opt::Slack => 6,
         };
         if last != Some(group) {
             if last.is_some() {
@@ -1527,6 +1560,7 @@ fn draw_settings(f: &mut Frame, app: &mut App) {
                 2 => lines.push((None, heading(tr("Message spacing", "Espaçamento das mensagens")))),
                 3 => lines.push((None, heading(tr("Sidebar", "Barra lateral")))),
                 4 => lines.push((None, heading(tr("System tray", "Bandeja do sistema")))),
+                5 => lines.push((None, heading(tr("Notifications", "Notificações")))),
                 _ => lines.push((None, heading("Slack"))),
             }
             last = Some(group);
@@ -1546,6 +1580,15 @@ fn draw_settings(f: &mut Frame, app: &mut App) {
             Opt::UnreadBackground => format!("{} {}", if app.unread_background { "[✓]" } else { "[ ]" }, tr("Highlight unread conversations", "Fundo nas não lidas")),
             #[cfg(target_os = "linux")]
             Opt::Tray => format!("{} {}", if app.account.tray { "[✓]" } else { "[ ]" }, tr("Show the tray icon", "Mostrar o ícone na bandeja")),
+            #[cfg(target_os = "linux")]
+            Opt::Notify => format!("{} {}", if crate::notify::enabled() { "[✓]" } else { "[ ]" }, tr("Desktop notifications", "Notificações na área de trabalho")),
+            #[cfg(target_os = "linux")]
+            Opt::Sound(i) => {
+                let name = i.map(|i| crate::notify::SOUNDS[i]);
+                let label = name.map_or(tr("No sound", "Sem som"), |(_, en, pt)| tr(en, pt));
+                let on = crate::notify::sound().as_deref() == name.map(|n| n.0);
+                format!("{} {label}", if on { "(•)" } else { "( )" })
+            }
             Opt::Slack => format!("{} ↗", tr("Account settings", "Configurações da conta")),
         };
         lines.push((Some(i), Line::from(text)));

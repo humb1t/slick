@@ -1695,10 +1695,13 @@ impl App {
             self.find_new_line(&id, false);
         }
         // Out of focus (opened from outside) it stays unread until the window
-        // gets the keyboard, which then marks it read (`set_focused`).
-        if let Some(c) = self.counts.get_mut(&id).filter(|_| self.focused) {
+        // gets the keyboard, which then marks it read (`set_focused`). In
+        // focus it's read in Slack too right away: a fetch with nothing newer
+        // than the cache wouldn't, and the badge would come back.
+        if let Some(c) = self.counts.get_mut(&id).filter(|c| self.focused && (c.unread || c.mentions > 0)) {
             c.unread = false;
             c.mentions = 0;
+            self.mark_read(&id);
         }
         self.drop_edit();
         self.selection = None;
@@ -1792,7 +1795,11 @@ impl App {
         if self.convs.iter().any(|c| c.id == chan && c.guest) {
             return;
         }
-        if let Some(ts) = self.messages.get(chan).and_then(|m| m.last()).map(|m| m.ts.clone()) {
+        // Up to the newest the counts know when the messages aren't there
+        // yet (opened from a notification, still loading), never behind it.
+        let loaded = self.messages.get(chan).and_then(|m| m.last()).map(|m| m.ts.clone());
+        let counted = self.counts.get(chan).map(|c| c.latest.clone()).filter(|l| !l.is_empty());
+        if let Some(ts) = loaded.into_iter().chain(counted).max() {
             let chan = chan.to_string();
             self.spawn_quiet(move |s| {
                 let _ = s.mark(&chan, &ts);
