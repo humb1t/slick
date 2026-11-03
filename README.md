@@ -31,6 +31,8 @@ screen (from a local cache) and refreshes in the background.
   "is typing" (under the message box, and as "•••" in the sidebar) arrive as
   they happen.
 - Threads in a side panel, with "also send to channel".
+- Activity (`Ctrl+Shift+M`): mentions, thread replies and reactions from Slack's own feed, and
+  your recent channels by their latest message, with Unreads.
 - Reactions and a reaction picker; `:` autocomplete in the message box.
 - Custom workspace emoji, animated ones included (played at the GIF's own pace).
 - Inline images (kitty graphics, sixel, iTerm2, or half-blocks as a fallback),
@@ -176,6 +178,7 @@ for creating that app with the scopes slick uses.
 | `Alt+←` `Alt+→` | back / forward through the conversations you opened |
 | `Shift+Esc` | mark all conversations as read |
 | `Ctrl+Shift+T` | Threads |
+| `Ctrl+Shift+M` | Activity: All / Mentions / Threads / Reactions / Recent channels (`←→` tab, `u` unreads, `Enter` open, `m` menu) |
 | `Ctrl+.` | close the thread or profile panel |
 | `Tab` | sidebar → message box → thread |
 | `Shift+J` / `Shift+K` | move a section up or down |

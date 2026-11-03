@@ -113,6 +113,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // The Threads view takes the conversation's place, header and box included.
     if app.threads.open {
         crate::threads::draw(f, app, right);
+    } else if app.activity.open {
+        crate::activity::draw(f, app, right);
     } else {
         conversation_header(f, app, header);
         messages(f, app, msgs);
@@ -617,6 +619,10 @@ pub(crate) fn row_attention(app: &App, row: &Row) -> (bool, bool) {
             (unread && !app.muted(c), mentions > 0)
         }
         Row::Threads => (app.threads.unread, app.threads.mentions > 0),
+        Row::Activity => {
+            let (unread, mentions) = crate::activity::attention(app);
+            (unread, mentions > 0)
+        }
         // A collapsed section's header isn't a row to scroll to.
         _ => (false, false),
     }
@@ -695,6 +701,7 @@ fn sidebar_row<'a>(app: &App, row: &Row, width: usize, photos: bool) -> (ListIte
     match row {
         Row::Gap => (ListItem::new(""), None),
         Row::Threads => (crate::threads::sidebar_row(app, width), None),
+        Row::Activity => (crate::activity::sidebar_row(app, width), None),
         Row::Header { title, emoji, collapsed, unread, .. } => {
             let arrow = if *collapsed { "▸" } else { "▾" };
             let style = if *unread { Style::new().bold() } else { dim().bold() };
@@ -2908,6 +2915,10 @@ fn status_line(f: &mut Frame, app: &App, area: Rect) {
             Focus::Input if app.threads.open => tr(
                 "↑↓ j k pick a thread · Enter open · r reply · e more replies · Esc list",
                 "↑↓ j k escolher conversa · Enter abrir · r responder · e mais respostas · Esc lista",
+            ),
+            Focus::Input if app.activity.open => tr(
+                "↑↓ j k pick · ←→ tab · Enter open · m menu · u unreads · Esc list",
+                "↑↓ j k escolher · ←→ aba · Enter abrir · m menu · u não lidas · Esc lista",
             ),
             Focus::Thread if app.thread.as_ref().is_some_and(|t| t.inline) => tr(
                 "Enter send · ↑↓ other thread (empty box) · Enter open (empty box) · Ctrl+B also send · Esc list",
