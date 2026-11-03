@@ -130,7 +130,7 @@ impl App {
         self.pins.tab = tab;
     }
 
-    fn scroll_pins(&mut self, delta: isize) {
+    pub(crate) fn scroll_pins(&mut self, delta: isize) {
         self.pins.scroll = self.pins.scroll.saturating_add_signed(delta).min(self.pins.max_scroll);
     }
 
@@ -173,8 +173,8 @@ impl App {
             return false;
         }
         match k.code {
-            KeyCode::PageUp => self.scroll_pins(-10),
-            KeyCode::PageDown => self.scroll_pins(10),
+            KeyCode::PageUp => self.scroll_pins(-(crate::wheel::page(self.areas.messages.height as usize) as isize)),
+            KeyCode::PageDown => self.scroll_pins(crate::wheel::page(self.areas.messages.height as usize) as isize),
             KeyCode::Up | KeyCode::Down => {
                 let delta = if k.code == KeyCode::Up { -1 } else { 1 };
                 if !self.editor.vertical(self.input_width, delta) {
@@ -203,8 +203,7 @@ impl App {
             return false;
         }
         match m.kind {
-            MouseEventKind::ScrollUp => self.scroll_pins(-3),
-            MouseEventKind::ScrollDown => self.scroll_pins(3),
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => self.wheel(&m, crate::wheel::Pane::Pins),
             _ if !left => return false,
             // "N respostas" opens the thread, as in the conversation.
             _ if self.areas.thread_links.iter().any(|(r, _)| r.contains(at)) => return false,

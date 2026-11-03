@@ -418,13 +418,19 @@ impl App {
         }
     }
 
+    /// The wheel's move, `delta` lines down.
+    pub(crate) fn scroll_help(&mut self, delta: isize) {
+        if let Some(h) = self.help.as_mut() {
+            h.scroll = h.scroll.saturating_add_signed(delta).min(h.max);
+        }
+    }
+
     /// The wheel scrolls; a click outside closes.
     pub(crate) fn help_mouse(&mut self, m: MouseEvent) {
         let at = Position::new(m.column, m.row);
         let Some(h) = self.help.as_mut() else { return };
         match m.kind {
-            MouseEventKind::ScrollUp => h.scroll = h.scroll.saturating_sub(3),
-            MouseEventKind::ScrollDown => h.scroll = (h.scroll + 3).min(h.max),
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => self.wheel(&m, crate::wheel::Pane::Help),
             MouseEventKind::Down(_) if !h.rect.contains(at) => self.help = None,
             _ => return,
         }
