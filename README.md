@@ -31,6 +31,8 @@ screen (from a local cache) and refreshes in the background.
 - Real time, over Slack's own websocket: new messages, unread counts and
   "is typing" (under the message box, and as "•••" in the sidebar) arrive as
   they happen.
+- Activity (`Ctrl+Shift+M`): mentions, threads, reactions and recent channels.
+- Desktop notifications for DMs, mentions and followed threads, with an optional sound.
 - Threads in a side panel, with "also send to channel".
 - Activity (`Ctrl+Shift+M`): mentions, thread replies and reactions from Slack's own feed, and
   your recent channels by their latest message, with Unreads.
@@ -92,7 +94,7 @@ The script ([install.sh](install.sh)) downloads the latest
 (built on Ubuntu 24.04, so glibc 2.39 or newer), checks its SHA-256 and puts
 `slick` in `~/.local/bin`, without sudo. It warns when that folder is not on
 your `PATH`. `SLICK_INSTALL_DIR` changes the folder and
-`SLICK_VERSION=v0.4.6` picks a version. Installed this way, slick updates itself
+`SLICK_VERSION=v0.5.0` picks a version. Installed this way, slick updates itself
 (see below).
 
 ### Windows
@@ -110,7 +112,7 @@ irm https://slick.leonavas.com/install.ps1 | iex
 
 The script ([install.ps1](install.ps1)) downloads the latest release, checks its
 SHA-256, puts `slick.exe` in `%LOCALAPPDATA%\Programs\slick` and adds that folder
-to your user `PATH`, without admin rights (`$env:SLICK_VERSION = 'v0.4.6'` picks
+to your user `PATH`, without admin rights (`$env:SLICK_VERSION = 'v0.5.0'` picks
 a version). Open a new terminal and run `slick`. Only x86_64 for now.
 
 ### From source
