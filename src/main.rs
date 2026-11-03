@@ -258,6 +258,8 @@ fn main() {
     let mut ws = workspaces::Workspaces::new(picker, owner);
     // Zooming the terminal changes the cell's pixels: images are re-encoded for the new size.
     let (mut cell, mut cell_at) = (cell_px(), Instant::now());
+    // Opening it counts as being there.
+    rtm::touch();
     while !ws.quit() {
         if cell_at.elapsed() >= Duration::from_secs(1) {
             cell_at = Instant::now();
@@ -321,6 +323,7 @@ fn main() {
             // that never report focus.
             if matches!(ev, Ok(TermEvent::Key(_) | TermEvent::Mouse(_) | TermEvent::Paste(_))) {
                 app.set_focused(true);
+                rtm::touch();
             }
             match ev {
                 // Ctrl+1..9 picks the workspace before the app sees the key.

@@ -24,6 +24,8 @@ pub struct Slack {
     creds: Arc<RwLock<Creds>>,
     /// The people whose presence this workspace's socket reports (`rtm`).
     wanted: Arc<Mutex<Vec<String>>>,
+    /// Away set by hand: the socket stops saying someone is there (`rtm`).
+    away: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Clone, Debug)]
@@ -417,7 +419,7 @@ impl Slack {
             .timeout(Duration::from_secs(20))
             .user_agent(concat!("slick/", env!("CARGO_PKG_VERSION")))
             .build();
-        Self { agent, creds: Arc::new(RwLock::new(creds)), wanted: Default::default() }
+        Self { agent, creds: Arc::new(RwLock::new(creds)), wanted: Default::default(), away: Default::default() }
     }
 
     /// The session in use (`config::save_workspace` after `auth.test`, the cookie check).
@@ -437,6 +439,15 @@ impl Slack {
     /// The presence list as last set; each connection subscribes to it (again) after `hello`.
     pub fn wanted(&self) -> Vec<String> {
         self.wanted.lock().map(|w| w.clone()).unwrap_or_default()
+    }
+
+    /// Whether you set yourself away by hand, as last heard.
+    pub fn set_away(&self, away: bool) {
+        self.away.store(away, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn away(&self) -> bool {
+        self.away.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// The real-time websocket's address, and the session cookie it also wants.

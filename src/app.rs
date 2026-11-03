@@ -83,6 +83,9 @@ pub enum Event {
     SidebarSaved(Res<()>),
     /// The result of checking credentials typed into the login screen.
     Login(Res<(AuthInfo, Creds)>),
+    /// Another workspace's new `d` cookie, which Slack took here too
+    /// (`Workspaces::share_cookie`).
+    Cookie(Res<(AuthInfo, Creds)>),
     /// A DM opened or a channel created from the "new" button; `warning`
     /// when the channel exists but its description was not saved.
     Composed { res: Res<Conversation>, warning: Option<String> },
@@ -653,6 +656,8 @@ pub struct App {
     pub adding: bool,
     /// That sign-in, checked, for `Workspaces` to decide on.
     pub added: Option<(AuthInfo, Creds)>,
+    /// A session signed in to again here, whose cookie `Workspaces` offers the others.
+    pub signed_in: Option<(String, Creds)>,
     /// Esc on the "add" sign-in: `Workspaces` drops this one.
     pub discard: bool,
     /// Signed out with other workspaces left: `Workspaces` drops this one.
@@ -789,6 +794,7 @@ impl App {
             switch_req: None,
             adding: false,
             added: None,
+            signed_in: None,
             discard: false,
             signed_out: false,
             dnd_all: None,
@@ -2531,6 +2537,8 @@ impl App {
                 self.resort();
             }
             Event::Login(res) => self.finish_login(res),
+            Event::Cookie(Ok((me, creds))) => self.take_cookie(me, creds),
+            Event::Cookie(Err(_)) => {}
             Event::Composed { res, warning } => self.composed(res, warning),
             Event::Replies { chan, ts, res } => self.on_replies(chan, ts, res),
             Event::Replied { chan, ts, text, res } => self.on_replied(chan, ts, text, res),
@@ -3125,6 +3133,7 @@ impl App {
                     let _ = config::logout();
                 }
                 let saved = crate::workspaces::save_session(&me, &creds);
+                self.signed_in = Some((me.team_id.clone(), creds.clone()));
                 self.sign_in(creds);
                 if let Err(e) = saved {
                     self.error = Some(trf!("didn't save the config: {e}", "não salvou o config: {e}"));
@@ -3140,6 +3149,18 @@ impl App {
                     });
                 }
             }
+        }
+    }
+
+    /// Slack's new cookie works here too: saved, and an expired session comes back.
+    fn take_cookie(&mut self, me: AuthInfo, creds: Creds) {
+        if let Err(e) = crate::workspaces::save_session(&me, &creds) {
+            self.error = Some(trf!("didn't save the config: {e}", "não salvou o config: {e}"));
+        }
+        if self.login.is_some() && !self.adding {
+            self.sign_in(creds);
+        } else {
+            self.slack.set_creds(creds);
         }
     }
 

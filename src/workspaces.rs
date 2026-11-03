@@ -273,6 +273,9 @@ impl Workspaces {
         if let Some(i) = self.list.iter().position(|w| w.app.added.is_some()) {
             self.on_added(i);
         }
+        if let Some((team, creds)) = self.list.iter_mut().find_map(|w| w.app.signed_in.take()) {
+            self.share_cookie(&team, &creds);
+        }
         while let Some(i) = self.list.iter().position(|w| w.app.discard || w.app.signed_out) {
             if self.list.len() == 1 {
                 let app = &mut self.list[0].app;
@@ -323,6 +326,7 @@ impl Workspaces {
     fn on_added(&mut self, i: usize) {
         let Some((me, creds)) = self.list[i].app.added.take() else { return };
         let saved = save_session(&me, &creds);
+        self.share_cookie(&me.team_id, &creds);
         let same = |w: &Ws| w.team_id.as_deref() == Some(me.team_id.as_str()) || w.app.me.as_ref().is_some_and(|m| m.team_id == me.team_id);
         match (0..self.list.len()).find(|&j| j != i && same(&self.list[j])) {
             Some(j) => {
@@ -346,6 +350,35 @@ impl Workspaces {
         }
         if let Err(e) = saved {
             self.active_mut().error = Some(trf!("didn't save the config: {e}", "não salvou o config: {e}"));
+        }
+    }
+
+    /// Slack's `d` cookie is one per browser, every workspace's, and signing
+    /// in again replaces it: the one the others were added with stops
+    /// working. Each that takes the new one (`auth.test` with its token)
+    /// gets it; one that doesn't (a session pasted from another browser)
+    /// keeps its own.
+    fn share_cookie(&self, team: &str, creds: &Creds) {
+        let Some(cookie) = creds.cookie.clone().filter(|_| !self.env) else { return };
+        let confs = config::workspaces();
+        for w in &self.list {
+            let Some(id) = w.team_id.clone().filter(|id| id != team) else { continue };
+            let Some(c) = confs.iter().find(|c| c.team_id.as_ref() == Some(&id)) else { continue };
+            let has = |c: &Creds| c.cookie.as_ref() == Some(&cookie);
+            if !c.creds.token.starts_with("xoxc-") || (has(&c.creds) && has(&w.app.slack().creds())) {
+                continue;
+            }
+            let new = Creds { token: c.creds.token.clone(), cookie: Some(cookie.clone()) };
+            w.app.spawn(move |_| {
+                let res = Slack::new(new.clone()).auth().and_then(|me| {
+                    if me.team_id == id {
+                        Ok((me, new))
+                    } else {
+                        Err(tr("another workspace", "outro workspace").into())
+                    }
+                });
+                Event::Cookie(res)
+            });
         }
     }
 

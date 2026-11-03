@@ -12,6 +12,7 @@ use crate::slack::Slack;
 use serde_json::Value;
 use std::net::TcpStream;
 use std::sync::mpsc::Sender;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::Message as Frame;
@@ -64,6 +65,28 @@ pub enum Ev {
 /// Slack expects a word from the client now and then; quiet sockets get dropped.
 const PING_EVERY: Duration = Duration::from_secs(30);
 
+/// Slack's "auto" presence is active only while a client says someone is
+/// there: a `tickle` every few minutes, as Slack's desktop app does.
+const TICKLE_EVERY: Duration = Duration::from_secs(240);
+
+/// No key or click for this long and the tickles stop: Slack lets us go away.
+const IDLE_AFTER: Duration = Duration::from_secs(600);
+
+/// The last key, click or paste, in any workspace.
+static LAST_INPUT: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// Someone is at the keyboard (`main`, on every key, click or paste).
+pub fn touch() {
+    if let Ok(mut t) = LAST_INPUT.lock() {
+        *t = Some(Instant::now());
+    }
+}
+
+/// Nobody has typed or clicked for `IDLE_AFTER`.
+fn idle() -> bool {
+    LAST_INPUT.lock().ok().and_then(|t| *t).is_none_or(|t| t.elapsed() >= IDLE_AFTER)
+}
+
 /// Runs for the life of the process, reconnecting with a growing pause.
 pub fn start(slack: Slack, tx: Sender<Event>) {
     std::thread::spawn(move || {
@@ -100,6 +123,8 @@ fn run(slack: &Slack, tx: &Sender<Event>) -> bool {
         return true;
     }
     let (mut last_ping, mut id) = (Instant::now(), 0u64);
+    // The last tickle; `None` sends one at once, as when you come back.
+    let mut last_tickle: Option<Instant> = None;
     // What this connection is subscribed to; `None` until `hello`.
     let mut subscribed: Option<Vec<String>> = None;
     loop {
@@ -116,6 +141,16 @@ fn run(slack: &Slack, tx: &Sender<Event>) -> bool {
             id += 1;
             last_ping = Instant::now();
             if ws.send(Frame::text(format!(r#"{{"id":{id},"type":"ping"}}"#))).is_err() {
+                return true;
+            }
+        }
+        // Not while idle, nor while away by hand: away is only what you set.
+        if subscribed.is_none() || idle() || slack.away() {
+            last_tickle = None;
+        } else if last_tickle.is_none_or(|t| t.elapsed() >= TICKLE_EVERY) {
+            id += 1;
+            last_tickle = Some(Instant::now());
+            if ws.send(Frame::text(format!(r#"{{"id":{id},"type":"tickle"}}"#))).is_err() {
                 return true;
             }
         }

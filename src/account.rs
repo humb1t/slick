@@ -690,6 +690,7 @@ impl App {
             Ev::Presence(Ok((online, away))) => {
                 self.account.online = online;
                 self.account.away = away;
+                self.slack().set_away(away);
                 if let Some(me) = self.my_id() {
                     self.on_presence(vec![(me, online)]);
                 }
@@ -948,6 +949,7 @@ impl App {
 
     fn show_away(&mut self, away: bool) {
         self.account.away = away;
+        self.slack().set_away(away);
         self.account.online = !away;
         if let Some(me) = self.my_id() {
             self.on_presence(vec![(me, !away)]);
