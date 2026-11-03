@@ -3438,6 +3438,8 @@ impl App {
             (KeyCode::Char('c'), true) => return self.quit = true,
             // Ctrl+T too, as in Slack.
             (KeyCode::Char('k' | 't'), true) => return self.open_search(),
+            // Ctrl+F: the search on the open conversation, as in Slack.
+            (KeyCode::Char('f'), true) if self.current.is_some() => return self.search_here(),
             (KeyCode::Char('r'), true) => {
                 self.error = None;
                 self.dir_force = true;
