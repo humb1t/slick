@@ -1414,10 +1414,13 @@ impl App {
             let unread = self.unread(&self.convs[*i].id).0;
             (!unread, std::cmp::Reverse(if unread { latest(i) } else { String::new() }))
         });
-        // Slack's "Apps" (its recent_apps section): the apps whose DM is open.
+        // Slack's "Apps" (its recent_apps section): the apps whose DM is open
+        // and not muted; a muted one only while unread or open, as Slack shows it.
         apps.retain(|&i| {
             let id = &self.convs[i].id;
-            open.is_none_or(|o| o.contains(id)) || self.unread(id).0 || self.current.as_ref() == Some(id)
+            let (unread, current) = (self.unread(id).0, self.current.as_ref() == Some(id));
+            let muted = self.dm_muted(id);
+            (open.is_none_or(|o| o.contains(id)) && !muted) || unread || current
         });
         // Slackbot first (its own sort group), then by name.
         apps.sort_by_key(|&i| (dm_user(i) != "USLACKBOT", self.label(&self.convs[i]).to_lowercase()));

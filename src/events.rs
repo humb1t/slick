@@ -322,6 +322,11 @@ impl App {
         !matches!(c.kind, Kind::Direct | Kind::Group) && self.events.prefs.get(&c.id).is_some_and(|p| p.muted)
     }
 
+    /// A DM muted in Slack: the Apps section leaves out a read one.
+    pub(crate) fn dm_muted(&self, id: &str) -> bool {
+        self.events.prefs.get(id).is_some_and(|p| p.muted)
+    }
+
     /// The new counts: conversations whose newest message moved get their
     /// unread messages fetched for the preview.
     pub(crate) fn on_counts(&mut self, counts: HashMap<String, Count>) {
