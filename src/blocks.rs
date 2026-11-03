@@ -133,6 +133,52 @@ pub enum Piece {
     Image { img: ImgRef, w: u32, h: u32, title: String },
     /// A legacy attachment: its own pieces behind a colored bar.
     Bar(Color, Vec<Piece>),
+    /// An app's card for a link (Slack's work object).
+    Card(Box<Card>),
+}
+
+/// An app's card for a link (Slack's work object, such as a Jira issue): the
+/// app's name above, the item's icon, title and kind, its fields, when its
+/// data is from and the app's buttons.
+#[derive(Clone)]
+pub struct Card {
+    pub header: String,
+    pub title: String,
+    pub subtitle: String,
+    pub icon: Option<ImgRef>,
+    /// Each field's label and values.
+    pub fields: Vec<(String, Vec<Tag>)>,
+    /// What `chat.refreshUnfurl` asks for; empty: no Refresh.
+    pub entity: String,
+    /// When the app says it last changed (Unix seconds); 0 when it doesn't.
+    pub updated: i64,
+    /// The message it belongs to.
+    pub ts: String,
+    /// Where a click on it goes, and the link the message had.
+    pub url: String,
+    pub link: String,
+    pub actions: Vec<Button>,
+    /// The app's other actions, in the menu by its name.
+    pub more: Vec<Button>,
+    /// Set by the UI before drawing it.
+    pub refresh: Refresh,
+}
+
+/// A field's value: its text, Slack's color name for it and a picture (a person's).
+#[derive(Clone)]
+pub struct Tag {
+    pub text: String,
+    pub color: String,
+    pub icon: Option<ImgRef>,
+}
+
+/// Where a card's Refresh is: the spinner's frame while the app answers.
+#[derive(Clone, Copy, Default, PartialEq)]
+pub enum Refresh {
+    #[default]
+    Idle,
+    Busy(usize),
+    Failed,
 }
 
 /// What a click on a message does.
@@ -145,6 +191,11 @@ pub enum Target {
     Channel(String),
     /// A code block's copy button: the text it copies.
     Copy(String),
+    /// A card's app name: a menu with its other actions and the link's.
+    CardMenu { url: String, link: String, more: Vec<Button> },
+    CopyLink(String),
+    /// A card's Refresh (`chat.refreshUnfurl`).
+    Refresh { ts: String, entity: String },
 }
 
 /// Where an image goes, in cells from the top left of the laid-out text.
@@ -373,6 +424,10 @@ fn control(e: &Value, n: &Names, block_id: &str, ts: &str) -> Option<Button> {
 }
 
 fn attachment(a: &Value, n: &Names, ts: &str) -> Vec<Piece> {
+    // Its blocks are only the fallback for clients without cards.
+    if let Some(c) = card(a, n, ts) {
+        return vec![Piece::Card(Box::new(c))];
+    }
     let get = |k: &str| a[k].as_str().filter(|s| !s.is_empty());
     let line = |segs: Vec<Seg>| Piece::Text(vec![Para::plain(segs)], None);
     let mut out = Vec::new();
@@ -441,6 +496,85 @@ fn attachment(a: &Value, n: &Names, ts: &str) -> Vec<Piece> {
         out.push(Piece::Bar(color(a), inner));
     }
     out
+}
+
+/// The text of a value that may be a string, a number or a text object.
+fn any_text(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Number(x) => x.to_string(),
+        _ => v["text"].as_str().unwrap_or("").to_string(),
+    }
+}
+
+/// Seconds, milliseconds or a date, as Unix seconds; 0 when it's none.
+fn when(v: &Value) -> i64 {
+    let secs = |v: f64| if v < 1e12 { v as i64 } else { (v / 1000.0) as i64 };
+    match v {
+        Value::Number(x) => x.as_f64().map(secs).unwrap_or(0),
+        Value::String(s) => s
+            .parse::<f64>()
+            .map(secs)
+            .or_else(|_| chrono::DateTime::parse_from_rfc3339(s).map(|d| d.timestamp()))
+            .unwrap_or(0),
+        _ => 0,
+    }
+}
+
+/// An attachment's work object, from its expanded layout; None without a title.
+fn card(a: &Value, n: &Names, ts: &str) -> Option<Card> {
+    let e = &a["work_object_entity"];
+    let l = &e["layouts"]["expanded"];
+    let title = text::shortcodes(&any_text(&l["title"]));
+    if title.is_empty() {
+        return None;
+    }
+    let pic = |v: &Value| v.as_str().filter(|u| !u.is_empty()).map(|u| block_img(u, ""));
+    let fields = elements(&l["fields"])
+        .filter_map(|f| {
+            let mut tags: Vec<Tag> = f["tag"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|g| Tag { text: any_text(&g["text"]), color: str_of(&g["color"]), icon: pic(&g["icon_url"]) })
+                .filter(|t| !t.text.is_empty())
+                .collect();
+            if tags.is_empty() {
+                let t = [any_text(&f["text"]), any_text(&f["value"])].into_iter().find(|t| !t.is_empty())?;
+                tags.push(Tag { text: t, color: String::new(), icon: None });
+            }
+            Some((any_text(&f["label"]), tags))
+        })
+        .collect();
+    // A button that is also among the fallback blocks answers as that one.
+    let ctl = |x: &Value| {
+        let mut b = control(x, n, x["block_id"].as_str().unwrap_or(""), ts)?;
+        for blk in a["blocks"].as_array().into_iter().flatten().filter(|b| b["type"] == "actions") {
+            if let Some(y) = elements(blk).find(|y| y["type"] == x["type"] && y["action_id"] == x["action_id"]) {
+                b.block_id = str_of(&blk["block_id"]);
+                b.value = str_of(&y["value"]);
+            }
+        }
+        Some(b)
+    };
+    let acts = &l["actions"];
+    let first = |vs: [&Value; 3]| vs.iter().find_map(|v| v.as_str().filter(|s| !s.is_empty())).unwrap_or("").to_string();
+    let header = [any_text(&l["header_title"]), str_of(&e["app_name"]), str_of(&e["product_name"])].into_iter().find(|s| !s.is_empty());
+    Some(Card {
+        header: header.unwrap_or_default(),
+        title,
+        subtitle: text::shortcodes(&any_text(&l["subtitle"])),
+        icon: pic(&l["product_icon"]["image_url"]).or_else(|| pic(&e["app_icons"]["image_36"])),
+        fields,
+        entity: str_of(&e["entity_id"]),
+        updated: when(&l["updated_at"]),
+        ts: ts.to_string(),
+        url: first([&e["external_url"], &a["app_unfurl_url"], &a["from_url"]]),
+        link: first([&a["from_url"], &a["app_unfurl_url"], &e["external_url"]]),
+        actions: acts["primary_actions"].as_array().into_iter().flatten().filter_map(ctl).collect(),
+        more: acts["overflow_actions"]["app_actions"].as_array().into_iter().flatten().filter_map(ctl).collect(),
+        refresh: Refresh::Idle,
+    })
 }
 
 fn color(a: &Value) -> Color {
@@ -733,6 +867,22 @@ fn rich_inline(e: &Value, base: Style, n: &Names, out: &mut Vec<Seg>) {
             (None, Some(url)) => custom_emoji(s("name"), url, style),
             (None, None) => Seg::new(text::shortcodes(&format!(":{}:", s("name"))), style),
         },
+        // A link an app turned into a card: its icon and title on the
+        // mentions' tint, as in Slack.
+        "attachment_mention" => {
+            let url = Some(s("url").to_string()).filter(|u| !u.is_empty());
+            let shown = if s("text").is_empty() { s("url") } else { s("text") };
+            let style = style.fg(PILL_FG).bg(PILL_BG);
+            let icon = e["icon_url"].as_str().filter(|u| !u.is_empty());
+            let lead = Seg { text: "\u{a0}".into(), style, url: url.clone(), ..Default::default() };
+            push(out, lead);
+            if let Some(u) = icon {
+                out.push(Seg { text: "\u{3000}".into(), style, url: url.clone(), emoji: Some(block_img(u, "")), ..Default::default() });
+                out.push(Seg { text: "\u{a0}".into(), style, url: url.clone(), ..Default::default() });
+            }
+            out.push(Seg { text: format!("{}\u{a0}", text::shortcodes(shown).replace(' ', "\u{a0}")), style, url, ..Default::default() });
+            return;
+        }
         "date" => Seg::new(s("fallback"), style),
         "color" => Seg::new(s("value"), style),
         _ => return,
@@ -816,9 +966,236 @@ pub fn render(pieces: &[Piece], width: usize, font: Option<(u16, u16)>, base: St
                 let sub = render(inner, width.saturating_sub(2), font, base);
                 nest(&mut out, sub, Span::styled("▎ ", Style::new().fg(*color)));
             }
+            Piece::Card(c) => card_box(&mut out, c, width, base),
         }
     }
     out
+}
+
+/// A card is at most this wide, as Slack's.
+const CARD_MAX: usize = 64;
+const CARD_BORDER: Color = Color::Indexed(240);
+/// Nerd Font: an arrow out of a box, and a link.
+const OPEN: &str = "\u{f08e}";
+const LINK: &str = "\u{f0c1}";
+const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// A field's value on a tint of its color, as in Slack.
+fn tag_bg(color: &str) -> Option<Color> {
+    Some(match color {
+        "green" => Color::Rgb(0x1E, 0x3B, 0x2A),
+        "blue" => Color::Rgb(0x15, 0x34, 0x4B),
+        "red" => Color::Rgb(0x4B, 0x1C, 0x22),
+        "yellow" => Color::Rgb(0x4A, 0x3E, 0x12),
+        "orange" => Color::Rgb(0x4D, 0x2E, 0x14),
+        "purple" => Color::Rgb(0x36, 0x24, 0x4B),
+        "" => return None,
+        _ => Color::Indexed(237),
+    })
+}
+
+/// When the card's data is from: "Updated 5 min ago" once the app says
+/// when it changed, else the message's time, "As of today at 15:58".
+pub fn card_stamp(c: &Card) -> String {
+    use chrono::{Local, TimeZone};
+    let now = Local::now();
+    let date = |t: &chrono::DateTime<Local>| {
+        let (d, mo) = (chrono::Datelike::day(t), crate::i18n::month(t));
+        let year = chrono::Datelike::year(t);
+        let other = year != chrono::Datelike::year(&now);
+        match (crate::i18n::is_pt(), other) {
+            (true, false) => format!("{d} de {mo}"),
+            (true, true) => format!("{d} de {mo} de {year}"),
+            (false, false) => format!("{mo} {}", crate::i18n::ordinal(d)),
+            (false, true) => format!("{mo} {}, {year}", crate::i18n::ordinal(d)),
+        }
+    };
+    if c.updated > 0 {
+        let Some(t) = Local.timestamp_opt(c.updated, 0).single() else { return String::new() };
+        let secs = (now - t).num_seconds().max(0);
+        let (mins, hours) = (secs / 60, secs / 3600);
+        let days = (now.date_naive() - t.date_naive()).num_days();
+        return match () {
+            _ if secs < 60 => tr("Updated just now", "Atualizado agora").into(),
+            _ if mins < 60 => trf!("Updated {mins} min ago", "Atualizado há {mins} min"),
+            _ if hours == 1 => tr("Updated 1 hour ago", "Atualizado há 1 hora").into(),
+            _ if hours < 24 => trf!("Updated {hours} hours ago", "Atualizado há {hours} horas"),
+            _ if days == 1 => tr("Updated yesterday", "Atualizado ontem").into(),
+            _ if days <= 7 => trf!("Updated on {}", "Atualizado {}", crate::i18n::weekday(&t)),
+            _ => trf!("Updated on {}", "Atualizado em {}", date(&t)),
+        };
+    }
+    let Some(t) = Local.timestamp_opt(text::ts_ms(&c.ts) / 1000, 0).single() else { return String::new() };
+    let clock = crate::i18n::clock(&t);
+    match (now.date_naive() - t.date_naive()).num_days() {
+        0 => trf!("As of today at {clock}", "Atualizado hoje às {clock}"),
+        1 => trf!("As of yesterday at {clock}", "Atualizado ontem às {clock}"),
+        2..=7 => trf!("As of {} at {clock}", "Atualizado {} às {clock}", crate::i18n::weekday(&t)),
+        _ => trf!("As of {}", "Atualizado em {}", date(&t)),
+    }
+}
+
+/// Slack's card for an app's link: its name (a menu) above a rounded box
+/// with Open and Copy link on its top edge; the icon and title, the kind,
+/// the fields as label over value; under a line, when its data is from with
+/// Refresh, and the app's buttons on the right.
+fn card_box(out: &mut Out, c: &Card, width: usize, base: Style) {
+    let cw = width.min(CARD_MAX).max(12);
+    let inner = cw - 4;
+    let border = Style::new().fg(CARD_BORDER);
+    let side = |out: &mut Out, row: Row| {
+        let mut r = Row::default();
+        r.push("│ ".into(), border, None);
+        r.append(row);
+        r.pad_to(cw - 2);
+        r.push(" │".into(), border, None);
+        push_row(out, r);
+    };
+    if !c.header.is_empty() {
+        let mut r = Row::default();
+        let menu = Target::CardMenu { url: c.url.clone(), link: c.link.clone(), more: c.more.clone() };
+        r.push(format!("{} ▾", truncate(&c.header, cw - 2)), dim(), Some(menu));
+        push_row(out, r);
+    }
+    // The bar Slack shows over a hovered card, on the top edge here.
+    let mut tools = Row::default();
+    if !c.url.is_empty() {
+        let blue = Style::new().fg(Color::Blue);
+        tools.push(format!(" {OPEN} {} ", tr("Open", "Abrir")), blue, Some(Target::Link(c.url.clone())));
+        tools.push("·".into(), border, None);
+        tools.push(format!(" {LINK} {} ", tr("Copy link", "Copiar link")), blue, Some(Target::CopyLink(c.link.clone())));
+    }
+    let mut top = Row::default();
+    top.push("╭".into(), border, None);
+    if tools.w > 0 && tools.w + 4 <= cw {
+        top.push("─".repeat(cw - 3 - tools.w), border, None);
+        top.append(tools);
+        top.push("─".into(), border, None);
+    } else {
+        top.push("─".repeat(cw - 2), border, None);
+    }
+    top.push("╮".into(), border, None);
+    push_row(out, top);
+
+    // The icon, then the title beside it.
+    let text_w = inner.saturating_sub(3).max(4);
+    let title = Seg { text: c.title.clone(), style: Style::new().bold(), url: Some(c.url.clone()).filter(|u| !u.is_empty()), ..Default::default() };
+    for (k, row) in wrap(&[title], text_w, base).into_iter().enumerate() {
+        let mut r = Row::default();
+        match (&c.icon, k) {
+            (Some(img), 0) => {
+                r.pics.push((0, img.clone()));
+                r.push("   ".into(), Style::new(), None);
+            }
+            (None, 0) => r.push(format!("{LINK}  "), dim(), None),
+            _ => r.push("   ".into(), Style::new(), None),
+        }
+        r.append(row);
+        side(out, r);
+    }
+    if !c.subtitle.is_empty() {
+        let mut r = Row::default();
+        r.push(format!("   {}", truncate(&c.subtitle, text_w)), base.patch(dim()), None);
+        side(out, r);
+    }
+    // Fields side by side while they fit, each its label over its values.
+    if !c.fields.is_empty() {
+        side(out, Row::default());
+        let (mut labels, mut values) = (Row::default(), Row::default());
+        for (label, tags) in &c.fields {
+            let mut v = Row::default();
+            for (i, t) in tags.iter().enumerate() {
+                if i > 0 {
+                    v.push(" ".into(), Style::new(), None);
+                }
+                if let Some(img) = &t.icon {
+                    v.pics.push((v.w, img.clone()));
+                    v.push("  ".into(), Style::new(), None);
+                    v.push(" ".into(), Style::new(), None);
+                }
+                match tag_bg(&t.color) {
+                    Some(bg) => v.push(format!(" {} ", truncate(&t.text, text_w.saturating_sub(4))), base.bg(bg), None),
+                    None => v.push(truncate(&t.text, text_w.saturating_sub(v.w)), base, None),
+                }
+            }
+            let l = truncate(label, text_w);
+            let w = l.width().max(v.w);
+            let mut x = if labels.w == 0 && values.w == 0 { 0 } else { labels.w.max(values.w) + 3 };
+            if x > 0 && x + w > text_w {
+                for r in [std::mem::take(&mut labels), std::mem::take(&mut values)] {
+                    let mut row = Row::default();
+                    row.push("   ".into(), Style::new(), None);
+                    row.append(r);
+                    side(out, row);
+                }
+                x = 0;
+            }
+            labels.pad_to(x);
+            values.pad_to(x);
+            labels.push(l, base.patch(dim()), None);
+            values.append(v);
+        }
+        for r in [labels, values] {
+            let mut row = Row::default();
+            row.push("   ".into(), Style::new(), None);
+            row.append(r);
+            side(out, row);
+        }
+    }
+    let mut mid = Row::default();
+    mid.push(format!("├{}┤", "─".repeat(cw - 2)), border, None);
+    push_row(out, mid);
+
+    // When it's from, Refresh, and the app's buttons on the right.
+    let mut foot = Row::default();
+    match c.refresh {
+        Refresh::Busy(f) => foot.push(format!("{} {}", SPINNER[f % SPINNER.len()], tr("Refreshing…", "Atualizando…")), dim(), None),
+        Refresh::Failed => foot.push(tr("Failed to refresh", "Falha ao atualizar").into(), Style::new().fg(Color::Red), None),
+        Refresh::Idle => {
+            foot.push(truncate(&card_stamp(c), inner), dim(), None);
+            if !c.entity.is_empty() {
+                let label = tr("Refresh", "Atualizar");
+                if foot.w + 3 + label.width() <= inner {
+                    foot.push(" · ".into(), dim(), None);
+                    foot.push(label.into(), Style::new().fg(Color::Blue), Some(Target::Refresh { ts: c.ts.clone(), entity: c.entity.clone() }));
+                }
+            }
+        }
+    }
+    let mut buttons = Row::default();
+    for b in &c.actions {
+        if buttons.w > 0 {
+            buttons.push(" ".into(), Style::new(), None);
+        }
+        let mut p = pill(b, inner);
+        // Slack dims them while the app is asked.
+        if c.refresh != Refresh::Idle {
+            p.hits.clear();
+            p.spans.iter_mut().for_each(|s| s.style = s.style.add_modifier(Modifier::DIM));
+        }
+        buttons.append(p);
+    }
+    if buttons.w > 0 && foot.w + 2 + buttons.w <= inner {
+        foot.pad_to(inner - buttons.w);
+        foot.append(buttons);
+        side(out, foot);
+    } else {
+        side(out, foot);
+        if buttons.w > 0 {
+            let mut rows = Out::default();
+            controls(&mut rows, &c.actions, inner);
+            for (i, line) in rows.lines.into_iter().enumerate() {
+                let mut r = Row::default();
+                r.spans = line.spans;
+                r.w = r.spans.iter().map(|s| s.width()).sum();
+                r.hits = rows.hits.iter().filter(|h| h.line == i && c.refresh == Refresh::Idle).map(|h| (h.x as usize, h.w as usize, h.target.clone())).collect();
+                side(out, r);
+            }
+        }
+    }
+    let mut bottom = Row::default();
+    bottom.push(format!("╰{}╯", "─".repeat(cw - 2)), border, None);
+    push_row(out, bottom);
 }
 
 /// Slack draws a message of nothing but emoji (up to this many) bigger.

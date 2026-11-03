@@ -97,6 +97,10 @@ pub enum Event {
     Edit(crate::edit::Ev),
     /// A file saved to the downloads folder, keyed by `files::Job::key`.
     Downloaded { key: String, res: Res<std::path::PathBuf> },
+    /// Bytes of a download arrived: only a redraw, for its progress.
+    Progress,
+    /// The app was asked for a card's latest (`chat.refreshUnfurl`).
+    Unfurled { ts: String, entity: String, res: Res<()> },
     /// A conversation's pinned messages.
     Pins { chan: String, res: Res<Vec<crate::pins::Pin>> },
     Account(crate::account::Ev),
@@ -271,6 +275,22 @@ pub enum Row {
     /// A search result among the channels the user is not in, an index in `directory`.
     Other(usize),
 }
+
+/// A card's Refresh: spinning until the message's attachments change, for
+/// `UNFURL_WAIT` at most, then "Failed to refresh" for `UNFURL_FAILED`.
+pub struct Unfurl {
+    chan: String,
+    started: Instant,
+    /// The attachments' hash when it was asked.
+    before: u64,
+    failed: Option<Instant>,
+    /// The spinner's frame last drawn.
+    frame: usize,
+}
+
+const UNFURL_WAIT: Duration = Duration::from_secs(10);
+const UNFURL_FAILED: Duration = Duration::from_secs(2);
+const SPIN_EVERY: Duration = Duration::from_millis(100);
 
 /// What a context-menu entry does.
 #[derive(Clone)]
@@ -545,6 +565,8 @@ pub struct App {
     pub viewer: Option<ImgRef>,
     /// Files being saved or saved this session, keyed by `files::Job::key`.
     pub downloads: HashMap<String, files::State>,
+    /// Cards being refreshed (`chat.refreshUnfurl`), by message ts and entity.
+    pub unfurls: HashMap<(String, String), Unfurl>,
     /// The profile panel on the right: whose, and the data once it arrives.
     pub profile: Option<(String, Option<Profile>)>,
     /// The thread panel, in the same slot as the profile: one or the other.
@@ -725,6 +747,7 @@ impl App {
             wanted: Vec::new(),
             viewer: None,
             downloads: HashMap::new(),
+            unfurls: HashMap::new(),
             profile: None,
             thread: None,
             pins: Default::default(),
@@ -2312,12 +2335,88 @@ impl App {
 
     /// Saves a file to the downloads folder in the background.
     fn save_file(&mut self, job: files::Job) {
-        if matches!(self.downloads.get(&job.key), Some(files::State::Saving)) {
+        if matches!(self.downloads.get(&job.key), Some(files::State::Saving(_))) {
             return;
         }
-        self.downloads.insert(job.key.clone(), files::State::Saving);
+        let progress = std::sync::Arc::new(files::Progress::default());
+        self.downloads.insert(job.key.clone(), files::State::Saving(progress.clone()));
         self.status = trf!("downloading {}…", "baixando {}…", job.name);
-        self.spawn(move |s| Event::Downloaded { res: files::save(s, &job), key: job.key });
+        let tx = self.tx.clone();
+        self.spawn(move |s| {
+            let tick = || {
+                let _ = tx.send(Event::Progress);
+            };
+            Event::Downloaded { res: files::save(s, &job, &progress, &tick), key: job.key }
+        });
+    }
+
+    /// A hash of the attachments of the message `ts`, in either pane; 0 when it isn't there.
+    fn attachments_hash(&self, ts: &str) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let m = [false, true].into_iter().find_map(|t| self.pane(t).and_then(|(_, msgs)| msgs.iter().find(|m| m.ts == ts)));
+        m.map_or(0, |m| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            m.attachments.to_string().hash(&mut h);
+            h.finish() | 1
+        })
+    }
+
+    /// Slack's Refresh under an app's card: the app answers by changing the message.
+    fn refresh_card(&mut self, chan: String, ts: String, entity: String) {
+        let key = (ts.clone(), entity.clone());
+        if self.unfurls.get(&key).is_some_and(|u| u.failed.is_none()) {
+            return;
+        }
+        let before = self.attachments_hash(&ts);
+        self.unfurls.insert(key, Unfurl { chan: chan.clone(), started: Instant::now(), before, failed: None, frame: 0 });
+        self.spawn(move |s| {
+            let res = s.refresh_unfurl(&chan, &ts, &entity);
+            Event::Unfurled { ts, entity, res }
+        });
+        self.dirty = true;
+    }
+
+    /// How a card's Refresh is going, for drawing it.
+    pub(crate) fn card_refresh(&self, ts: &str, entity: &str) -> crate::blocks::Refresh {
+        match self.unfurls.get(&(ts.to_string(), entity.to_string())) {
+            None => crate::blocks::Refresh::Idle,
+            Some(u) if u.failed.is_some() => crate::blocks::Refresh::Failed,
+            Some(u) => crate::blocks::Refresh::Busy(u.frame),
+        }
+    }
+
+    /// Spins the cards being refreshed, and lets go of those that changed,
+    /// took too long or showed their failure long enough.
+    fn tick_unfurls(&mut self) {
+        let now = Instant::now();
+        let hashes: Vec<_> = self.unfurls.keys().map(|k| (k.clone(), self.attachments_hash(&k.0))).collect();
+        let mut dirty = false;
+        for (key, hash) in hashes {
+            let Some(u) = self.unfurls.get_mut(&key) else { continue };
+            match u.failed {
+                Some(at) if now - at >= UNFURL_FAILED => {
+                    self.unfurls.remove(&key);
+                    dirty = true;
+                }
+                Some(_) => {}
+                None if hash != 0 && hash != u.before => {
+                    self.unfurls.remove(&key);
+                    dirty = true;
+                }
+                None if now - u.started >= UNFURL_WAIT => {
+                    u.failed = Some(now);
+                    dirty = true;
+                }
+                None => {
+                    let frame = ((now - u.started).as_millis() / SPIN_EVERY.as_millis()) as usize;
+                    if frame != u.frame {
+                        u.frame = frame;
+                        dirty = true;
+                    }
+                }
+            }
+        }
+        self.dirty |= dirty;
     }
 
     fn file_click(&mut self, click: files::Click, x: u16, y: u16) {
@@ -2343,11 +2442,7 @@ impl App {
                 }
             }
             files::Click::Open(path) => self.open_url(&path.to_string_lossy()),
-            files::Click::Reveal(path) => {
-                if let Some(dir) = path.parent() {
-                    self.open_url(&dir.to_string_lossy());
-                }
-            }
+            files::Click::Reveal(path) => files::reveal(&path),
         }
         self.dirty = true;
     }
@@ -2370,6 +2465,9 @@ impl App {
     pub fn tick(&mut self) {
         if self.login.is_some() {
             return;
+        }
+        if !self.unfurls.is_empty() {
+            self.tick_unfurls();
         }
         let now = Instant::now();
         if self.start_at.is_some_and(|t| t <= now) {
@@ -2685,6 +2783,20 @@ impl App {
             Event::Section(e) => self.on_section(e),
             Event::Update(note) => self.on_update(note),
             Event::Edit(e) => self.on_edit(e),
+            Event::Progress => {}
+            Event::Unfurled { ts, entity, res } => match res {
+                // The socket tells when the message changes; this is in case it's down.
+                Ok(()) => {
+                    if let Some(chan) = self.unfurls.get(&(ts, entity)).map(|u| u.chan.clone()) {
+                        self.on_live(crate::rtm::Ev::Message { chan, thread: None, user: None });
+                    }
+                }
+                Err(_) => {
+                    if let Some(u) = self.unfurls.get_mut(&(ts, entity)) {
+                        u.failed = Some(Instant::now());
+                    }
+                }
+            },
             Event::Downloaded { key, res } => match res {
                 Ok(path) => {
                     self.status = trf!("✓ saved to {}", "✓ salvo em {}", files::pretty(&path));
@@ -3916,6 +4028,47 @@ impl App {
                         self.brief_copied(tr("code copied", "código copiado").into());
                         self.copied = Some(("code", Instant::now()));
                         self.copied_code = text;
+                        self.dirty = true;
+                        return;
+                    }
+                    crate::blocks::Target::CopyLink(link) => {
+                        let link = link.clone();
+                        self.copy(&link);
+                        self.brief_copied(tr("Link copied", "Link copiado").into());
+                        self.dirty = true;
+                        return;
+                    }
+                    crate::blocks::Target::Refresh { ts, entity } => {
+                        let (ts, entity) = (ts.clone(), entity.clone());
+                        let thread = self.areas.thread.contains(at);
+                        if let Some(chan) = self.pane(thread).map(|(c, _)| c.to_string()) {
+                            self.refresh_card(chan, ts, entity);
+                        }
+                        return;
+                    }
+                    // The app's other actions, then the link's.
+                    crate::blocks::Target::CardMenu { url, link, more } => {
+                        let (url, link, more) = (url.clone(), link.clone(), more.clone());
+                        let chan = self.pane(self.areas.thread.contains(at)).map(|(c, _)| c.to_string()).unwrap_or_default();
+                        let mut items: Vec<(String, Action)> = more
+                            .into_iter()
+                            .map(|b| {
+                                let to = b.url.clone().unwrap_or_else(|| self.message_url(&chan, &b.ts));
+                                (b.label, Action::Browser(to))
+                            })
+                            .collect();
+                        if !items.is_empty() {
+                            items.push((String::new(), Action::Separator));
+                        }
+                        if !url.is_empty() {
+                            items.push((tr("Open link", "Abrir link").to_string(), Action::Browser(url)));
+                        }
+                        if !link.is_empty() {
+                            items.push((tr("Copy link", "Copiar link").to_string(), Action::CopyLink(link)));
+                        }
+                        if !items.is_empty() {
+                            self.menu = Some(Menu::new(m.column, m.row + 1, items));
+                        }
                         self.dirty = true;
                         return;
                     }

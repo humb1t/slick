@@ -967,6 +967,12 @@ impl Slack {
         self.call("users.channelSections.set", &p).map(|_| ())
     }
 
+    /// Asks the app behind a card (a work object) for its latest; it answers
+    /// by changing the message.
+    pub fn refresh_unfurl(&self, chan: &str, ts: &str, entity: &str) -> Res<()> {
+        self.call("chat.refreshUnfurl", &[("channel", chan), ("ts", ts), ("entity_id", entity)]).map(|_| ())
+    }
+
     /// Moves the read cursor so the official clients stop flagging it unread.
     pub fn mark(&self, chan: &str, ts: &str) -> Res<()> {
         self.call("conversations.mark", &[("channel", chan), ("ts", ts)]).map(|_| ())
@@ -987,8 +993,9 @@ impl Slack {
     }
 
     /// Streams a file into `out`, for saving it: no size cap and only connect
-    /// and read timeouts, so files of hundreds of MB get through.
-    pub fn download_to(&self, url: &str, out: &mut dyn Write, html_ok: bool) -> Res<u64> {
+    /// and read timeouts, so files of hundreds of MB get through. `size` hears
+    /// the file's size, when the server says it.
+    pub fn download_to(&self, url: &str, out: &mut dyn Write, html_ok: bool, size: &dyn Fn(u64)) -> Res<u64> {
         let agent = ureq::AgentBuilder::new()
             .timeout_connect(Duration::from_secs(20))
             .timeout_read(Duration::from_secs(60))
@@ -1000,6 +1007,9 @@ impl Slack {
         // A session Slack no longer accepts gets its sign-in page, not the file.
         if !html_ok && resp.content_type() == "text/html" {
             return Err(tr("Slack didn't hand over the file (session expired?)", "o Slack não entregou o arquivo (sessão expirada?)").into());
+        }
+        if let Some(n) = resp.header("Content-Length").and_then(|v| v.trim().parse().ok()) {
+            size(n);
         }
         std::io::copy(&mut resp.into_reader(), out).map_err(|e| e.to_string())
     }
