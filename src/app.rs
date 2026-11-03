@@ -747,7 +747,7 @@ impl App {
             dir_force: false,
             dir_gen: 0,
             dir_hits: Default::default(),
-            search: Default::default(),
+            search: crate::search::Search::with_sort(cache.search_score),
             sections: cache.sections,
             stars: cache.stars,
             vips: HashSet::new(),
@@ -959,6 +959,7 @@ impl App {
             boot: self.boot.clone(),
             emoji: self.emoji.clone(),
             commands: self.slash.commands.clone(),
+            search_score: self.search.by_score(),
         }
     }
 

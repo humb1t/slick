@@ -30,6 +30,9 @@ pub struct Cache {
     /// The workspace's slash commands, for the `/` autocomplete.
     #[serde(default)]
     pub commands: Vec<crate::slash::Command>,
+    /// The search window lists messages by relevance (Ctrl+S), not by date.
+    #[serde(default)]
+    pub search_score: bool,
 }
 
 pub fn dir() -> PathBuf {

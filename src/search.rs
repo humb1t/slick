@@ -1,17 +1,19 @@
 //! The search window, Ctrl+K (Ctrl+T, or a click on the sidebar's box): a
 //! large box over everything, as in Slack's and other web apps' search.
-//! The query finds conversations here, with the sidebar's matcher
-//! (`App::conv_matches`), and messages on Slack's side (`search.messages`),
-//! under three tabs: All, Conversations, Messages. On the right, a preview
-//! of the result picked: the messages around a found one, or a
-//! conversation's latest. Enter opens it, a message at its place.
+//! The query finds channels and people here, with the sidebar's matcher
+//! (`App::conv_matches`, `text::rank`), and messages on Slack's side
+//! (`search.messages`), under four tabs: All, Messages, Channels, People.
+//! With nothing typed it is a quick switcher: where you've been, then
+//! what's unread, then what moved last. On the right, a preview of the
+//! result picked: the messages around a found one, a conversation's
+//! latest, or someone's profile. Enter opens it, a message at its place.
 //! Ctrl+F opens it on the open conversation (`in:#eng `): there Slack's
 //! prefix search over its recent messages (`search.inline`) comes first.
 
 use crate::app::{App, Event, Row};
 use crate::editor::Editor;
 use crate::i18n::{self, tr};
-use crate::slack::{Conversation, Kind, Message, Res, Slack};
+use crate::slack::{Conversation, Kind, Message, Profile, Res, Slack};
 use crate::ui::{dim, rounded_input, truncate, ARCHIVE, LOCK};
 use chrono::{Datelike, Local, TimeZone};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -23,6 +25,7 @@ use ratatui::Frame;
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -36,8 +39,15 @@ const PAGE: &str = "20";
 const KEEP: usize = 64;
 /// Previews kept, the least recently seen going first.
 const PREVIEWS: usize = 48;
-/// Conversations "All" shows before the messages; the tab shows them all.
-const ALL_CONVS: usize = 6;
+/// Channels and people "All" shows before the messages; their tabs show more.
+const ALL_CHANS: usize = 5;
+const ALL_PEOPLE: usize = 3;
+/// Results a Channels or People tab lists at most; past them, a note.
+const TAB_MAX: usize = 150;
+/// The quick switcher's conversations: at most, and filled up to with
+/// those that moved last.
+const RECENT_MAX: usize = 20;
+const RECENT_FILL: usize = 12;
 /// Messages around a found one in its preview, on each side.
 const AROUND: usize = 5;
 /// A conversation's latest messages in its preview.
@@ -61,11 +71,12 @@ fn lit() -> Style {
 pub enum Tab {
     #[default]
     All,
-    Convs,
     Msgs,
+    Chans,
+    People,
 }
 
-const TABS: [Tab; 3] = [Tab::All, Tab::Convs, Tab::Msgs];
+const TABS: [Tab; 4] = [Tab::All, Tab::Msgs, Tab::Chans, Tab::People];
 
 /// The messages' order: newest first, or Slack's relevance (Ctrl+S).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -120,6 +131,7 @@ struct Found {
 pub enum Key {
     Msg { chan: String, ts: String, thread: Option<String> },
     Conv(String),
+    Person(String),
 }
 
 #[derive(Default)]
@@ -130,6 +142,8 @@ pub struct Preview {
     topic: String,
     purpose: String,
     members: Option<u32>,
+    /// Someone's profile, for a person's preview.
+    profile: Option<Profile>,
     error: Option<String>,
 }
 
@@ -165,11 +179,46 @@ enum Conv {
     Other(usize),
 }
 
-/// A result the selection can stop on.
+/// Someone in the People list: a person (a DM opens, made if need be), or
+/// a conversation that goes with people (a group DM, an app's DM).
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Who {
+    Person(String),
+    Conv(Conv),
+}
+
+/// What the query finds here, worked out once per query and state of the
+/// lists: with no query, the quick switcher's conversations.
+#[derive(Default)]
+struct Matches {
+    /// All's list with no query.
+    recent: Vec<Conv>,
+    chans: Vec<Conv>,
+    people: Vec<Who>,
+    /// All: People go first, their best being the better match.
+    people_first: bool,
+}
+
+/// A result the selection can stop on: a channel, someone (an index in
+/// `Matches::people`), a message, or "+N more", which shows its tab.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Item {
     Conv(Conv),
+    Who(usize),
     Msg(usize),
+    More(Tab),
+}
+
+/// A heading's part of the list: its results and what it leaves to its tab.
+struct Part {
+    title: String,
+    count: Option<usize>,
+    items: Vec<Item>,
+    more: Option<(usize, Tab)>,
+    /// Said when there are no results.
+    empty: Option<&'static str>,
+    /// Said under the results: more are there than shown.
+    narrow: bool,
 }
 
 /// The window's state, kept between openings for its caches.
@@ -192,9 +241,9 @@ pub struct Search {
     /// Each conversation's recent messages, by conversation and words.
     recent: HashMap<(String, String), Recent>,
     recent_order: VecDeque<(String, String)>,
-    /// The conversations the last query matched: worked out once per
-    /// query and state of the lists, not at each frame.
-    convs: RefCell<(String, (u64, usize, usize), Vec<Conv>)>,
+    /// What the last query matched here: worked out once per query and
+    /// state of the lists, not at each frame; emptied at each opening.
+    local: RefCell<Option<(String, (u64, usize, usize), Rc<Matches>)>>,
     /// The preview wanted, and since when: asked after `PREVIEW_PAUSE`.
     want: Option<(Key, Instant)>,
     previews: HashMap<Key, Preview>,
@@ -205,6 +254,7 @@ pub struct Search {
     rect: Rect,
     spots: Vec<(Rect, usize)>,
     tabs: Vec<(Rect, Tab)>,
+    sort_rect: Rect,
     max_scroll: usize,
     height: usize,
 }
@@ -425,6 +475,16 @@ fn fetch_conv(s: &Slack, id: &str, channel: bool, history_too: bool) -> Preview 
 }
 
 impl Search {
+    /// The window with the messages' order kept from the last run.
+    pub fn with_sort(score: bool) -> Self {
+        Search { sort: if score { Sort::Score } else { Sort::Date }, ..Default::default() }
+    }
+
+    /// Whether the messages go by relevance, for the cache to keep.
+    pub fn by_score(&self) -> bool {
+        self.sort == Sort::Score
+    }
+
     fn query(&self) -> String {
         self.input.text.trim().to_string()
     }
@@ -465,6 +525,8 @@ impl App {
         s.input = Editor::default();
         s.tab = Tab::All;
         s.want = None;
+        // The quick switcher's lists change between openings.
+        *s.local.borrow_mut() = None;
         s.reset();
         self.dirty = true;
     }
@@ -529,43 +591,190 @@ impl App {
         self.dirty = true;
     }
 
-    /// The conversations the query matches, best first; with no query,
-    /// the ones opened lately. Worked out once per query (`Search::convs`).
-    fn search_convs(&self) -> Vec<Conv> {
+    /// What the query finds here (`Matches`), once per query and state of the lists.
+    fn search_local(&self) -> Rc<Matches> {
         let q = self.search.query();
-        if q.is_empty() {
-            return self.recents.iter().filter_map(|id| self.convs.iter().position(|c| &c.id == id)).map(Conv::Ours).collect();
-        }
         let state = (self.dir_gen, self.convs.len(), self.users.names.len());
-        {
-            let memo = self.search.convs.borrow();
-            if memo.0 == q && memo.1 == state {
-                return memo.2.clone();
+        if let Some((mq, ms, m)) = self.search.local.borrow().as_ref() {
+            if *mq == q && *ms == state {
+                return m.clone();
             }
         }
-        let list: Vec<Conv> = self
-            .conv_matches(&q)
+        let m = Rc::new(if q.is_empty() { self.quick_switch() } else { self.local_matches(&q) });
+        *self.search.local.borrow_mut() = Some((q, state, m.clone()));
+        m
+    }
+
+    /// With nothing typed: where you've been, then what's unread, then what
+    /// moved last; for People, the DMs and group DMs that moved last.
+    fn quick_switch(&self) -> Matches {
+        let here = self.current.as_deref();
+        let ok = |c: &Conversation| !c.guest && here != Some(c.id.as_str()) && !(c.kind == Kind::Direct && c.user.is_none());
+        let mut seen = HashSet::new();
+        let mut recent: Vec<usize> = Vec::new();
+        for id in &self.recents {
+            if let Some(i) = self.convs.iter().position(|c| &c.id == id && ok(c)) {
+                if seen.insert(i) {
+                    recent.push(i);
+                }
+            }
+        }
+        let mut rest: Vec<(bool, std::cmp::Reverse<i64>, usize)> = self
+            .convs
+            .iter()
+            .enumerate()
+            .filter(|(i, c)| ok(c) && !c.archived && !seen.contains(i))
+            .map(|(i, c)| {
+                let (unread, mentions) = self.unread(&c.id);
+                (!(mentions > 0 || (unread && !self.muted(c))), std::cmp::Reverse(self.last_message(c)), i)
+            })
+            .collect();
+        rest.sort();
+        for (read, _, i) in rest {
+            if read && recent.len() >= RECENT_FILL {
+                break;
+            }
+            recent.push(i);
+        }
+        recent.truncate(RECENT_MAX);
+        let recent: Vec<Conv> = recent.into_iter().map(Conv::Ours).collect();
+        let chans = recent.iter().copied().filter(|c| matches!(c, Conv::Ours(i) if matches!(self.convs[*i].kind, Kind::Channel | Kind::Private))).collect();
+        let users = &self.users;
+        let mut dms: Vec<(std::cmp::Reverse<i64>, usize)> = self
+            .convs
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| match (c.kind, c.user.as_deref()) {
+                (Kind::Group, _) => !c.archived,
+                (Kind::Direct, Some(u)) => !users.bots.contains(u) && !users.deleted.contains(u),
+                _ => false,
+            })
+            .map(|(i, c)| (std::cmp::Reverse(self.last_message(c)), i))
+            .collect();
+        dms.sort();
+        let people = dms
+            .into_iter()
+            .take(RECENT_MAX)
+            .map(|(_, i)| match (self.convs[i].kind, &self.convs[i].user) {
+                (Kind::Direct, Some(u)) => Who::Person(u.clone()),
+                _ => Who::Conv(Conv::Ours(i)),
+            })
+            .collect();
+        Matches { recent, chans, people, people_first: true }
+    }
+
+    /// The channels the query matches (ours and the workspace's), and the
+    /// people: anyone by any of their names (display, full, handle), a DM
+    /// or not, with group DMs and apps' DMs among them. The better match
+    /// leads, then the last message; you go behind the others.
+    fn local_matches(&self, query: &str) -> Matches {
+        use crate::text::{place, rank, Folded, Query};
+        let chans: Vec<Conv> = self
+            .conv_matches(query)
             .into_iter()
             .filter_map(|r| match r {
-                Row::Conv(i) => Some(Conv::Ours(i)),
+                Row::Conv(i) if matches!(self.convs[i].kind, Kind::Channel | Kind::Private) => Some(Conv::Ours(i)),
                 Row::Other(j) => Some(Conv::Other(j)),
                 _ => None,
             })
             .collect();
-        *self.search.convs.borrow_mut() = (q, state, list.clone());
-        list
+        let q = Query::new(query);
+        let me = self.me.as_ref().map(|m| m.user_id.as_str());
+        let users = &self.users;
+        let handle_of: HashMap<&str, &str> = users.handles.iter().map(|(h, u)| (u.as_str(), h.as_str())).collect();
+        let dm_of: HashMap<&str, usize> =
+            self.convs.iter().enumerate().filter(|(_, c)| c.kind == Kind::Direct).filter_map(|(i, c)| Some((c.user.as_deref()?, i))).collect();
+        let mut ranges = Vec::new();
+        // (archived, inexact, you, place): fields compare in order.
+        let mut hits: Vec<((bool, bool, bool, crate::text::Place), Who)> = Vec::new();
+        let mut covered: HashSet<&str> = HashSet::new();
+        for (uid, name) in &users.names {
+            if users.deleted.contains(uid) || users.bots.contains(uid) {
+                continue;
+            }
+            let names = [Some(name.as_str()), users.real.get(uid).map(String::as_str), handle_of.get(uid.as_str()).copied()];
+            let Some(tier) = names.into_iter().flatten().filter(|n| !n.is_empty()).filter_map(|n| rank(&q, &Folded::new(n), &mut ranges)).min() else {
+                continue;
+            };
+            covered.insert(uid);
+            let you = me == Some(uid.as_str());
+            let latest = if you { 0 } else { dm_of.get(uid.as_str()).map_or(0, |&i| self.last_message(&self.convs[i])) };
+            hits.push(((false, tier > 0, you, place(tier, false, true, latest, 0, name.chars().count())), Who::Person(uid.clone())));
+        }
+        for (i, c) in self.convs.iter().enumerate() {
+            let group = c.kind == Kind::Group;
+            if !group && !(c.kind == Kind::Direct && c.user.as_deref().is_none_or(|u| !covered.contains(u))) {
+                continue;
+            }
+            let name = Folded::new(&self.label(c));
+            let Some(tier) = rank(&q, &name, &mut ranges) else { continue };
+            let at = place(tier, c.archived, true, self.last_message(c), 0, name.len()).group(group);
+            hits.push(((c.archived, tier > 0, false, at), Who::Conv(Conv::Ours(i))));
+        }
+        hits.sort_by(|a, b| a.0.cmp(&b.0));
+        // All: the part whose first answer is the better match goes first;
+        // People on a tie, unless what leads it is you.
+        let lead_c = chans.first().and_then(|c| self.conv_of(*c)).map_or((true, true), |c| {
+            let exact = crate::text::find(&self.label(&c), query).is_some_and(|(t, _)| t == 0);
+            (c.archived, !exact)
+        });
+        let lead_p = hits.first().map_or((true, true), |h| (h.0 .0, h.0 .1));
+        let you_lead = hits.first().is_some_and(|h| h.0 .2);
+        let people_first = lead_p < lead_c || (lead_p == lead_c && !you_lead);
+        Matches { recent: Vec::new(), chans, people: hits.into_iter().map(|(_, w)| w).collect(), people_first }
+    }
+
+    /// Someone in the People list, by their place in it.
+    fn who(&self, k: usize) -> Option<Who> {
+        self.search_local().people.get(k).cloned()
+    }
+
+    /// The tab's local parts, in order: each heading's results and what
+    /// it leaves to its own tab.
+    fn search_parts(&self) -> Vec<Part> {
+        let tab = self.search.tab;
+        if tab == Tab::Msgs {
+            return Vec::new();
+        }
+        let m = self.search_local();
+        let recent = |items: Vec<Item>, empty| Part { title: tr("Recent", "Recentes").into(), count: None, items, more: None, empty: Some(empty), narrow: false };
+        let part = |title: &str, total: usize, items: Vec<Item>, to: Tab, empty| {
+            let left = total - items.len();
+            let more = (tab == Tab::All && left > 0).then_some((left, to));
+            Part { title: title.into(), count: Some(total), items, more, empty: Some(empty), narrow: tab != Tab::All && left > 0 }
+        };
+        let room = |n: usize| if tab == Tab::All { n } else { TAB_MAX };
+        let chans = || {
+            let items = m.chans.iter().take(room(ALL_CHANS)).copied().map(Item::Conv).collect();
+            part(tr("Channels", "Canais"), m.chans.len(), items, Tab::Chans, tr("No channels match", "Nenhum canal encontrado"))
+        };
+        let people = || {
+            let items = (0..m.people.len().min(room(ALL_PEOPLE))).map(Item::Who).collect();
+            part(tr("People", "Pessoas"), m.people.len(), items, Tab::People, tr("No one matches", "Ninguém encontrado"))
+        };
+        let typed = !self.search.query().is_empty();
+        match tab {
+            Tab::All if !typed => vec![recent(m.recent.iter().copied().map(Item::Conv).collect(), tr("Type to find a conversation", "Digite para achar uma conversa"))],
+            Tab::Chans if !typed => vec![recent(m.chans.iter().copied().map(Item::Conv).collect(), tr("Type to find a channel", "Digite para achar um canal"))],
+            Tab::People if !typed => vec![recent((0..m.people.len()).map(Item::Who).collect(), tr("Type to find someone", "Digite para achar alguém"))],
+            Tab::Chans => vec![chans()],
+            Tab::People => vec![people()],
+            _ => {
+                let (c, p) = (chans(), people());
+                let both = if m.people_first { [p, c] } else { [c, p] };
+                both.into_iter().filter(|p| !p.items.is_empty()).collect()
+            }
+        }
     }
 
     /// What the tab lists, in order: the results the selection stops on.
     fn search_items(&self) -> Vec<Item> {
-        let tab = self.search.tab;
         let mut out: Vec<Item> = Vec::new();
-        if tab != Tab::Msgs {
-            let convs = self.search_convs();
-            let n = if tab == Tab::All { ALL_CONVS } else { convs.len() };
-            out.extend(convs.into_iter().take(n).map(Item::Conv));
+        for p in self.search_parts() {
+            out.extend(p.items);
+            out.extend(p.more.map(|(_, tab)| Item::More(tab)));
         }
-        if tab != Tab::Convs {
+        if matches!(self.search.tab, Tab::All | Tab::Msgs) {
             out.extend((0..self.search_msgs().len()).map(Item::Msg));
         }
         out
@@ -599,7 +808,12 @@ impl App {
     fn preview_key(&self, item: Item) -> Option<Key> {
         match item {
             Item::Conv(c) => self.conv_of(c).map(|c| Key::Conv(c.id)),
+            Item::Who(k) => match self.who(k)? {
+                Who::Person(uid) => Some(Key::Person(uid)),
+                Who::Conv(c) => self.conv_of(c).map(|c| Key::Conv(c.id)),
+            },
             Item::Msg(k) => self.search_hit(k).map(|h| Key::Msg { chan: h.chan.clone(), ts: h.ts.clone(), thread: h.thread.clone() }),
+            Item::More(_) => None,
         }
     }
 
@@ -665,6 +879,18 @@ impl App {
                 let history_too = self.messages.get(&id).map_or(true, |m| m.is_empty());
                 self.spawn(move |s| {
                     let preview = fetch_conv(s, &id, channel, history_too);
+                    Event::Search(Ev::Preview { key, preview })
+                });
+            }
+            Key::Person(uid) => {
+                // Their DM's latest too, when it has none loaded.
+                let dm = self.dm_with(&uid).filter(|id| self.messages.get(id).is_none_or(|m| m.is_empty()));
+                self.spawn(move |s| {
+                    let mut preview = dm.map(|id| fetch_conv(s, &id, false, true)).unwrap_or_default();
+                    match s.profile(&uid) {
+                        Ok(p) => preview.profile = Some(p),
+                        Err(e) => preview.error = Some(e),
+                    }
                     Event::Search(Ev::Preview { key, preview })
                 });
             }
@@ -783,7 +1009,7 @@ impl App {
         let at = TABS.iter().position(|t| *t == self.search.tab).unwrap_or(0);
         let (next, prev) = (TABS[(at + 1) % TABS.len()], TABS[(at + TABS.len() - 1) % TABS.len()]);
         match k.code {
-            KeyCode::Char('k' | 't') if ctrl && !shift => return self.close_search(),
+            KeyCode::Char('k' | 't' | 'g') if ctrl && !shift => return self.close_search(),
             KeyCode::Esc if !self.search.input.text.is_empty() => {
                 self.search.input = Editor::default();
                 return self.search.reset();
@@ -799,12 +1025,8 @@ impl App {
             KeyCode::Tab if shift => return self.search_tab(prev),
             KeyCode::BackTab => return self.search_tab(prev),
             KeyCode::Tab => return self.search_tab(next),
-            KeyCode::Char(c @ '1'..='3') if alt => return self.search_tab(TABS[c as usize - '1' as usize]),
-            KeyCode::Char('s') if ctrl => {
-                let s = &mut self.search;
-                s.sort = if s.sort == Sort::Date { Sort::Score } else { Sort::Date };
-                return s.reset();
-            }
+            KeyCode::Char(c @ '1'..='4') if alt => return self.search_tab(TABS[c as usize - '1' as usize]),
+            KeyCode::Char('s') if ctrl => return self.search_sort(),
             _ => {}
         }
         let e = &mut self.search.input;
@@ -830,6 +1052,14 @@ impl App {
         }
     }
 
+    /// Ctrl+S, or a click on the order: newest first or most relevant,
+    /// kept for the next run.
+    fn search_sort(&mut self) {
+        let s = &mut self.search;
+        s.sort = if s.sort == Sort::Date { Sort::Score } else { Sort::Date };
+        s.reset();
+    }
+
     pub(crate) fn search_paste(&mut self, s: &str) {
         let line = s.lines().next().unwrap_or("").to_string();
         self.search.input.insert(&line);
@@ -851,9 +1081,15 @@ impl App {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => self.wheel(&m, crate::wheel::Pane::Search),
             MouseEventKind::Down(_) if !s.rect.contains(at) => return self.close_search(),
             MouseEventKind::Down(MouseButton::Left) => {
+                let spot = s.spots.iter().find(|(r, _)| r.contains(at)).map(|(_, i)| *i);
                 if let Some(tab) = s.tabs.iter().find(|(r, _)| r.contains(at)).map(|(_, t)| *t) {
                     self.search_tab(tab);
-                } else if let Some(i) = s.spots.iter().find(|(r, _)| r.contains(at)).map(|(_, i)| *i) {
+                } else if s.sort_rect.contains(at) {
+                    self.search_sort();
+                } else if let Some(Item::More(tab)) = spot.and_then(|i| self.search_items().get(i).copied()) {
+                    self.search_tab(tab);
+                } else if let Some(i) = spot {
+                    let s = &mut self.search;
                     if s.sel == i {
                         return self.open_selected();
                     }
@@ -866,15 +1102,33 @@ impl App {
     }
 
     /// Enter: a conversation opens (a channel you are not in as a
-    /// preview to join), a message at its place, a reply in its thread.
+    /// preview to join), someone's DM (made if need be), a message at its
+    /// place, a reply in its thread; "+N more" shows its tab. With nothing
+    /// to open, Slack is asked at once rather than after the pause.
     fn open_selected(&mut self) {
-        let Some(item) = self.search_items().get(self.search.sel).copied() else { return };
+        let Some(item) = self.search_items().get(self.search.sel).copied() else {
+            self.search.seen.1 = Instant::now().checked_sub(PAUSE);
+            return;
+        };
         match item {
             Item::Conv(c) => {
                 let Some(conv) = self.conv_of(c) else { return };
                 self.close_search();
                 self.open(conv.id);
             }
+            Item::Who(k) => {
+                let Some(who) = self.who(k) else { return };
+                self.close_search();
+                match who {
+                    Who::Person(uid) => self.open_dm(uid),
+                    Who::Conv(c) => {
+                        if let Some(conv) = self.conv_of(c) {
+                            self.open(conv.id);
+                        }
+                    }
+                }
+            }
+            Item::More(tab) => self.search_tab(tab),
             Item::Msg(k) => {
                 let Some(h) = self.search_hit(k).cloned() else { return };
                 self.close_search();
@@ -1190,24 +1444,62 @@ fn conv_line(app: &App, c: &Conversation, members: u32, query: &str, width: usiz
         Kind::Direct => crate::ui::presence_span(app, crate::ui::presence_of(app, uid)),
         Kind::Group => Span::styled("◉", dim()),
     };
-    let label = app.label(c);
-    let chars: Vec<char> = label.chars().collect();
-    let mut mask = vec![false; chars.len()];
-    if let Some((_, ranges)) = crate::text::find(&label, query).filter(|_| !query.is_empty()) {
-        for (a, b) in ranges {
-            mask[a.min(chars.len())..b.min(chars.len())].iter_mut().for_each(|x| *x = true);
-        }
-    }
     let gone = c.archived || c.guest;
-    let base = if gone { Style::new().fg(Color::Gray) } else { Style::new().fg(Color::White) };
+    // Unread, as the sidebar bolds it.
+    let (unread, mentions) = app.unread(&c.id);
+    let base = match () {
+        _ if gone => Style::new().fg(Color::Gray),
+        _ if mentions > 0 || (unread && !app.muted(c)) => Style::new().fg(Color::White).bold(),
+        _ => Style::new().fg(Color::White),
+    };
     let mut left = vec![Span::raw("  "), icon, Span::raw(" ")];
-    left.extend(spans_of(&chars, &mask, base));
+    left.extend(lit_name(&app.label(c), query, base));
     left.extend(app.gone_suffix(c).map(|s| Span::styled(s, dim())));
     if members > 0 {
         let n = if members == 1 { tr(" · 1 member", " · 1 membro").to_string() } else { trf!(" · {members} members", " · {members} membros") };
         left.push(Span::styled(n, dim()));
     }
     let latest = app.last_message(c);
+    let when = if latest > 0 { day(&(latest / 1000).to_string()) } else { String::new() };
+    spread(left, vec![Span::styled(when, dim()), Span::raw(" ")], width)
+}
+
+/// A name with what the query matched lit.
+fn lit_name(label: &str, query: &str, base: Style) -> Vec<Span<'static>> {
+    let chars: Vec<char> = label.chars().collect();
+    let mut mask = vec![false; chars.len()];
+    if let Some((_, ranges)) = crate::text::find(label, query).filter(|_| !query.is_empty()) {
+        for (a, b) in ranges {
+            mask[a.min(chars.len())..b.min(chars.len())].iter_mut().for_each(|x| *x = true);
+        }
+    }
+    spans_of(&chars, &mask, base)
+}
+
+/// Someone's handle, when the list has it.
+fn handle_of<'a>(app: &'a App, uid: &str) -> Option<&'a str> {
+    app.users.handles.iter().find(|(_, v)| v.as_str() == uid).map(|(h, _)| h.as_str())
+}
+
+/// Someone's row: presence, the name with what matched, "(you)", their
+/// status emoji, their full name (or handle) dim, and their DM's last day.
+fn person_line(app: &App, uid: &str, query: &str, width: usize) -> Line<'static> {
+    let name = app.users.names.get(uid).cloned().unwrap_or_else(|| uid.to_string());
+    let dot = crate::ui::presence_span(app, crate::ui::presence_of(app, uid));
+    let mut left = vec![Span::raw("  "), dot, Span::raw(" ")];
+    left.extend(lit_name(&name, query, Style::new().fg(Color::White)));
+    if app.me.as_ref().is_some_and(|m| m.user_id == uid) {
+        left.push(Span::styled(tr(" (you)", " (você)"), dim()));
+    }
+    if let Some(g) = app.users.status_glyph(uid) {
+        left.push(Span::raw(format!(" {g}")));
+    }
+    let real = app.users.real.get(uid).filter(|r| !r.is_empty() && **r != name).cloned();
+    if let Some(aside) = real.or_else(|| handle_of(app, uid).map(|h| format!("@{h}"))) {
+        left.push(Span::raw("  "));
+        left.extend(lit_name(&aside, query, dim()));
+    }
+    let latest = app.dm_with(uid).and_then(|id| app.convs.iter().find(|c| c.id == id)).map_or(0, |c| app.last_message(c));
     let when = if latest > 0 { day(&(latest / 1000).to_string()) } else { String::new() };
     spread(left, vec![Span::styled(when, dim()), Span::raw(" ")], width)
 }
@@ -1241,35 +1533,47 @@ fn entries(app: &App, width: usize) -> Vec<Entry> {
     let query = s.query();
     let mut out = Vec::new();
     let mut n = 0;
-    if s.tab != Tab::Msgs {
-        let convs = app.search_convs();
-        let shown = if s.tab == Tab::All { ALL_CONVS.min(convs.len()) } else { convs.len() };
-        if query.is_empty() {
-            out.push(heading(tr("Recent", "Recentes"), None));
-        } else if !convs.is_empty() || s.tab == Tab::Convs {
-            out.push(heading(tr("Conversations", "Conversas"), Some(convs.len().to_string())));
+    let local = app.search_local();
+    let conv_entry = |c: Conv, n: usize| {
+        let conv = app.conv_of(c)?;
+        let members = match c {
+            Conv::Other(j) => app.directory.chans[j].members,
+            Conv::Ours(_) => members_of(app, &conv.id),
+        };
+        Some(Entry { item: Some(n), lines: vec![conv_line(app, &conv, members, &query, width)] })
+    };
+    for p in app.search_parts() {
+        out.push(heading(&p.title, p.count.map(|c| c.to_string())));
+        if p.items.is_empty() {
+            out.extend(p.empty.map(note));
         }
-        for c in &convs[..shown] {
-            let Some(conv) = app.conv_of(*c) else { continue };
-            let members = match c {
-                Conv::Other(j) => app.directory.chans[*j].members,
-                Conv::Ours(_) => members_of(app, &conv.id),
+        for it in &p.items {
+            let e = match *it {
+                Item::Conv(c) => conv_entry(c, n),
+                Item::Who(k) => match local.people.get(k) {
+                    Some(Who::Person(uid)) => Some(Entry { item: Some(n), lines: vec![person_line(app, uid, &query, width)] }),
+                    Some(Who::Conv(c)) => conv_entry(*c, n),
+                    None => None,
+                },
+                _ => None,
             };
-            out.push(Entry { item: Some(n), lines: vec![conv_line(app, &conv, members, &query, width)] });
+            out.extend(e);
             n += 1;
         }
-        if convs.len() > shown {
-            let more = convs.len() - shown;
-            out.push(note(&trf!("+{more} more · Alt+2", "+{more} outras · Alt+2")));
+        if let Some((more, tab)) = p.more {
+            let k = TABS.iter().position(|t| *t == tab).unwrap_or(0) + 1;
+            let text = trf!("+{more} more · Alt+{k}", "+{more} outros · Alt+{k}");
+            out.push(Entry { item: Some(n), lines: vec![Line::from(vec![Span::raw("  "), Span::styled(text, Style::new().fg(Color::Cyan))])] });
+            n += 1;
         }
-        if convs.is_empty() && s.tab == Tab::Convs {
-            out.push(note(if query.is_empty() { tr("Type to find a conversation", "Digite para achar uma conversa") } else { tr("No conversations match", "Nenhuma conversa encontrada") }));
+        if p.narrow {
+            out.push(note(tr("Keep typing to narrow it down", "Continue digitando para filtrar")));
         }
-        if s.tab == Tab::All && !out.is_empty() {
+        if s.tab == Tab::All {
             out.push(Entry::plain(Line::from("")));
         }
     }
-    if s.tab == Tab::Convs {
+    if matches!(s.tab, Tab::Chans | Tab::People) {
         return out;
     }
     if !worth(&query) {
@@ -1375,7 +1679,7 @@ fn field(f: &mut Frame, app: &App, area: Rect) {
     }
     let shown: String = chars[start..].iter().collect();
     let text = if chars.is_empty() {
-        Line::from(vec![Span::styled("🔍 ", dim()), Span::styled(truncate(tr("Search conversations and messages", "Buscar conversas e mensagens"), room), dim())])
+        Line::from(vec![Span::styled("🔍 ", dim()), Span::styled(truncate(tr("Search messages, channels and people", "Buscar mensagens, canais e pessoas"), room), dim())])
     } else {
         Line::from(vec![Span::styled("🔍 ", dim()), Span::raw(truncate(&shown, room + 1))])
     };
@@ -1384,15 +1688,18 @@ fn field(f: &mut Frame, app: &App, area: Rect) {
     f.set_cursor_position((x, at.y));
 }
 
-/// "All · Conversations 12 · Messages 143", the one shown lit.
+/// "All · Messages 143 · Channels 12 · People 3", the one shown lit; the
+/// messages' order at the right, a click changing it.
 fn tabs(f: &mut Frame, app: &mut App, area: Rect) {
     let q = app.search.query();
-    let convs = if q.is_empty() { None } else { Some(app.search_convs().len()) };
+    let local = (!q.is_empty()).then(|| app.search_local());
+    let (chans, people) = (local.as_ref().map(|m| m.chans.len()), local.as_ref().map(|m| m.people.len()));
     let msgs = app.search.found_now().filter(|f| f.page > 0).map(|f| f.total);
     let label = |t: Tab| match t {
         Tab::All => tr("All", "Tudo").to_string(),
-        Tab::Convs => convs.map_or_else(|| tr("Conversations", "Conversas").to_string(), |n| trf!("Conversations {n}", "Conversas {n}")),
         Tab::Msgs => msgs.map_or_else(|| tr("Messages", "Mensagens").to_string(), |n| trf!("Messages {n}", "Mensagens {n}")),
+        Tab::Chans => chans.map_or_else(|| tr("Channels", "Canais").to_string(), |n| trf!("Channels {n}", "Canais {n}")),
+        Tab::People => people.map_or_else(|| tr("People", "Pessoas").to_string(), |n| trf!("People {n}", "Pessoas {n}")),
     };
     let mut spans = vec![Span::raw(" ")];
     let mut x = area.x + 1;
@@ -1411,6 +1718,16 @@ fn tabs(f: &mut Frame, app: &mut App, area: Rect) {
     }
     f.render_widget(Paragraph::new(Line::from(spans)), area);
     app.search.tabs = rects;
+    app.search.sort_rect = Rect::default();
+    if matches!(app.search.tab, Tab::All | Tab::Msgs) {
+        let text = if app.search.sort == Sort::Score { tr("Most relevant ▾", "Mais relevantes ▾") } else { tr("Most recent ▾", "Mais recentes ▾") };
+        let w = text.width() as u16;
+        if x + w + 4 <= area.right() {
+            let r = Rect::new(area.right() - w - 1, area.y, w, 1);
+            f.render_widget(Paragraph::new(text).style(Style::new().fg(Color::Gray)), r);
+            app.search.sort_rect = r;
+        }
+    }
 }
 
 /// The results, the selection kept in view unless the wheel moved the list.
@@ -1483,6 +1800,12 @@ fn preview(f: &mut Frame, app: &mut App, area: Rect) {
             Some(conv) => conv_preview(app, &conv, &key, width, area.height as usize),
             None => Vec::new(),
         },
+        Item::Who(k) => match (app.who(k), &key) {
+            (Some(Who::Person(uid)), _) => person_preview(app, &uid, &key, width, area.height as usize),
+            (Some(Who::Conv(c)), _) => app.conv_of(c).map(|conv| conv_preview(app, &conv, &key, width, area.height as usize)).unwrap_or_default(),
+            (None, _) => Vec::new(),
+        },
+        Item::More(_) => Vec::new(),
     };
     f.render_widget(Paragraph::new(lines), area);
 }
@@ -1630,14 +1953,81 @@ fn conv_preview(app: &App, c: &Conversation, key: &Key, width: usize, height: us
     lines
 }
 
+/// Someone picked: their names, title, presence and status, local time,
+/// then their DM's latest messages, or how Enter starts one.
+fn person_preview(app: &App, uid: &str, key: &Key, width: usize, height: usize) -> Vec<Line<'static>> {
+    let name = app.users.names.get(uid).cloned().unwrap_or_else(|| uid.to_string());
+    let mut head = vec![Span::styled(name.clone(), Style::new().bold())];
+    if app.me.as_ref().is_some_and(|m| m.user_id == uid) {
+        head.push(Span::styled(tr(" (you)", " (você)"), dim()));
+    }
+    let mut lines = vec![Line::from(head)];
+    let real = app.users.real.get(uid).filter(|r| !r.is_empty() && **r != name);
+    let names: Vec<String> = real.cloned().into_iter().chain(handle_of(app, uid).map(|h| format!("@{h}"))).collect();
+    if !names.is_empty() {
+        lines.push(Line::from(Span::styled(names.join(" · "), dim())));
+    }
+    let p = app.search.previews.get(key);
+    let profile = p.and_then(|p| p.profile.as_ref());
+    if let Some(t) = profile.map(|p| p.title.as_str()).filter(|t| !t.is_empty()) {
+        lines.push(Line::from(Span::styled(truncate(t, width), Style::new().fg(Color::Gray))));
+    }
+    let status = app.users.status(uid).map(|(_, text)| {
+        let glyph = app.users.status_glyph(uid).unwrap_or_default();
+        format!("{glyph} {}", crate::text::shortcodes(text)).trim().to_string()
+    });
+    lines.push(Line::from(""));
+    if app.presence.contains_key(uid) {
+        let pres = crate::ui::presence_of(app, uid);
+        let word = if pres.active { tr("Active", "Ativo") } else { tr("Away", "Ausente") };
+        let rest = status.filter(|s| !s.is_empty()).map_or(word.to_string(), |s| format!("{word} · {s}"));
+        lines.push(Line::from(vec![crate::ui::presence_span(app, pres), Span::raw(" "), Span::raw(truncate(&rest, width.saturating_sub(2)))]));
+    } else if let Some(s) = status.filter(|s| !s.is_empty()) {
+        lines.push(Line::from(truncate(&s, width)));
+    }
+    if let Some(tz) = profile.and_then(|p| chrono::FixedOffset::east_opt(p.tz_offset)) {
+        let local = i18n::clock(&chrono::Utc::now().with_timezone(&tz));
+        lines.push(Line::from(Span::styled(trf!("🕐 {local} local time", "🕐 {local} hora local"), dim())));
+    }
+    lines.push(Line::from(""));
+    let Some(dm) = app.dm_with(uid) else {
+        lines.push(Line::from(Span::styled(tr("Enter starts a direct message", "Enter começa uma mensagem direta"), dim().italic())));
+        return lines;
+    };
+    lines.push(Line::from(Span::styled(tr("Latest messages", "Mensagens recentes"), dim().bold())));
+    let loaded = app.messages.get(&dm).filter(|m| !m.is_empty());
+    let msgs: Vec<&Message> = match (loaded, p) {
+        (Some(m), _) => m.iter().rev().take(LATEST).rev().collect(),
+        (None, Some(p)) => p.msgs.iter().collect(),
+        (None, None) => {
+            lines.push(Line::from(Span::styled(tr("Loading…", "Carregando…"), dim().italic())));
+            return lines;
+        }
+    };
+    if msgs.is_empty() {
+        lines.push(Line::from(Span::styled(tr("No messages yet", "Nenhuma mensagem ainda"), dim())));
+        return lines;
+    }
+    let today = day(&crate::slack::unix_now().to_string());
+    let mut body = Vec::new();
+    for m in msgs {
+        body.extend(message_lines(app, m, width, None, day(&m.ts) != today, 4));
+        body.push(Line::from(""));
+    }
+    let drop = body.len().saturating_sub(height.saturating_sub(lines.len()));
+    lines.extend(body.into_iter().skip(drop));
+    lines
+}
+
 /// The keys on the left; what Slack is doing, or failed at, on the right.
 fn hint(f: &mut Frame, app: &App, area: Rect) {
-    let sort = if app.search.sort == Sort::Date { tr("Ctrl+S: by relevance", "Ctrl+S: por relevância") } else { tr("Ctrl+S: by date", "Ctrl+S: por data") };
-    let keys = format!(
-        " {} · {sort} · {}",
-        tr("↑↓ move · Enter open · Tab section", "↑↓ mover · Enter abrir · Tab seção"),
-        tr("Esc close", "Esc fechar")
-    );
+    let sort = match app.search.sort {
+        _ if !matches!(app.search.tab, Tab::All | Tab::Msgs) => "",
+        Sort::Date => tr(" · Ctrl+S by relevance", " · Ctrl+S por relevância"),
+        Sort::Score => tr(" · Ctrl+S by date", " · Ctrl+S por data"),
+    };
+    let esc = if app.search.input.text.is_empty() { tr("Esc close", "Esc fechar") } else { tr("Esc clear", "Esc limpar") };
+    let keys = format!(" {}{sort} · {esc}", tr("↑↓ move · Enter open · Tab section", "↑↓ mover · Enter abrir · Tab seção"));
     let found = app.search.found_now();
     let recent = app.search.recent_now(app.search_scope().as_ref());
     let status = match found {

@@ -25,8 +25,9 @@ screen (from a local cache) and refreshes in the background.
   rename them and pick their emoji, or move a channel from the emoji in its header.
   Dragged past its narrowest, the sidebar folds to a rail of photos, with
   mentions as badges over them.
-- A search window (`Ctrl+K`) over conversations and Slack's message search,
-  with the matches highlighted and a preview of the messages around each hit.
+- A search window (`Ctrl+K`) over channels, people and Slack's message search,
+  with the matches highlighted and a preview of the messages around each hit
+  or of someone's profile; empty, it switches to recent and unread conversations.
 - Real time, over Slack's own websocket: new messages, unread counts and
   "is typing" (under the message box, and as "•••" in the sidebar) arrive as
   they happen.
@@ -170,7 +171,7 @@ for creating that app with the scopes slick uses.
 | `Ctrl+/` or `F1` | all keyboard shortcuts, searchable (also in the account menu) |
 | `↑` `↓` / `j` `k` | move in the sidebar |
 | `Enter` | open a conversation / expand or collapse a section |
-| `Ctrl+K` or `Ctrl+T` (or click the sidebar's box) | search window: conversations and messages, with a preview (`Tab` / `Alt+1`…`Alt+3` tabs, `Ctrl+S` relevance or date, `Enter` opens, `Esc` clears or closes) |
+| `Ctrl+K` or `Ctrl+T` (or click the sidebar's box) | search window: messages, channels and people, with a preview (`Tab` / `Alt+1`…`Alt+4` tabs All, Messages, Channels, People; `Ctrl+S` relevance or date, kept; `Enter` opens, a person's DM too; `Esc` clears or closes) |
 | `Ctrl+F` | search the open conversation (`in:#channel` / `in:@person`): its recent messages matching word starts first, then Slack's whole-word results |
 | `/` | filter the sidebar's conversations |
 | `Alt+↑` `Alt+↓` | previous / next conversation in the sidebar (on a selected section header: move the section) |
