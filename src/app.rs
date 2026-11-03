@@ -1411,7 +1411,8 @@ impl App {
             let label = self.label(c);
             let name = crate::text::Folded::new(&label);
             let Some(tier) = crate::text::rank(&q, &name, &mut ranges) else { continue };
-            let place = crate::text::place(tier, c.archived, !c.guest, self.last_message(c), 0, name.len()).group(c.kind == Kind::Group);
+            let gone = c.kind == Kind::Direct && c.user.as_ref().is_some_and(|u| self.users.deleted.contains(u));
+            let place = crate::text::place(tier, c.archived, !c.guest, self.last_message(c), 0, name.len()).group(c.kind == Kind::Group).gone(gone);
             hits.push((place, Row::Conv(i)));
         }
         let ours: HashSet<&str> = self.convs.iter().map(|c| c.id.as_str()).collect();
