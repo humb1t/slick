@@ -50,7 +50,8 @@ pub struct Users {
     /// Apps and Slackbot: their DMs stay out of "Mensagens diretas".
     #[serde(default)]
     pub bots: HashSet<String>,
-    /// Deactivated accounts, hidden everywhere; their DMs open as read-only archives.
+    /// Deactivated accounts: out of the sidebar, found by searching (last,
+    /// dim, photo in gray); their DMs open as read-only archives.
     #[serde(default)]
     pub deleted: HashSet<String>,
     /// id → 72px profile picture.

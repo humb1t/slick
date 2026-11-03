@@ -679,9 +679,12 @@ impl App {
     pub(crate) fn on_user(&mut self, u: &serde_json::Value) {
         let Some(uid) = u["id"].as_str().map(String::from) else { return };
         let (name, avatar) = (self.users.names.get(&uid).cloned(), self.users.avatars.get(&uid).cloned());
+        let gone = self.users.deleted.contains(&uid);
         self.users.apply(u);
         if self.users.avatars.get(&uid) != avatar.as_ref() && avatar.is_some() {
             self.forget_photo(&uid);
+        } else if self.users.deleted.contains(&uid) != gone {
+            self.repaint_photo(&uid);
         }
         let status = self.users.status(&uid).map(|(e, t)| [e.as_str(), t.as_str()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" "));
         if let Some(p) = self.profile.as_mut().filter(|(id, _)| *id == uid).and_then(|(_, p)| p.as_mut()) {
@@ -836,11 +839,24 @@ impl App {
 
     /// Drops the old photo in every size, here and on disk, so the new one loads.
     fn forget_photo(&mut self, uid: &str) {
+        self.drop_photo(uid, true);
+    }
+
+    /// Someone's photo drawn again from the file on disk: they were
+    /// deactivated or came back, and it changes to or from gray.
+    pub(crate) fn repaint_photo(&mut self, uid: &str) {
+        self.drop_photo(uid, false);
+    }
+
+    /// Someone's photo out of memory (and off the disk, with `file`).
+    fn drop_photo(&mut self, uid: &str, file: bool) {
         let prefixes = ["avatar-", "avatar-big-", "avatar-512-", "photo-"].map(|p| format!("{p}{uid}"));
         let stale = |k: &str| prefixes.iter().any(|p| k.strip_prefix(p.as_str()).is_some_and(|r| r.is_empty() || r.starts_with(['+', '.'])));
         let keys: Vec<String> = self.images.keys().filter(|k| stale(k)).cloned().collect();
         for k in keys {
-            let _ = std::fs::remove_file(crate::cache::image_path(&k));
+            if file {
+                let _ = std::fs::remove_file(crate::cache::image_path(&k));
+            }
             self.images.remove(&k);
         }
         self.protocols.retain(|(k, ..), _| !stale(k));

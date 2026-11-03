@@ -2325,9 +2325,11 @@ fn lines_with(
             if let Some(img) = pic.flatten().filter(|_| x as usize + 2 <= width) {
                 slots.push(Slot { line: lines.len(), x, cols: 2, rows: 1, img, full: None, user: None });
             }
+            // A deactivated account's name, dim.
+            let gone = m.user.as_ref().is_some_and(|u| app.users.deleted.contains(u));
             lines.push(Line::from(vec![
                 Span::raw(indent.clone()),
-                Span::styled(author.clone(), Style::new().bold()),
+                Span::styled(author.clone(), if gone { Style::new().bold().fg(Color::Gray) } else { Style::new().bold() }),
                 Span::raw(status.map(|e| format!(" {e}")).unwrap_or_default()),
                 Span::styled(bot, dim()),
                 Span::styled(format!("  {hhmm}"), dim()),
