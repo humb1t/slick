@@ -4,7 +4,8 @@
 
 use crate::app::ImgRef;
 use crate::i18n::tr;
-use crate::slack::Message;
+use crate::slack::{File, Kind, Message};
+use chrono::{Datelike, Local, TimeZone};
 use crate::text::{self, Names};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -133,6 +134,25 @@ pub enum Piece {
     Image { img: ImgRef, w: u32, h: u32, title: String },
     /// A legacy attachment: its own pieces behind a colored bar.
     Bar(Color, Vec<Piece>),
+    /// A shared or forwarded message, as its own card.
+    Share(Box<Share>),
+}
+
+/// A shared message as Slack draws it: the author's photo and name, its day,
+/// where it was posted ("Thread in 🔒 name"), its text and its files. A click
+/// anywhere else on it opens the original (`open`).
+pub struct Share {
+    pub author: String,
+    /// The author's id, whose profile the photo opens.
+    pub user: Option<String>,
+    /// The photo: whose (a user id, or a key of its own) and its URL.
+    pub photo: Option<(String, String)>,
+    pub when: String,
+    /// "Posted in #name", or Slack's own footer for a place we don't know.
+    pub place: Vec<Seg>,
+    pub body: Vec<Piece>,
+    pub files: Vec<File>,
+    pub open: Option<Target>,
 }
 
 /// What a click on a message does.
@@ -145,6 +165,9 @@ pub enum Target {
     Channel(String),
     /// A code block's copy button: the text it copies.
     Copy(String),
+    /// A shared message's original: its conversation at it, with its
+    /// thread open when it is a reply.
+    Open { chan: String, ts: String, thread: Option<String> },
 }
 
 /// Where an image goes, in cells from the top left of the laid-out text.
@@ -154,6 +177,19 @@ pub struct Pic {
     pub cols: u16,
     pub rows: u16,
     pub img: ImgRef,
+    /// What a click enlarges instead of the picture itself.
+    pub full: Option<ImgRef>,
+    /// A person's photo: a click opens their profile, nothing to enlarge.
+    pub user: Option<String>,
+}
+
+/// Two reserved lines where a file's card goes (`files::card`), drawn by
+/// the UI, which knows whether it was downloaded.
+pub struct Card {
+    pub line: usize,
+    pub x: u16,
+    pub w: u16,
+    pub file: File,
 }
 
 /// A clickable stretch of one line.
@@ -169,6 +205,7 @@ pub struct Out {
     pub lines: Vec<Line<'static>>,
     pub pics: Vec<Pic>,
     pub hits: Vec<Hit>,
+    pub cards: Vec<Card>,
 }
 
 // ---- parsing ---------------------------------------------------------------
@@ -380,6 +417,10 @@ fn attachment(a: &Value, n: &Names, ts: &str) -> Vec<Piece> {
     if let Some(p) = get("pretext") {
         out.push(Piece::Text(mrkdwn(p, n), None));
     }
+    if a["is_share"] == true || a["is_msg_unfurl"] == true {
+        out.push(Piece::Share(Box::new(share(a, n))));
+        return out;
+    }
     let mut inner = Vec::new();
     if let Some(name) = get("author_name") {
         inner.push(line(vec![Seg::new(name, Style::new().bold())]));
@@ -441,6 +482,89 @@ fn attachment(a: &Value, n: &Names, ts: &str) -> Vec<Piece> {
         out.push(Piece::Bar(color(a), inner));
     }
     out
+}
+
+/// A shared message's card from its attachment: who, when, where, its rich
+/// text (the original's blocks, else its mrkdwn) and its files.
+fn share(a: &Value, n: &Names) -> Share {
+    let get = |k: &str| a[k].as_str().filter(|s| !s.is_empty());
+    // Else from its link: …/archives/C0123/p1760000000000100.
+    let link = get("from_url").and_then(|u| u.split('?').next()).and_then(|u| u.split_once("/archives/")).map(|(_, p)| p);
+    let from_link = link.and_then(|p| p.split_once("/p")).filter(|(_, d)| d.len() > 6 && d.bytes().all(|b| b.is_ascii_digit()));
+    let chan = get("channel_id").or(from_link.map(|(c, _)| c)).unwrap_or("");
+    let ts_link = from_link.map(|(_, d)| format!("{}.{}", &d[..d.len() - 6], &d[d.len() - 6..]));
+    let ts = get("ts").map(String::from).or(ts_link).unwrap_or_default();
+    let ts = ts.as_str();
+    let user = get("author_id").map(String::from);
+    let author = user.as_deref().and_then(|u| n.user(u)).or(get("author_name")).or(get("author_subname")).unwrap_or("").to_string();
+    let photo = match (&user, user.as_ref().and_then(|u| n.avatars.get(u)).map(String::as_str).or(get("author_icon"))) {
+        (Some(u), Some(url)) => Some((u.clone(), url.to_string())),
+        (None, Some(url)) => {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            url.hash(&mut h);
+            Some((format!("share-{:016x}", h.finish()), url.to_string()))
+        }
+        _ => None,
+    };
+    // A reply: Slack's footer says "Thread in …"; its link has the thread's ts.
+    let from_url = get("from_url");
+    let thread_ts = get("thread_ts")
+        .or_else(|| from_url.and_then(|u| u.split_once('?')).and_then(|(_, q)| q.split('&').find_map(|kv| kv.strip_prefix("thread_ts="))))
+        .filter(|t| !t.is_empty());
+    let footer = get("footer").unwrap_or("");
+    let lower = footer.to_lowercase();
+    let reply = a["is_reply_unfurl"] == true || lower.starts_with("thread") || lower.starts_with("conversa") || thread_ts.is_some_and(|t| t != ts);
+    let place = match n.place(chan) {
+        Some((kind, name)) => {
+            let lead = if reply { tr("Thread in ", "Conversa em ") } else { tr("Posted in ", "Publicada em ") };
+            let sign = match kind {
+                Kind::Channel => "#".to_string(),
+                Kind::Private => format!("{LOCK} "),
+                Kind::Direct => tr("direct message with ", "mensagem direta com ").to_string(),
+                Kind::Group => String::new(),
+            };
+            vec![Seg::new(format!("{lead}{sign}{name}"), dim())]
+        }
+        None => {
+            let mut paras = mrkdwn(footer, n);
+            restyle(&mut paras, |s| if s.fg.is_none() { s.fg(Color::DarkGray) } else { s });
+            paras.into_iter().flat_map(|p| p.segs).collect()
+        }
+    };
+    let mut body = a["blocks"].as_array().map(|b| blocks(b, n, ts)).unwrap_or_default();
+    if body.is_empty() {
+        for mb in a["message_blocks"].as_array().into_iter().flatten() {
+            body.extend(mb["message"]["blocks"].as_array().map(|b| blocks(b, n, ts)).unwrap_or_default());
+        }
+    }
+    if body.is_empty() {
+        let paras = mrkdwn(get("text").or(get("fallback")).unwrap_or(""), n);
+        if !blank(&paras) {
+            body.push(Piece::Text(paras, None));
+        }
+    }
+    let files = a["files"].as_array().into_iter().flatten().filter(|f| f["mode"] != "tombstone").map(crate::slack::parse_file).collect();
+    let open = (!chan.is_empty() && !ts.is_empty()).then(|| {
+        let thread = reply.then(|| thread_ts.unwrap_or(ts).to_string());
+        Target::Open { chan: chan.to_string(), ts: ts.to_string(), thread }
+    });
+    Share { author, user, photo, when: stamp(ts), place, body, files, open }
+}
+
+/// When a shared message was posted: "Today at 15:13", "October 22nd at
+/// 15:13" ("22 de outubro às 15:13"), with the year when not this one.
+fn stamp(ts: &str) -> String {
+    let secs = ts.split('.').next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let Some(t) = Local.timestamp_opt(secs, 0).single().filter(|_| secs > 0) else { return String::new() };
+    let today = Local::now().date_naive();
+    let clock = crate::i18n::clock(&t);
+    let (day, month, year, nth) = (t.day(), crate::i18n::month(&t), t.year(), crate::i18n::ordinal(t.day()));
+    match t.date_naive() {
+        d if d == today => trf!("Today at {clock}", "Hoje às {clock}"),
+        d if today.pred_opt() == Some(d) => trf!("Yesterday at {clock}", "Ontem às {clock}"),
+        _ if year == today.year() => trf!("{month} {nth} at {clock}", "{day} de {month} às {clock}"),
+        _ => trf!("{month} {nth}, {year} at {clock}", "{day} de {month} de {year} às {clock}"),
+    }
 }
 
 fn color(a: &Value) -> Color {
@@ -783,7 +907,7 @@ impl Row {
 fn push_row(out: &mut Out, row: Row) {
     let line = out.lines.len();
     out.hits.extend(row.hits.into_iter().map(|(x, w, target)| Hit { line, x: x as u16, w: w as u16, target }));
-    out.pics.extend(row.pics.into_iter().map(|(x, img)| Pic { line, x: x as u16, cols: 2, rows: 1, img }));
+    out.pics.extend(row.pics.into_iter().map(|(x, img)| Pic { line, x: x as u16, cols: 2, rows: 1, img, full: None, user: None }));
     out.lines.push(Line::from(row.spans));
 }
 
@@ -810,12 +934,13 @@ pub fn render(pieces: &[Piece], width: usize, font: Option<(u16, u16)>, base: St
                         push_row(&mut out, r);
                     }
                 }
-                image(&mut out, img, *w, *h, width, font);
+                image(&mut out, img, None, *w, *h, width, font);
             }
             Piece::Bar(color, inner) => {
                 let sub = render(inner, width.saturating_sub(2), font, base);
                 nest(&mut out, sub, Span::styled("▎ ", Style::new().fg(*color)));
             }
+            Piece::Share(s) => share_card(&mut out, s, width, font, base),
         }
     }
     out
@@ -899,7 +1024,7 @@ fn jumbo(items: &[Big], width: usize, (fw, fh): (u16, u16), base: Style) -> Out 
     let cols = ((rows as f64 * fh.max(1) as f64 / fw.max(1) as f64).round() as u16).max(1);
     let end = |out: &mut Out, row: Row| {
         let line = out.lines.len();
-        out.pics.extend(row.pics.into_iter().map(|(x, img)| Pic { line, x: x as u16, cols, rows, img }));
+        out.pics.extend(row.pics.into_iter().map(|(x, img)| Pic { line, x: x as u16, cols, rows, img, full: None, user: None }));
         out.lines.push(Line::from(row.spans));
         out.lines.extend(std::iter::repeat_n(Line::default(), rows as usize - 1));
     };
@@ -941,6 +1066,59 @@ fn nest(out: &mut Out, sub: Out, prefix: Span<'static>) {
     }));
     out.pics.extend(sub.pics.into_iter().map(|p| Pic { line: top + p.line, x: dx + p.x, ..p }));
     out.hits.extend(sub.hits.into_iter().map(|h| Hit { line: top + h.line, x: dx + h.x, ..h }));
+    out.cards.extend(sub.cards.into_iter().map(|c| Card { line: top + c.line, x: dx + c.x, ..c }));
+}
+
+/// A shared message's card behind a quiet bar: the photo two rows tall with
+/// the name and day beside it, where it was posted under them, then its text
+/// and files. Every line of it opens the original; what answers a click
+/// itself (a link, a picture, a file, the photo) is found first.
+fn share_card(out: &mut Out, s: &Share, width: usize, font: Option<(u16, u16)>, base: Style) {
+    let w = width.saturating_sub(2).max(4);
+    let mut sub = Out::default();
+    let photo = font.zip(s.photo.as_ref()).map(|((fw, fh), (id, url))| {
+        let cols = ((2.0 * fh as f64 / fw.max(1) as f64).round() as u16).clamp(3, 6);
+        let img = ImgRef::avatar_px(id, url, 2 * fh as u32);
+        (cols, img)
+    });
+    let pad = photo.as_ref().map_or(0, |(cols, _)| *cols as usize + 1);
+    if let Some((cols, img)) = photo {
+        sub.pics.push(Pic { line: 0, x: 0, cols, rows: 2, img, full: None, user: s.user.clone() });
+    }
+    let mut head = Row::default();
+    head.pad_to(pad);
+    head.push(truncate(&s.author, w.saturating_sub(pad + 2)), base.bold(), None);
+    if !s.when.is_empty() && head.w + 2 + s.when.width() <= w {
+        head.push(format!("  {}", s.when), dim(), None);
+    }
+    push_row(&mut sub, head);
+    let mut place = Row::default();
+    place.pad_to(pad);
+    for r in wrap(&s.place, w.saturating_sub(pad), base).into_iter().take(1) {
+        place.append(r);
+    }
+    push_row(&mut sub, place);
+    let body = render(&s.body, w, font, base);
+    let top = sub.lines.len();
+    sub.lines.extend(body.lines);
+    sub.pics.extend(body.pics.into_iter().map(|p| Pic { line: top + p.line, ..p }));
+    sub.hits.extend(body.hits.into_iter().map(|h| Hit { line: top + h.line, ..h }));
+    sub.cards.extend(body.cards.into_iter().map(|c| Card { line: top + c.line, ..c }));
+    // Pictures first, then the other files' cards, as under a message.
+    for f in s.files.iter().filter(|f| f.thumb.is_some()) {
+        if let Some(img) = ImgRef::thumb(f) {
+            image(&mut sub, &img, ImgRef::full(f), f.w, f.h, w, font);
+        }
+    }
+    for f in s.files.iter().filter(|f| f.thumb.is_none()) {
+        sub.cards.push(Card { line: sub.lines.len(), x: 0, w: w as u16, file: f.clone() });
+        sub.lines.extend([Line::default(), Line::default()]);
+    }
+    let first = out.lines.len();
+    nest(out, sub, Span::styled("▎ ", dim()));
+    if let Some(t) = &s.open {
+        out.hits.extend((first..out.lines.len()).map(|line| Hit { line, x: 0, w: width as u16, target: t.clone() }));
+    }
 }
 
 fn rows_of(paras: &[Para], width: usize, base: Style) -> Vec<Row> {
@@ -971,13 +1149,13 @@ fn text_piece(out: &mut Out, paras: &[Para], acc: Option<&Accessory>, width: usi
             let top = out.lines.len();
             if width >= cols as usize + 2 + MIN_TEXT {
                 rows_of(paras, width - cols as usize - 2, base).into_iter().for_each(|r| push_row(out, r));
-                out.pics.push(Pic { line: top, x: (width - cols as usize) as u16, cols, rows, img: img.clone() });
+                out.pics.push(Pic { line: top, x: (width - cols as usize) as u16, cols, rows, img: img.clone(), full: None, user: None });
                 while out.lines.len() < top + rows as usize {
                     out.lines.push(Line::default());
                 }
             } else {
                 rows_of(paras, width, base).into_iter().for_each(|r| push_row(out, r));
-                out.pics.push(Pic { line: out.lines.len(), x: 0, cols, rows, img: img.clone() });
+                out.pics.push(Pic { line: out.lines.len(), x: 0, cols, rows, img: img.clone(), full: None, user: None });
                 out.lines.extend(std::iter::repeat_n(Line::default(), rows as usize));
             }
         }
@@ -1048,7 +1226,7 @@ fn pill(b: &Button, max: usize) -> Row {
 }
 
 /// An image at most 50 columns by 16 rows, keeping its shape when known.
-fn image(out: &mut Out, img: &ImgRef, w: u32, h: u32, width: usize, font: Option<(u16, u16)>) {
+fn image(out: &mut Out, img: &ImgRef, full: Option<ImgRef>, w: u32, h: u32, width: usize, font: Option<(u16, u16)>) {
     let Some((fw, fh)) = font else {
         out.lines.push(Line::from(Span::styled(format!("🖼  {}", img.name), dim())));
         return;
@@ -1061,7 +1239,7 @@ fn image(out: &mut Out, img: &ImgRef, w: u32, h: u32, width: usize, font: Option
     } else {
         (width.min(40) as u16, 12)
     };
-    out.pics.push(Pic { line: out.lines.len(), x: 0, cols, rows, img: img.clone() });
+    out.pics.push(Pic { line: out.lines.len(), x: 0, cols, rows, img: img.clone(), full, user: None });
     out.lines.extend(std::iter::repeat_n(Line::default(), rows as usize));
 }
 

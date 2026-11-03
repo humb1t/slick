@@ -361,6 +361,8 @@ pub struct Areas {
     pub avatars: Vec<(Rect, String)>,
     /// Links and Block Kit buttons in messages.
     pub buttons: Vec<(Rect, crate::blocks::Target)>,
+    /// Shared messages' cards, opening the original: below everything on them.
+    pub shares: Vec<(Rect, crate::blocks::Target)>,
     /// The profile panel's buttons and photo.
     pub profile_close: Rect,
     pub profile_browser: Rect,
@@ -982,6 +984,9 @@ impl App {
             private: &self.private,
             directory: &self.directory,
             me: self.me.as_ref().map(|m| m.user_id.as_str()).unwrap_or(""),
+            avatars: &self.users.avatars,
+            handles: &self.users.handles,
+            convs: &self.convs,
         }
     }
 
@@ -2927,6 +2932,29 @@ impl App {
         }
     }
 
+    /// A shared message's original: its conversation scrolled to it, with its
+    /// thread open at it when it is a reply. One we can't open (a private
+    /// channel we're not in) goes to the browser.
+    pub(crate) fn open_original(&mut self, chan: String, ts: String, thread: Option<String>) {
+        if !self.convs.iter().any(|c| c.id == chan) && self.directory.find(&chan).is_none() {
+            let url = self.message_url(&chan, &ts);
+            return self.open_url(&url);
+        }
+        self.open(chan.clone());
+        self.flash = Some((ts.clone(), Instant::now()));
+        match thread {
+            Some(root) => {
+                self.open_thread(root.clone());
+                if let Some(t) = self.thread.as_mut() {
+                    t.jump = (ts != root).then_some(ts);
+                }
+                self.show_message(chan, root);
+            }
+            None => self.show_message(chan, ts),
+        }
+        self.dirty = true;
+    }
+
     /// Scrolls the conversation to a message, fetching the history around it
     /// when it is not loaded.
     pub(crate) fn show_message(&mut self, chan: String, ts: String) {
@@ -3983,6 +4011,7 @@ impl App {
                         self.dirty = true;
                         return;
                     }
+                    crate::blocks::Target::Open { chan, ts, thread } => return self.open_original(chan.clone(), ts.clone(), thread.clone()),
                 };
                 self.open_url(&url);
                 return;
@@ -4011,6 +4040,10 @@ impl App {
                 let uid = uid.clone();
                 self.open_profile(uid);
                 return;
+            }
+            // A shared message's card, where nothing on it took the click.
+            if let Some((_, crate::blocks::Target::Open { chan, ts, thread })) = self.areas.shares.iter().find(|(rect, _)| rect.contains(at)).cloned() {
+                return self.open_original(chan, ts, thread);
             }
             if self.areas.header_name.contains(at) {
                 self.open_details();

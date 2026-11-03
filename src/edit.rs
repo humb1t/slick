@@ -776,17 +776,27 @@ impl App {
         }
     }
 
-    /// Posts the message's link in the chosen conversation; Slack shows it as a quote.
+    /// Posts the message's link in the chosen conversation; Slack shows it as a
+    /// quote. Its files are shared there too (`files.share`, as Slack's "Share
+    /// this file"), since a link to a DM or private channel shows nothing to
+    /// whoever isn't in it. A message that is only files goes as its files.
     fn send_forward(&mut self) {
         let Some(fw) = self.edit.forward.take() else { return };
         let Some(&i) = self.targets(&fw.query).get(fw.sel) else { return };
         let (to, name) = (self.convs[i].id.clone(), self.conv_name(i));
-        let url = match self.message(&fw.chan, &fw.ts) {
-            Some(m) => self.permalink(&fw.chan, &m),
-            None => self.message_url(&fw.chan, &fw.ts),
+        let msg = self.message(&fw.chan, &fw.ts);
+        // External (Drive…) and deleted files have nothing to share.
+        let files: Vec<String> =
+            msg.iter().flat_map(|m| &m.files).filter(|f| !f.id.is_empty() && f.download.is_some()).map(|f| f.id.clone()).collect();
+        let link = match &msg {
+            Some(m) if m.text.trim().is_empty() && !files.is_empty() => None,
+            Some(m) => Some(self.permalink(&fw.chan, m)),
+            None => Some(self.message_url(&fw.chan, &fw.ts)),
         };
         self.spawn(move |s| {
-            let res = s.post(&to, &url).map(|_| ());
+            let res = link
+                .map_or(Ok(()), |url| s.post(&to, &url).map(|_| ()))
+                .and_then(|()| files.iter().try_for_each(|f| s.share_file(f, &to)));
             Event::Edit(Ev::Done { ok: trf!("forwarded to {name}", "encaminhada para {name}"), res })
         });
     }

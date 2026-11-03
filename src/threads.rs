@@ -894,6 +894,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     a.reactions.clear();
     a.message_rows.clear();
     a.buttons.clear();
+    a.shares.clear();
     a.file_buttons.clear();
     a.pins.tabs.clear();
     (a.messages, a.input, a.latest, a.unarchive, a.header_star, a.header_name) = Default::default();

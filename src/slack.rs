@@ -977,6 +977,11 @@ impl Slack {
         Ok(m)
     }
 
+    /// Shares a file into a conversation, as Slack's "Share this file".
+    pub fn share_file(&self, file: &str, chan: &str) -> Res<()> {
+        self.call("files.share", &[("file", file), ("channel", chan)]).map(|_| ())
+    }
+
     pub fn online(&self, user: &str) -> Res<bool> {
         let v = self.call("users.getPresence", &[("user", user)])?;
         Ok(v["presence"] == "active")
@@ -1124,7 +1129,7 @@ fn icon_of(icons: &Value) -> Option<String> {
     ["image_72", "image_64", "image_48", "image_36"].iter().find_map(|k| icons[*k].as_str().filter(|u| u.starts_with("http")).map(String::from))
 }
 
-fn parse_file(f: &Value) -> File {
+pub(crate) fn parse_file(f: &Value) -> File {
     let is_image = f["mimetype"].as_str().unwrap_or("").starts_with("image/");
     let thumb = is_image
         .then(|| {
