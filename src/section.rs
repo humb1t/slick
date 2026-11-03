@@ -1,12 +1,13 @@
 //! A sidebar section's name and emoji: Slack's "Rename this section", and
 //! the same dialog for a new one ("Create new section"), which can take the
-//! conversation it was asked for along.
+//! conversation it was asked for along. And its "Section settings" → Filter.
 
 use crate::app::{App, Event};
 use crate::compose::tail;
 use crate::emoji::{self, Glyph};
 use crate::i18n::tr;
-use crate::slack::{Res, Section};
+use crate::slack::{Conversation, Res, Section};
+use serde_json::{json, Value};
 use crate::ui::{dim, draw_image, emoji_row, truncate};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Margin, Position, Rect};
@@ -39,7 +40,46 @@ pub struct Dialog {
     saving: bool,
 }
 
+/// The sidebar's "Show" once a section has a filter of its own: "Custom,
+/// depending on the section".
+const CUSTOM: &str = "hide_read_channels_unless_starred";
+
+/// A section's filters as Slack names them: Active only, Unreads, Mentions, All.
+pub const FILTERS: [&str; 4] = ["active", "hid", "mentions", "all"];
+
+/// How long Slack takes to call a conversation without messages dormant.
+const DORMANT_SECS: f64 = 30.0 * 86400.0;
+
+pub fn filter_name(f: &str) -> &'static str {
+    match f {
+        "active" => tr("Active only", "Somente ativas"),
+        "hid" => tr("Unreads", "Não lidas"),
+        "mentions" => tr("Mentions", "Menções"),
+        _ => tr("All", "Todas"),
+    }
+}
+
+/// The filters a section offers: Mentions isn't one for Direct messages.
+pub fn filters_for(kind: &str) -> Vec<&'static str> {
+    FILTERS.into_iter().filter(|f| kind != "direct_messages" || *f != "mentions").collect()
+}
+
+/// A section's settings in the `channel_sections` pref, made an object if
+/// it wasn't one.
+fn entry<'a>(prefs: &'a mut serde_json::Map<String, Value>, id: &str) -> &'a mut serde_json::Map<String, Value> {
+    let e = prefs.entry(id).or_insert_with(|| json!({}));
+    if !e.is_object() {
+        *e = json!({});
+    }
+    match e {
+        Value::Object(o) => o,
+        _ => unreachable!(),
+    }
+}
+
 pub enum Ev {
+    /// A filter saved, or not: then the sidebar's prefs go back to `old`.
+    Filtered { old: (String, serde_json::Map<String, Value>), res: Res<()> },
     Renamed { id: String, name: String, emoji: String, res: Res<()> },
     Created { name: String, emoji: String, chan: Option<String>, next: String, res: Res<String> },
 }
@@ -56,6 +96,132 @@ pub struct Areas {
 }
 
 impl App {
+    /// A paid team, or one whose plan isn't known yet: only those set the
+    /// sidebar per section.
+    fn paid_team(&self) -> bool {
+        self.boot.as_ref().and_then(|b| b.plan.as_deref()).is_none_or(|p| !p.is_empty())
+    }
+
+    fn sidebar_behavior(&self) -> &str {
+        self.boot.as_ref().map_or("", |b| b.sidebar_behavior.as_str())
+    }
+
+    /// The section's own filter, when the sidebar is set per section.
+    fn section_own_show(&self, id: &str) -> Option<&'static str> {
+        if self.sidebar_behavior() != CUSTOM || !self.paid_team() {
+            return None;
+        }
+        let own = self.boot.as_ref()?.section_prefs.get(id)?["sidebar"].as_str()?;
+        FILTERS.into_iter().find(|f| *f == own)
+    }
+
+    /// What the global "Show" gives a section of this kind (Slack's
+    /// getChannelSectionSidebarBehavior).
+    fn section_default_show(&self, kind: &str) -> &'static str {
+        match self.sidebar_behavior() {
+            "hide_inactive_channels" => "active",
+            "hide_read_channels" => "hid",
+            "show_mentions_only" if kind == "direct_messages" => "hid",
+            "show_mentions_only" => "mentions",
+            CUSTOM if self.paid_team() => match kind {
+                "channels" | "direct_messages" | "org_channels" | "recent_apps" | "shared_channels" | "slack_connect" => "hid",
+                _ => "active",
+            },
+            _ => "all",
+        }
+    }
+
+    /// What a section shows now: one of `FILTERS`.
+    pub(crate) fn section_show(&self, id: &str, kind: &str) -> &'static str {
+        match self.section_own_show(id) {
+            Some("mentions") if kind == "direct_messages" => "hid",
+            Some(own) => own,
+            None => self.section_default_show(kind),
+        }
+    }
+
+    /// Whether a section's filter keeps a conversation: what's open, unread
+    /// or mentions you always stays (the open one is also the only one with
+    /// a draft); "Active only" also keeps what was opened here lately and
+    /// what isn't dormant.
+    pub(crate) fn section_keeps(&self, c: &Conversation, show: &str) -> bool {
+        if show == "all" || self.current.as_deref() == Some(c.id.as_str()) {
+            return true;
+        }
+        let (unread, mentions) = self.unread(&c.id);
+        match show {
+            _ if mentions > 0 => true,
+            "mentions" => false,
+            _ if unread => true,
+            "hid" => false,
+            _ => self.recents.contains(&c.id) || !self.dormant(c),
+        }
+    }
+
+    /// Flagged dormant, and no message since Slack flagged it (the flag is
+    /// as old as the list of conversations).
+    fn dormant(&self, c: &Conversation) -> bool {
+        if !c.dormant {
+            return false;
+        }
+        let latest = self.counts.get(&c.id).and_then(|k| k.latest.parse::<f64>().ok()).unwrap_or(0.0);
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
+        now - latest >= DORMANT_SECS
+    }
+
+    /// A section's conversations its filter keeps. Starred keeps what
+    /// "Active only" would take unless the section itself asked for it: the
+    /// user put them there.
+    pub(crate) fn section_filtered(&self, id: &str, kind: &str, members: &[usize]) -> Vec<usize> {
+        let show = self.section_show(id, kind);
+        if kind == "stars" && show == "active" && self.section_own_show(id).is_none() {
+            return members.to_vec();
+        }
+        members.iter().copied().filter(|&i| self.section_keeps(&self.convs[i], show)).collect()
+    }
+
+    /// The section's menu offers its Filter: a paid team's, for one of the
+    /// sections Slack keeps.
+    pub(crate) fn can_filter(&self, id: &str) -> bool {
+        self.boot.is_some() && self.paid_team() && self.sections.iter().any(|s| s.id == id && s.kind != "priority")
+    }
+
+    /// Slack's setChannelSectionPrefByApi: the filter goes into the
+    /// `channel_sections` pref; once a section's differs from what the
+    /// global "Show" gives it, the sidebar turns "Custom, depending on the
+    /// section", every section keeping what it showed. Here first, Slack's after.
+    pub(crate) fn set_section_filter(&mut self, id: String, value: &'static str) {
+        let Some(boot) = self.boot.as_ref() else { return };
+        let old = (boot.sidebar_behavior.clone(), boot.section_prefs.clone());
+        let mut prefs = old.1.clone();
+        entry(&mut prefs, &id).insert("sidebar".into(), json!(value));
+        let kind_of = |k: &str| self.sections.iter().find(|s| s.id == k).map(|s| s.kind.as_str());
+        let differs = prefs.iter().any(|(k, p)| {
+            kind_of(k).is_some_and(|kind| p["sidebar"].as_str().is_some_and(|v| v != self.section_default_show(kind)))
+        });
+        let to_custom = differs && old.0 != CUSTOM;
+        if to_custom {
+            for s in &self.sections {
+                entry(&mut prefs, &s.id).entry("sidebar").or_insert_with(|| json!(self.section_default_show(&s.kind)));
+            }
+        }
+        // Slack keeps only the known sections' non-empty entries.
+        prefs.retain(|k, p| kind_of(k).is_some() && p.as_object().is_some_and(|o| !o.is_empty()));
+        let text = Value::Object(prefs.clone()).to_string();
+        if let Some(b) = self.boot.as_mut() {
+            b.section_prefs = prefs;
+            if to_custom {
+                b.sidebar_behavior = CUSTOM.into();
+            }
+        }
+        self.dirty = true;
+        self.spawn(move |s| {
+            let res = if to_custom { s.set_pref("sidebar_behavior", CUSTOM) } else { Ok(()) };
+            let res = res.and_then(|_| s.set_pref("channel_sections", &text));
+            Event::Section(Ev::Filtered { old, res })
+        });
+    }
+
     pub(crate) fn rename_section(&mut self, id: String) {
         let Some(s) = self.sections.iter().find(|s| s.id == id) else { return };
         let (name, emoji) = (s.name.clone(), s.emoji.trim_matches(':').to_string());
@@ -108,6 +274,13 @@ impl App {
 
     pub(crate) fn on_section(&mut self, ev: Ev) {
         match ev {
+            Ev::Filtered { res: Ok(()), .. } => {}
+            Ev::Filtered { old, res: Err(e) } => {
+                if let Some(b) = self.boot.as_mut() {
+                    (b.sidebar_behavior, b.section_prefs) = old;
+                }
+                self.error = Some(e);
+            }
             Ev::Renamed { id, name, emoji, res: Ok(()) } => {
                 if let Some(s) = self.sections.iter_mut().find(|s| s.id == id) {
                     (s.name, s.emoji) = (name, emoji);

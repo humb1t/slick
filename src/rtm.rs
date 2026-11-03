@@ -45,6 +45,8 @@ pub enum Ev {
     UserDnd(String, crate::account::DndWindow),
     /// Your notification preferences changed: a channel muted, or set to mentions only.
     Prefs,
+    /// The sidebar's "Show" or a section's filter changed elsewhere.
+    SidebarPrefs,
     /// You were added to a conversation or one was created.
     Convs,
     /// Someone's account changed: name, photo, status, deactivated (or
@@ -226,6 +228,7 @@ fn classify(v: &Value) -> Option<Ev> {
         "dnd_updated" => Ev::Dnd,
         "dnd_updated_user" => Ev::UserDnd(s("user")?, crate::account::DndWindow::of(&v["dnd_status"])),
         "pref_change" if matches!(v["name"].as_str(), Some("all_notifications_prefs" | "muted_channels")) => Ev::Prefs,
+        "pref_change" if matches!(v["name"].as_str(), Some("sidebar_behavior" | "channel_sections")) => Ev::SidebarPrefs,
         "channel_joined" | "group_joined" | "im_created" | "mpim_joined" | "mpim_open" | "im_open" | "group_open" | "channel_created" => Ev::Convs,
         "channel_archive" | "group_archive" => Ev::Archived { chan: s("channel")?, archived: true },
         "channel_unarchive" | "group_unarchive" => Ev::Archived { chan: s("channel")?, archived: false },

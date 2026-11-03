@@ -179,6 +179,10 @@ pub struct Conversation {
     /// order for one whose last message is unknown.
     #[serde(default)]
     pub updated: i64,
+    /// Slack flagged it dormant (30 days without a message): "Active only"
+    /// leaves it out of the sidebar.
+    #[serde(default)]
+    pub dormant: bool,
 }
 
 /// The workspace's public channels, the user's or not, for the search to
@@ -227,6 +231,7 @@ impl Directory {
             general: false,
             guest: true,
             updated: d.updated,
+            dormant: false,
         }
     }
 
@@ -408,6 +413,18 @@ pub struct Boot {
     /// DMs and group DMs open in the sidebar ("Fechar conversa" closes one).
     pub open: HashSet<String>,
     pub sidebar_avatars: bool,
+    /// The sidebar's "Show" (`sidebar_behavior`): "" for all,
+    /// `hide_inactive_channels`, `hide_read_channels`, `show_mentions_only`,
+    /// or `hide_read_channels_unless_starred` for "Custom, depending on the section".
+    #[serde(default)]
+    pub sidebar_behavior: String,
+    /// The `channel_sections` pref: each section's settings, its filter
+    /// under `sidebar`, as the official client writes them.
+    #[serde(default)]
+    pub section_prefs: serde_json::Map<String, Value>,
+    /// The team's plan, "" when free; `None` until known.
+    #[serde(default)]
+    pub plan: Option<String>,
 }
 
 /// Messages per history page; a shorter page means the start was reached.
@@ -818,7 +835,15 @@ impl Slack {
         Ok(Boot {
             open: v["is_open"].as_array().into_iter().flatten().filter_map(|i| i.as_str().map(String::from)).collect(),
             sidebar_avatars: v["prefs"]["show_sidebar_avatars"].as_bool().unwrap_or(true),
+            sidebar_behavior: str_of(&v["prefs"]["sidebar_behavior"]),
+            section_prefs: section_prefs(&v["prefs"]["channel_sections"]),
+            plan: v["team"]["plan"].as_str().map(String::from),
         })
+    }
+
+    /// One of the user's preferences (`users.prefs.set`), its value as text.
+    pub fn set_pref(&self, name: &str, value: &str) -> Res<()> {
+        self.call("users.prefs.set", &[("name", name), ("value", value)]).map(|_| ())
     }
 
     /// Takes a conversation out of one custom section and/or into another.
@@ -1042,7 +1067,18 @@ fn parse_conversation(c: &Value) -> Conversation {
         general: c["is_general"].as_bool() == Some(true),
         guest: false,
         updated: updated(c),
+        dormant: c["properties"]["is_dormant"].as_bool() == Some(true),
     }
+}
+
+/// The `channel_sections` pref, a JSON object in a string.
+pub fn section_prefs(v: &Value) -> serde_json::Map<String, Value> {
+    match v {
+        Value::String(t) => serde_json::from_str::<Value>(t).ok(),
+        o => Some(o.clone()),
+    }
+    .and_then(|v| v.as_object().cloned())
+    .unwrap_or_default()
 }
 
 /// A conversation's `updated` (milliseconds), else its `created` (seconds), as Unix milliseconds.

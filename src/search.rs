@@ -892,6 +892,7 @@ impl App {
                 general: false,
                 guest: true,
                 updated: 0,
+                dormant: false,
             });
             self.resort();
         }
