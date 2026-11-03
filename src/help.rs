@@ -29,6 +29,7 @@ const GROUPS: &[Group] = &[
         keys: &[
             ("Ctrl+/ · F1", "This guide", "Este guia de atalhos"),
             ("Ctrl+K · Ctrl+T", "Search conversations and messages", "Buscar conversas e mensagens"),
+            ("Ctrl+F", "Search in this conversation", "Buscar nesta conversa"),
             ("Ctrl+N", "New message or channel", "Nova mensagem ou canal"),
             ("Ctrl+P", "Account menu: status, profile, settings", "Menu da conta: status, perfil, configurações"),
             ("Ctrl+Shift+Y", "Set your status", "Definir seu status"),

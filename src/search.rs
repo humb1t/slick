@@ -5,6 +5,8 @@
 //! under three tabs: All, Conversations, Messages. On the right, a preview
 //! of the result picked: the messages around a found one, or a
 //! conversation's latest. Enter opens it, a message at its place.
+//! Ctrl+F opens it on the open conversation (`in:#eng `): there Slack's
+//! prefix search over its recent messages (`search.inline`) comes first.
 
 use crate::app::{App, Event, Row};
 use crate::editor::Editor;
@@ -131,9 +133,27 @@ pub struct Preview {
     error: Option<String>,
 }
 
+/// A conversation's recent messages that match, as `search.inline` finds
+/// them: every word a prefix ("gab" finds Gabriel), accents aside.
+#[derive(Default)]
+struct Recent {
+    hits: Vec<Hit>,
+    loading: bool,
+    error: Option<String>,
+}
+
+/// A query with one `in:` and plain words: the conversation it names,
+/// those words, and the heading over its recent messages.
+struct Scope {
+    conv: String,
+    words: String,
+    title: String,
+}
+
 /// Answers from Slack, as `Event::Search`.
 pub enum Ev {
     Found { query: String, sort: Sort, page: usize, res: Res<Page> },
+    Recent { key: (String, String), res: Res<Vec<Hit>> },
     Preview { key: Key, preview: Preview },
 }
 
@@ -169,6 +189,9 @@ pub struct Search {
     /// Each query's messages, by query and order; `order` evicts the oldest.
     found: HashMap<(String, Sort), Found>,
     order: VecDeque<(String, Sort)>,
+    /// Each conversation's recent messages, by conversation and words.
+    recent: HashMap<(String, String), Recent>,
+    recent_order: VecDeque<(String, String)>,
     /// The conversations the last query matched: worked out once per
     /// query and state of the lists, not at each frame.
     convs: RefCell<(String, (u64, usize, usize), Vec<Conv>)>,
@@ -258,6 +281,83 @@ fn fetch(s: &Slack, query: &str, sort: Sort, page: usize) -> Res<Page> {
     Ok(Page { hits, pages: n(&paging["pages"]).max(1), total: n(&m["total"]).max(n(&paging["total"])) })
 }
 
+/// The words of a query its modifiers left out (`in:`, `from:`…): what
+/// the found messages mark.
+fn bare_words(q: &str) -> String {
+    q.split_whitespace().filter(|w| !w.contains(':')).collect::<Vec<_>>().join(" ")
+}
+
+/// A ts Slack sent as a string, or now and then as a number.
+fn ts_of(v: &Value) -> Option<String> {
+    v.as_str().map(String::from).or_else(|| v.as_number().map(|n| n.to_string())).filter(|t| !t.is_empty())
+}
+
+/// A message as a found one: its text, else its files' names.
+fn hit_of(m: &Message, chan: &str, chan_name: &str, kind: Kind, thread: Option<String>) -> Hit {
+    let mut raw = m.text.clone();
+    if raw.trim().is_empty() {
+        raw = m.files.iter().map(|f| format!("📎 {}", f.name)).collect::<Vec<_>>().join(" ");
+    }
+    Hit {
+        chan: chan.to_string(),
+        chan_name: chan_name.to_string(),
+        kind,
+        user: m.user.clone(),
+        username: m.bot_name.clone().unwrap_or_default(),
+        ts: m.ts.clone(),
+        raw,
+        thread,
+    }
+}
+
+/// The conversation's recent messages that match, newest first, as the
+/// web client's "Recent messages with …" (`search.inline`). Slack answers
+/// with their ts only: the messages come from those `loaded`, else one
+/// history over the span of the rest, else one by one.
+fn fetch_recent(s: &Slack, chan: &str, words: &str, chan_name: &str, kind: Kind, loaded: Vec<Message>) -> Res<Vec<Hit>> {
+    let v = s.call("search.inline", &[("query", words), ("channel", chan), ("count", PAGE), ("page", "1")])?;
+    let refs: Vec<(String, Option<String>)> = v["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|it| {
+            let ts = ts_of(&it["ts"])?;
+            let thread = thread_of(it["permalink"].as_str().unwrap_or("")).filter(|t| *t != ts);
+            Some((ts, thread))
+        })
+        .collect();
+    let mut got: HashMap<String, Message> = HashMap::new();
+    for m in loaded {
+        if refs.iter().any(|(ts, _)| *ts == m.ts) {
+            got.insert(m.ts.clone(), m);
+        }
+    }
+    let mut top: Vec<&str> = refs.iter().filter(|(ts, t)| t.is_none() && !got.contains_key(ts)).map(|(ts, _)| ts.as_str()).collect();
+    top.sort();
+    if let [first, .., last] = top[..] {
+        if let Ok(msgs) = history(s, chan, &[("oldest", first), ("latest", last), ("inclusive", "true"), ("limit", "200")]) {
+            for m in msgs.into_iter().filter(|m| top.contains(&m.ts.as_str())) {
+                got.insert(m.ts.clone(), m);
+            }
+        }
+    }
+    for (ts, thread) in &refs {
+        if got.contains_key(ts) {
+            continue;
+        }
+        let one = match thread {
+            Some(parent) => s
+                .call("conversations.replies", &[("channel", chan), ("ts", parent), ("oldest", ts), ("latest", ts), ("inclusive", "true"), ("limit", "1")])
+                .map(|v| v["messages"].as_array().into_iter().flatten().map(crate::slack::parse_message).collect::<Vec<_>>()),
+            None => history(s, chan, &[("latest", ts), ("inclusive", "true"), ("limit", "1")]),
+        };
+        if let Some(m) = one.ok().and_then(|msgs| msgs.into_iter().find(|m| m.ts == *ts)) {
+            got.insert(ts.clone(), m);
+        }
+    }
+    Ok(refs.iter().filter_map(|(ts, thread)| got.get(ts).map(|m| hit_of(m, chan, chan_name, kind, thread.clone()))).collect())
+}
+
 /// History in chronological order: up to `limit` before `latest`, it
 /// included, or the closest after `oldest`.
 fn history(s: &Slack, chan: &str, params: &[(&str, &str)]) -> Res<Vec<Message>> {
@@ -333,6 +433,11 @@ impl Search {
         self.found.get(&(self.query(), self.sort))
     }
 
+    fn recent_now(&self, scope: Option<&Scope>) -> Option<&Recent> {
+        let sc = scope.filter(|_| worth(&self.query()))?;
+        self.recent.get(&(sc.conv.clone(), sc.words.clone()))
+    }
+
     /// A new query, or tab, or order: back to the first result.
     fn reset(&mut self) {
         (self.sel, self.scroll, self.wheel) = (0, 0, false);
@@ -362,6 +467,60 @@ impl App {
         s.want = None;
         s.reset();
         self.dirty = true;
+    }
+
+    /// Ctrl+F: the search on the open conversation (`in:#eng `, `in:@ana `),
+    /// its messages only, as Slack does.
+    pub(crate) fn search_here(&mut self) {
+        let Some(id) = self.current.clone() else { return };
+        let conv = self.convs.iter().find(|c| c.id == id).cloned().or_else(|| self.directory.find(&id).map(|j| self.directory.conv(j)));
+        let Some(c) = conv else { return };
+        let scope = match (c.kind, c.user.as_deref()) {
+            (Kind::Direct, Some(uid)) => match self.users.handles.iter().find(|(_, v)| v.as_str() == uid) {
+                Some((h, _)) => format!("@{h}"),
+                None => format!("<@{uid}>"),
+            },
+            _ => format!("#{}", c.name),
+        };
+        self.open_search();
+        self.search.input.insert(&format!("in:{scope} "));
+        self.search.tab = Tab::Msgs;
+    }
+
+    /// The conversation a query with one `in:` and only plain words
+    /// searches in (`in:#eng deplo`, `in:@ana`, `in:<#C1>`), for its recent
+    /// messages; none with other modifiers.
+    fn search_scope(&self) -> Option<Scope> {
+        let q = self.search.query();
+        let (ins, rest): (Vec<&str>, Vec<&str>) = q.split_whitespace().partition(|w| w.len() >= 3 && w.is_char_boundary(3) && w[..3].eq_ignore_ascii_case("in:"));
+        if ins.len() != 1 || rest.iter().any(|w| w.contains(':') || w.starts_with('-')) {
+            return None;
+        }
+        let words = rest.join(" ").replace(['*', '"'], " ").split_whitespace().collect::<Vec<_>>().join(" ");
+        if !words.chars().any(char::is_alphanumeric) {
+            return None;
+        }
+        let v = &ins[0][3..];
+        let inner = |p: &str| v.strip_prefix(p).map(|r| r.trim_end_matches('>').split('|').next().unwrap_or("").to_string());
+        let dm_with = |uid: &str| self.convs.iter().find(|c| c.kind == Kind::Direct && c.user.as_deref() == Some(uid)).map(|c| c.id.clone());
+        let id = if let Some(id) = inner("<#") {
+            Some(id)
+        } else if let Some(uid) = inner("<@") {
+            dm_with(&uid)
+        } else if let Some(h) = v.strip_prefix('@') {
+            self.users.handles.get(h).and_then(|uid| dm_with(uid))
+        } else {
+            let name = v.trim_start_matches('#');
+            let ours = self.convs.iter().find(|c| c.kind != Kind::Direct && c.name.eq_ignore_ascii_case(name)).map(|c| c.id.clone());
+            ours.or_else(|| self.directory.chans.iter().find(|d| d.name.eq_ignore_ascii_case(name)).map(|d| d.id.clone()))
+        }?;
+        let conv = self.convs.iter().find(|c| c.id == id).cloned().or_else(|| self.directory.find(&id).map(|j| self.directory.conv(j)))?;
+        let label = self.label(&conv);
+        let title = match conv.kind {
+            Kind::Direct | Kind::Group => trf!("Recent messages with {label}", "Mensagens recentes com {label}"),
+            _ => trf!("Recent messages in #{label}", "Mensagens recentes em #{label}"),
+        };
+        Some(Scope { conv: id, words, title })
     }
 
     pub(crate) fn close_search(&mut self) {
@@ -407,14 +566,25 @@ impl App {
             out.extend(convs.into_iter().take(n).map(Item::Conv));
         }
         if tab != Tab::Convs {
-            let n = self.search.found_now().map_or(0, |f| f.hits.len());
-            out.extend((0..n).map(Item::Msg));
+            out.extend((0..self.search_msgs().len()).map(Item::Msg));
+        }
+        out
+    }
+
+    /// The messages listed, in order: the conversation's recent ones that
+    /// match (with `in:`), then Slack's search without those.
+    fn search_msgs(&self) -> Vec<&Hit> {
+        let scope = self.search_scope();
+        let mut out: Vec<&Hit> = self.search.recent_now(scope.as_ref()).map(|r| r.hits.iter().collect()).unwrap_or_default();
+        let seen: HashSet<(&str, &str)> = out.iter().map(|h| (h.chan.as_str(), h.ts.as_str())).collect();
+        if let Some(f) = self.search.found_now() {
+            out.extend(f.hits.iter().filter(|h| !seen.contains(&(h.chan.as_str(), h.ts.as_str()))));
         }
         out
     }
 
     fn search_hit(&self, k: usize) -> Option<&Hit> {
-        self.search.found_now()?.hits.get(k)
+        self.search_msgs().get(k).copied()
     }
 
     /// The conversation a result is, as it would open.
@@ -455,14 +625,19 @@ impl App {
                 self.search.found.insert(key, Found { asked: q.clone(), loading: true, ..Default::default() });
                 self.ask_found(q.clone(), self.search.sort, q, 1);
             }
+            self.ask_recent();
         }
         let items = self.search_items();
         let sel = items.get(self.search.sel).copied();
-        // The next page, as the selection nears the end of those loaded.
-        if let Some(Item::Msg(k)) = sel {
+        // The next page, as the selection nears the end of those loaded, or
+        // when all those loaded were among the recent ones.
+        let shown = self.search_msgs().len();
+        let recent = self.search.recent_now(self.search_scope().as_ref()).map_or(0, |r| r.hits.len());
+        let near = matches!(sel, Some(Item::Msg(k)) if k + NEAR >= shown);
+        if near || (recent > 0 && shown == recent) {
             let key = (self.search.query(), self.search.sort);
             if let Some(f) = self.search.found.get_mut(&key) {
-                if k + NEAR >= f.hits.len() && f.page < f.pages && !f.loading && f.error.is_none() {
+                if f.page > 0 && f.page < f.pages && !f.loading && f.error.is_none() {
                     f.loading = true;
                     let (asked, page) = (f.asked.clone(), f.page + 1);
                     self.ask_found(key.0, key.1, asked, page);
@@ -494,6 +669,31 @@ impl App {
                 });
             }
         }
+    }
+
+    /// With `in:`, the conversation's recent messages, once per conversation and words.
+    fn ask_recent(&mut self) {
+        let Some(sc) = self.search_scope() else { return };
+        let key = (sc.conv.clone(), sc.words.clone());
+        if self.search.recent.get(&key).is_some_and(|r| r.error.is_none()) {
+            return;
+        }
+        self.search.recent_order.retain(|k| k != &key);
+        self.search.recent_order.push_back(key.clone());
+        while self.search.recent_order.len() > KEEP {
+            if let Some(old) = self.search.recent_order.pop_front() {
+                self.search.recent.remove(&old);
+            }
+        }
+        self.search.recent.insert(key.clone(), Recent { loading: true, ..Default::default() });
+        let conv = self.convs.iter().find(|c| c.id == sc.conv).cloned().or_else(|| self.directory.find(&sc.conv).map(|j| self.directory.conv(j)));
+        let (name, kind) = conv.map_or((String::new(), Kind::Channel), |c| (c.name, c.kind));
+        let loaded = self.messages.get(&sc.conv).cloned().unwrap_or_default();
+        self.dirty = true;
+        self.spawn(move |s| {
+            let res = fetch_recent(s, &key.0, &key.1, &name, kind, loaded);
+            Event::Search(Ev::Recent { key, res })
+        });
     }
 
     fn ask_found(&mut self, query: String, sort: Sort, asked: String, page: usize) {
@@ -531,6 +731,20 @@ impl App {
                 (f.page, f.pages, f.total, f.error) = (page, p.pages, p.total, None);
                 for t in texts {
                     self.name_mentions(&t);
+                }
+            }
+            Ev::Recent { key, res } => {
+                let Some(r) = self.search.recent.get_mut(&key) else { return };
+                r.loading = false;
+                match res {
+                    Ok(hits) => {
+                        let texts: Vec<String> = hits.iter().map(|h| h.raw.clone()).collect();
+                        (r.hits, r.error) = (hits, None);
+                        for t in texts {
+                            self.name_mentions(&t);
+                        }
+                    }
+                    Err(e) => r.error = Some(e),
                 }
             }
             Ev::Preview { key, preview } => {
@@ -798,7 +1012,7 @@ fn hit_text(app: &App, h: &Hit, query: &str) -> (Vec<char>, Vec<bool>) {
     // Slack's marks miss some forms it matched ("cha" found "chá" unmarked):
     // the query's words, accents and case aside, are marked too.
     let text: String = chars.iter().collect();
-    for (a, b) in crate::text::marks(&text, query) {
+    for (a, b) in crate::text::marks(&text, &bare_words(query)) {
         mask[a.min(chars.len())..b.min(chars.len())].iter_mut().for_each(|x| *x = true);
     }
     (chars, mask)
@@ -1058,18 +1272,33 @@ fn entries(app: &App, width: usize) -> Vec<Entry> {
         }
         return out;
     }
+    // The conversation's recent messages first; Slack's search after, without them.
+    let scope = app.search_scope();
+    let recent = s.recent_now(scope.as_ref()).map_or(0, |r| r.hits.len());
+    let msgs = app.search_msgs();
+    if let (Some(sc), true) = (&scope, recent > 0) {
+        out.push(heading(&sc.title, Some(recent.to_string())));
+        for h in &msgs[..recent] {
+            out.push(Entry { item: Some(n), lines: hit_lines(app, h, &query, width) });
+            out.push(Entry::plain(Line::from("")));
+            n += 1;
+        }
+    }
+    let others = &msgs[recent..];
     let found = s.found_now();
     let count = found.filter(|f| f.page > 0).map(|f| f.total.to_string());
     out.push(heading(tr("Messages", "Mensagens"), count));
     match found {
         None => out.push(note(tr("Searching…", "Buscando…"))),
-        Some(f) if f.hits.is_empty() && f.loading => out.push(note(tr("Searching…", "Buscando…"))),
-        Some(f) if f.hits.is_empty() => match &f.error {
+        Some(f) if others.is_empty() && f.loading && recent > 0 => out.push(note(tr("Loading more…", "Carregando mais…"))),
+        Some(f) if others.is_empty() && f.loading => out.push(note(tr("Searching…", "Buscando…"))),
+        Some(f) if others.is_empty() => match &f.error {
             Some(e) => out.push(note(e)),
+            None if recent > 0 => out.push(note(tr("Nothing else matches the whole words", "Nada mais tem as palavras inteiras"))),
             None => out.push(note(tr("No messages match", "Nenhuma mensagem encontrada"))),
         },
         Some(f) => {
-            for h in &f.hits {
+            for h in others {
                 out.push(Entry { item: Some(n), lines: hit_lines(app, h, &query, width) });
                 out.push(Entry::plain(Line::from("")));
                 n += 1;
@@ -1404,7 +1633,9 @@ fn hint(f: &mut Frame, app: &App, area: Rect) {
         tr("Esc close", "Esc fechar")
     );
     let found = app.search.found_now();
+    let recent = app.search.recent_now(app.search_scope().as_ref());
     let status = match found {
+        _ if recent.is_some_and(|r| r.loading) => tr("Searching…", "Buscando…").to_string(),
         Some(f) if f.loading => tr("Searching…", "Buscando…").to_string(),
         Some(f) => f.error.clone().unwrap_or_default(),
         None if worth(&app.search.query()) => tr("Searching…", "Buscando…").to_string(),

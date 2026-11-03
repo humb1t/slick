@@ -169,6 +169,7 @@ for creating that app with the scopes slick uses.
 | `↑` `↓` / `j` `k` | move in the sidebar |
 | `Enter` | open a conversation / expand or collapse a section |
 | `Ctrl+K` or `Ctrl+T` (or click the sidebar's box) | search window: conversations and messages, with a preview (`Tab` / `Alt+1`…`Alt+3` tabs, `Ctrl+S` relevance or date, `Enter` opens, `Esc` clears or closes) |
+| `Ctrl+F` | search the open conversation (`in:#channel` / `in:@person`): its recent messages matching word starts first, then Slack's whole-word results |
 | `/` | filter the sidebar's conversations |
 | `Alt+↑` `Alt+↓` | previous / next conversation in the sidebar (on a selected section header: move the section) |
 | `Alt+Shift+↑` `Alt+Shift+↓` | previous / next unread conversation, folded sections included |
