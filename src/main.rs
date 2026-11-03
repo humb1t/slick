@@ -14,6 +14,7 @@ mod editor;
 mod icons;
 mod invite;
 mod ipc;
+mod keyring;
 mod emoji;
 mod events;
 mod files;
@@ -21,6 +22,8 @@ mod help;
 mod login;
 mod mention;
 mod markup;
+#[cfg(target_os = "linux")]
+mod notify;
 #[cfg(not(target_os = "linux"))]
 mod login_window;
 mod pause;
@@ -219,6 +222,8 @@ fn main() {
             std::process::exit(1);
         }
     }
+    // Sessions saved before the keyring move there, before any workspace reads them.
+    config::move_to_keyring();
     std::thread::spawn(cache::prune_images);
     // Only the one that owns the socket: another may have the sign-in window open.
     if owner {
@@ -255,6 +260,14 @@ fn main() {
     }
     #[cfg(target_os = "linux")]
     let (tray_tx, mut tray) = (tx.clone(), None::<tray::Tray>);
+    // Only the first slick notifies; a click comes back here, as `slick open`.
+    #[cfg(target_os = "linux")]
+    {
+        notify::init();
+        if owner {
+            notify::start(tx.clone());
+        }
+    }
     let mut ws = workspaces::Workspaces::new(picker, owner);
     // Zooming the terminal changes the cell's pixels: images are re-encoded for the new size.
     let (mut cell, mut cell_at) = (cell_px(), Instant::now());

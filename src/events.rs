@@ -271,6 +271,9 @@ impl App {
             data["team"] = self.team_json();
             if name == "message.new" {
                 data["dnd"] = self.dnd_json();
+                // And slick's own desktop notification.
+                #[cfg(target_os = "linux")]
+                self.notify_desktop(&data);
             }
         }
         emit(name, data);

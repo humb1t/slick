@@ -23,6 +23,8 @@ tungstenite = { version = "0.26", default-features = false, features = ["handsha
 # from a thread by a single-threaded tokio runtime; fewer crates than async-io.
 [target.'cfg(target_os = "linux")'.dependencies]
 ksni = { version = "0.3", features = ["blocking"] }
+# Desktop notifications (`notify`), on the zbus the tray already brings.
+zbus = { version = "5", default-features = false, features = ["tokio", "blocking-api"] }
 
 # The sign-in window (`login_window`), WebView2 on Windows. On Linux it's the
 # `slick-login` helper in login/, built by build.rs and carried inside slick,

@@ -10,7 +10,7 @@ use std::time::Duration;
 
 pub type Res<T> = Result<T, String>;
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq)]
 pub struct Creds {
     pub token: String,
     /// The `d` cookie, only for browser session tokens (xoxc).
