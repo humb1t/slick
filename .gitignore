@@ -1,6 +1,9 @@
 target/
 login/target/
 
+# Private deployment account and database identifiers.
+landing/wrangler.local.jsonc
+
 # Local environment values; only sanitized examples belong in Git.
 .env
 .env.*

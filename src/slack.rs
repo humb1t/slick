@@ -1050,7 +1050,7 @@ impl Slack {
     /// else (avatars on gravatar, slack-edge) must never see them.
     pub fn download(&self, url: &str) -> Res<Vec<u8>> {
         let req = self.agent.get(url);
-        let req = if is_slack(url) { self.authed(req) } else { req };
+        let req = if is_slack(&req) { self.authed(req) } else { req };
         let resp = req.call().map_err(|e| e.to_string())?;
         let mut buf = Vec::new();
         resp.into_reader()
@@ -1070,7 +1070,7 @@ impl Slack {
             .user_agent(concat!("slick/", env!("CARGO_PKG_VERSION")))
             .build();
         let req = agent.get(url);
-        let req = if is_slack(url) { self.authed(req) } else { req };
+        let req = if is_slack(&req) { self.authed(req) } else { req };
         let resp = req.call().map_err(|e| e.to_string())?;
         // A session Slack no longer accepts gets its sign-in page, not the file.
         if !html_ok && resp.content_type() == "text/html" {
@@ -1094,10 +1094,11 @@ pub fn image_mime(path: &std::path::Path) -> Option<&'static str> {
     }
 }
 
-/// Only slack.com hosts get the credentials.
-fn is_slack(url: &str) -> bool {
-    let host = url.split("://").nth(1).and_then(|r| r.split('/').next()).unwrap_or("");
-    host == "slack.com" || host.ends_with(".slack.com")
+/// Only HTTPS Slack hosts get credentials, using the HTTP client's URL parser.
+fn is_slack(req: &ureq::Request) -> bool {
+    req.request_url().is_ok_and(|url| {
+        url.scheme() == "https" && (url.host() == "slack.com" || url.host().ends_with(".slack.com"))
+    })
 }
 
 fn parse_conversation(c: &Value) -> Conversation {
