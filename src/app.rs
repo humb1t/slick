@@ -1219,11 +1219,13 @@ impl App {
                 format!("{name}{}", self.you_suffix(c).unwrap_or_default())
             }
             Kind::Group => {
-                // mpdm-ana--bruno.silva--leonavas-1 → Ana, Bruno Silva
+                // mpdm-ana--bruno.silva--leonavas-1 → Ana, Bruno Silva: the
+                // others in alphabetical order, as Slack writes it.
                 let s = c.name.trim_start_matches("mpdm-");
                 let s = s.rsplit_once('-').map(|(a, _)| a).unwrap_or(s);
                 let mine = self.me.as_ref().map(|m| m.user.as_str());
-                s.split("--")
+                let mut names: Vec<String> = s
+                    .split("--")
                     .filter(|h| Some(*h) != mine)
                     .map(|h| {
                         self.users
@@ -1233,8 +1235,9 @@ impl App {
                             .cloned()
                             .unwrap_or_else(|| h.to_string())
                     })
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                    .collect();
+                names.sort_by_key(|n| n.to_lowercase());
+                names.join(", ")
             }
         }
     }
@@ -1304,40 +1307,46 @@ impl App {
             .collect();
         let mut placed = HashSet::new();
         let mut explicit: HashMap<String, Vec<usize>> = HashMap::new();
+        // A conversation lives in one section only: the first to claim it.
         let mut members_of = |ids: &[String], self_first: bool| {
-            let mut m: Vec<usize> = ids.iter().filter_map(|id| index.get(id.as_str()).copied()).collect();
+            let mut m: Vec<usize> =
+                ids.iter().filter_map(|id| index.get(id.as_str()).copied()).filter(|i| !placed.contains(i)).collect();
             m.sort_by_key(|&i| (!(self_first && self.convs[i].user.as_deref().is_some_and(|u| self.is_me(u))), i));
+            m.dedup();
             placed.extend(m.iter().copied());
             m
         };
-        for s in &self.sections {
-            match s.kind.as_str() {
-                // Slack's client shows a user group's channels under Canais, not as a section.
-                "direct_messages" | "channels" | "user_group" => {}
-                "stars" => {
-                    explicit.insert(s.id.clone(), members_of(&self.stars, true));
-                }
-                // Slack fills this one itself; the API lists no channels in it.
-                "slack_connect" => {
-                    let ids: Vec<String> = self
-                        .convs
-                        .iter()
-                        .filter(|c| c.ext_shared && matches!(c.kind, Kind::Channel | Kind::Private))
-                        .map(|c| c.id.clone())
-                        .collect();
-                    explicit.insert(s.id.clone(), members_of(&ids, false));
-                }
-                _ => {
-                    explicit.insert(s.id.clone(), members_of(&s.ids, false));
-                }
-            }
+        // Like Slack, the user's own sections claim their conversations
+        // first, then Starred, then a user group's (unless hidden), and
+        // Slack Connect takes the shared channels left.
+        for s in self.sections.iter().filter(|s| matches!(s.kind.as_str(), "standard" | "custom")) {
+            explicit.insert(s.id.clone(), members_of(&s.ids, false));
         }
-        // Without Slack's sections (e.g. an app token): favourites, DMs, channels.
+        let stars_id = match self.sections.iter().find(|s| s.kind == "stars") {
+            Some(s) => Some(s.id.clone()),
+            // Without Slack's sections (e.g. an app token): favourites, DMs, channels.
+            None => self.sections.is_empty().then(|| "stars".to_string()),
+        };
+        if let Some(id) = stars_id {
+            explicit.insert(id, members_of(&self.stars, true));
+        }
+        for s in self.sections.iter().filter(|s| s.kind == "user_group" && !s.hidden) {
+            explicit.insert(s.id.clone(), members_of(&s.ids, false));
+        }
+        // Slack fills this one itself; the API lists no channels in it.
+        if let Some(s) = self.sections.iter().find(|s| s.kind == "slack_connect") {
+            let ids: Vec<String> = self
+                .convs
+                .iter()
+                .filter(|c| c.ext_shared && matches!(c.kind, Kind::Channel | Kind::Private))
+                .map(|c| c.id.clone())
+                .collect();
+            explicit.insert(s.id.clone(), members_of(&ids, false));
+        }
         let fallback: Vec<Section> = if self.sections.is_empty() {
-            explicit.insert("stars".into(), members_of(&self.stars, true));
             [("stars", ""), ("direct_messages", ""), ("channels", "")]
                 .iter()
-                .map(|(k, n)| Section { id: k.to_string(), kind: k.to_string(), name: n.to_string(), emoji: String::new(), ids: Vec::new() })
+                .map(|(k, n)| Section { id: k.to_string(), kind: k.to_string(), name: n.to_string(), emoji: String::new(), ids: Vec::new(), hidden: false })
                 .collect()
         } else {
             Vec::new()
@@ -1357,8 +1366,13 @@ impl App {
             // Apps, and people from other orgs we cannot name, stay out of the
             // DM section (the search still finds them).
             let uid = dm_user(i);
+            // Slack's own search and channel expert bots never show.
+            if matches!(uid, "USEARCH" | "UCHANNELEXPERT") {
+                continue;
+            }
             let unknown = !self.users.names.is_empty() && !uid.is_empty() && !self.users.names.contains_key(uid);
-            if self.users.bots.contains(uid) {
+            // Apps: bots, Slackbot and "Slack" (USLACK, its system notices).
+            if self.users.bots.contains(uid) || uid == "USLACK" {
                 apps.push(i);
                 continue;
             }
@@ -1398,10 +1412,18 @@ impl App {
             let id = &self.convs[i].id;
             open.is_none_or(|o| o.contains(id)) || self.unread(id).0 || self.current.as_ref() == Some(id)
         });
-        apps.sort_by_key(|&i| self.label(&self.convs[i]).to_lowercase());
+        // Slackbot first (its own sort group), then by name.
+        apps.sort_by_key(|&i| (dm_user(i) != "USLACKBOT", self.label(&self.convs[i]).to_lowercase()));
+        // The new Slackbot's link takes its DM's place, above Threads, open or not.
+        let slackbot = if self.boot.as_ref().is_some_and(|b| b.slackbot_link) {
+            apps.retain(|&i| dm_user(i) != "USLACKBOT");
+            (0..self.convs.len()).find(|&i| dm_user(i) == "USLACKBOT" && !placed.contains(&i) && index.contains_key(self.convs[i].id.as_str()))
+        } else {
+            None
+        };
         // Without it among Slack's sections, Apps goes last.
         let apps_section =
-            Section { id: "apps".into(), kind: "recent_apps".into(), name: String::new(), emoji: String::new(), ids: Vec::new() };
+            Section { id: "apps".into(), kind: "recent_apps".into(), name: String::new(), emoji: String::new(), ids: Vec::new(), hidden: false };
         let mut order: Vec<&Section> = order.iter().collect();
         if !order.iter().any(|s| s.kind == "recent_apps") {
             order.push(&apps_section);
@@ -1412,10 +1434,10 @@ impl App {
         let muted = |i: &usize| self.muted(&self.convs[*i]);
         let silenced: Vec<usize> = (0..self.convs.len()).filter(|i| index.contains_key(self.convs[*i].id.as_str()) && muted(i)).collect();
         let silenced_section =
-            Section { id: SILENCED.into(), kind: SILENCED.into(), name: String::new(), emoji: String::new(), ids: Vec::new() };
+            Section { id: SILENCED.into(), kind: SILENCED.into(), name: String::new(), emoji: String::new(), ids: Vec::new(), hidden: false };
         order.push(&silenced_section);
-        // Like Slack: Threads first, above every section.
-        let mut rows = vec![Row::Threads, Row::Activity];
+        // Like Slack: (Slackbot's link,) Threads first, above every section.
+        let mut rows: Vec<Row> = slackbot.map(Row::Conv).into_iter().chain([Row::Threads, Row::Activity]).collect();
         for s in order {
             let all: &[usize] = match s.kind.as_str() {
                 "direct_messages" => &dms,

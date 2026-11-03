@@ -289,7 +289,7 @@ impl App {
             }
             Ev::Created { name, emoji, chan, next, res: Ok(id) } => {
                 let at = self.sections.iter().position(|s| s.id == next).unwrap_or(self.sections.len());
-                self.sections.insert(at, Section { id: id.clone(), kind: "standard".into(), name, emoji, ids: Vec::new() });
+                self.sections.insert(at, Section { id: id.clone(), kind: "standard".into(), name, emoji, ids: Vec::new(), hidden: false });
                 self.section = None;
                 if let Some(chan) = chan {
                     self.move_conv(chan, id);

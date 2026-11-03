@@ -282,6 +282,9 @@ pub struct Section {
     pub name: String,
     pub emoji: String,
     pub ids: Vec<String>,
+    /// Hidden in Slack (a user group's section the user put away).
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -425,6 +428,9 @@ pub struct Boot {
     /// The team's plan, "" when free; `None` until known.
     #[serde(default)]
     pub plan: Option<String>,
+    /// The new Slackbot has its own link above Threads, in its DM's place.
+    #[serde(default)]
+    pub slackbot_link: bool,
 }
 
 /// Messages per history page; a shorter page means the start was reached.
@@ -829,6 +835,7 @@ impl Slack {
                     .flatten()
                     .filter_map(|i| i.as_str().map(String::from))
                     .collect(),
+                hidden: s["is_hidden"].as_bool() == Some(true),
             })
             .collect())
     }
@@ -842,6 +849,10 @@ impl Slack {
             sidebar_behavior: str_of(&v["prefs"]["sidebar_behavior"]),
             section_prefs: section_prefs(&v["prefs"]["channel_sections"]),
             plan: v["team"]["plan"].as_str().map(String::from),
+            // Slack asks an edge API; its link's "New" tag seen, or big mode had, tells it here.
+            slackbot_link: v["prefs"]["enable_slackbot_view"].as_bool() != Some(false)
+                && (v["prefs"]["has_seen_slackbot_ai_new_tag"].as_bool() == Some(true)
+                    || v["prefs"]["had_slackbot_big_mode_access"].as_bool() == Some(true)),
         })
     }
 
