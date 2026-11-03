@@ -1975,6 +1975,11 @@ impl App {
                 self.images.insert(r.key, res.map(Img::Ready).unwrap_or(Img::Failed));
                 continue;
             }
+            // A deactivated account's photo goes gray (the file on disk stays as sent).
+            let faded = ["avatar-512-", "avatar-big-", "avatar-"]
+                .iter()
+                .find_map(|p| r.key.strip_prefix(p))
+                .is_some_and(|uid| self.users.deleted.contains(uid));
             self.spawn(move |s| {
                 let path = cache::image_path(&r.key);
                 let bytes = std::fs::read(&path).inspect(|_| cache::touch(&path)).or_else(|_| {
@@ -1985,6 +1990,9 @@ impl App {
                 });
                 let anim = bytes.as_ref().ok().filter(|_| r.key.starts_with("emoji-")).and_then(|b| emoji::Anim::decode(b));
                 let mut res = bytes.and_then(|b| image::load_from_memory(&b).map_err(|e| e.to_string()));
+                if faded {
+                    res = res.map(crate::icons::faded);
+                }
                 if r.key.starts_with("avatar-512-") {
                     res = res.map(|i| crate::icons::rounded_by(i, crate::icons::PROFILE_RADIUS));
                 } else if r.key.starts_with("avatar-") {
@@ -2774,7 +2782,11 @@ impl App {
             Event::Around { chan, ts, res } => self.on_around(chan, ts, res),
             Event::Users(Ok(mut users)) => {
                 users.apps = std::mem::take(&mut self.users.apps);
+                let changed: Vec<String> = self.users.deleted.symmetric_difference(&users.deleted).cloned().collect();
                 self.users = users;
+                for uid in changed {
+                    self.repaint_photo(&uid);
+                }
                 self.resort();
             }
             Event::Convs(Ok(convs)) => {

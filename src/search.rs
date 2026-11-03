@@ -666,7 +666,8 @@ impl App {
     /// The channels the query matches (ours and the workspace's), and the
     /// people: anyone by any of their names (display, full, handle), a DM
     /// or not, with group DMs and apps' DMs among them. The better match
-    /// leads, then the last message; you go behind the others.
+    /// leads, then the last message; you go behind the others, and
+    /// deactivated accounts behind everyone still here.
     fn local_matches(&self, query: &str) -> Matches {
         use crate::text::{place, rank, Folded, Query};
         let chans: Vec<Conv> = self
@@ -685,11 +686,11 @@ impl App {
         let dm_of: HashMap<&str, usize> =
             self.convs.iter().enumerate().filter(|(_, c)| c.kind == Kind::Direct).filter_map(|(i, c)| Some((c.user.as_deref()?, i))).collect();
         let mut ranges = Vec::new();
-        // (archived, inexact, you, place): fields compare in order.
-        let mut hits: Vec<((bool, bool, bool, crate::text::Place), Who)> = Vec::new();
+        // (deactivated, archived, inexact, you, place): fields compare in order.
+        let mut hits: Vec<((bool, bool, bool, bool, crate::text::Place), Who)> = Vec::new();
         let mut covered: HashSet<&str> = HashSet::new();
         for (uid, name) in &users.names {
-            if users.deleted.contains(uid) || users.bots.contains(uid) {
+            if users.bots.contains(uid) {
                 continue;
             }
             let names = [Some(name.as_str()), users.real.get(uid).map(String::as_str), handle_of.get(uid.as_str()).copied()];
@@ -699,7 +700,7 @@ impl App {
             covered.insert(uid);
             let you = me == Some(uid.as_str());
             let latest = if you { 0 } else { dm_of.get(uid.as_str()).map_or(0, |&i| self.last_message(&self.convs[i])) };
-            hits.push(((false, tier > 0, you, place(tier, false, true, latest, 0, name.chars().count())), Who::Person(uid.clone())));
+            hits.push(((users.deleted.contains(uid), false, tier > 0, you, place(tier, false, true, latest, 0, name.chars().count())), Who::Person(uid.clone())));
         }
         for (i, c) in self.convs.iter().enumerate() {
             let group = c.kind == Kind::Group;
@@ -709,7 +710,8 @@ impl App {
             let name = Folded::new(&self.label(c));
             let Some(tier) = rank(&q, &name, &mut ranges) else { continue };
             let at = place(tier, c.archived, true, self.last_message(c), 0, name.len()).group(group);
-            hits.push(((c.archived, tier > 0, false, at), Who::Conv(Conv::Ours(i))));
+            let gone = c.user.as_ref().is_some_and(|u| users.deleted.contains(u));
+            hits.push(((gone, c.archived, tier > 0, false, at), Who::Conv(Conv::Ours(i))));
         }
         hits.sort_by(|a, b| a.0.cmp(&b.0));
         // All: the part whose first answer is the better match goes first;
@@ -718,8 +720,8 @@ impl App {
             let exact = crate::text::find(&self.label(&c), query).is_some_and(|(t, _)| t == 0);
             (c.archived, !exact)
         });
-        let lead_p = hits.first().map_or((true, true), |h| (h.0 .0, h.0 .1));
-        let you_lead = hits.first().is_some_and(|h| h.0 .2);
+        let lead_p = hits.first().map_or((true, true), |h| (h.0 .0 || h.0 .1, h.0 .2));
+        let you_lead = hits.first().is_some_and(|h| h.0 .3);
         let people_first = lead_p < lead_c || (lead_p == lead_c && !you_lead);
         Matches { recent: Vec::new(), chans, people: hits.into_iter().map(|(_, w)| w).collect(), people_first }
     }
@@ -1120,6 +1122,8 @@ impl App {
                 let Some(who) = self.who(k) else { return };
                 self.close_search();
                 match who {
+                    // A deactivated account takes no new DM: its profile instead.
+                    Who::Person(uid) if self.users.deleted.contains(&uid) && self.dm_with(&uid).is_none() => self.open_profile(uid),
                     Who::Person(uid) => self.open_dm(uid),
                     Who::Conv(c) => {
                         if let Some(conv) = self.conv_of(c) {
@@ -1444,7 +1448,7 @@ fn conv_line(app: &App, c: &Conversation, members: u32, query: &str, width: usiz
         Kind::Direct => crate::ui::presence_span(app, crate::ui::presence_of(app, uid)),
         Kind::Group => Span::styled("◉", dim()),
     };
-    let gone = c.archived || c.guest;
+    let gone = c.archived || c.guest || (c.kind == Kind::Direct && app.users.deleted.contains(uid));
     // Unread, as the sidebar bolds it.
     let (unread, mentions) = app.unread(&c.id);
     let base = match () {
@@ -1483,11 +1487,16 @@ fn handle_of<'a>(app: &'a App, uid: &str) -> Option<&'a str> {
 
 /// Someone's row: presence, the name with what matched, "(you)", their
 /// status emoji, their full name (or handle) dim, and their DM's last day.
+/// A deactivated account is all dim, "(deactivated)" after the name.
 fn person_line(app: &App, uid: &str, query: &str, width: usize) -> Line<'static> {
     let name = app.users.names.get(uid).cloned().unwrap_or_else(|| uid.to_string());
-    let dot = crate::ui::presence_span(app, crate::ui::presence_of(app, uid));
+    let gone = app.users.deleted.contains(uid);
+    let dot = if gone { Span::raw(" ") } else { crate::ui::presence_span(app, crate::ui::presence_of(app, uid)) };
     let mut left = vec![Span::raw("  "), dot, Span::raw(" ")];
-    left.extend(lit_name(&name, query, Style::new().fg(Color::White)));
+    left.extend(lit_name(&name, query, if gone { Style::new().fg(Color::Gray) } else { Style::new().fg(Color::White) }));
+    if gone {
+        left.push(Span::styled(tr(" (deactivated)", " (desativada)"), dim()));
+    }
     if app.me.as_ref().is_some_and(|m| m.user_id == uid) {
         left.push(Span::styled(tr(" (you)", " (você)"), dim()));
     }

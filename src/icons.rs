@@ -36,6 +36,17 @@ pub fn rounded_by(img: DynamicImage, radius: f32) -> DynamicImage {
     DynamicImage::ImageRgba8(img)
 }
 
+/// A deactivated account's photo: in gray and a little faded, as Slack shows it.
+pub fn faded(img: DynamicImage) -> DynamicImage {
+    let mut img = img.to_rgba8();
+    for p in img.pixels_mut() {
+        let l = 0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32;
+        let g = (l * 0.6 + 40.0).min(255.0) as u8;
+        (p[0], p[1], p[2]) = (g, g, g);
+    }
+    DynamicImage::ImageRgba8(img)
+}
+
 /// 5×7 digits; each row is five bits, the leftmost the highest.
 const DIGITS: [[u8; 7]; 10] = [
     [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110],
