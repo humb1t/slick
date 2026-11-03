@@ -315,8 +315,8 @@ impl App {
     /// Moves the pick (older is -1); past the newest it clears. With none, ↑ picks the newest.
     fn step(&mut self, thread: bool, delta: isize) -> bool {
         let Some((_, all)) = self.pane(thread) else { return false };
-        // Joins and leaves are folded into a line there's nothing to do with.
-        let msgs: Vec<&Message> = all.iter().filter(|m| crate::text::membership(m).is_none()).collect();
+        // A line of joins and leaves is picked as its first one.
+        let msgs: Vec<&Message> = all.iter().enumerate().filter(|&(i, m)| i == 0 || !crate::text::folds(&all[i - 1], m)).map(|(_, m)| m).collect();
         if msgs.is_empty() {
             return false;
         }

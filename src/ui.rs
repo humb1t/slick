@@ -975,8 +975,8 @@ pub(crate) struct Rendered {
     buttons: Vec<blocks::Hit>,
     /// File cards' actions.
     files: Vec<files::Hit>,
-    /// Joins and leaves folded into one line: its lines, once per message,
-    /// to scroll to them; nothing to pick or react to there.
+    /// The rest of a line of joins and leaves (its first is a message hit):
+    /// its lines, once per message, to scroll to them.
     quiet: Vec<(std::ops::Range<usize>, String)>,
 }
 
@@ -1586,9 +1586,9 @@ fn viewer(f: &mut Frame, app: &mut App) {
     };
     let link = if r.link.is_some() { tr(" ↗ Open in browser ", " ↗ Ver no navegador ") } else { "" };
     let save = match app.downloads.get(&r.key) {
-        Some(files::State::Saving) => tr(" downloading… ", " baixando… "),
-        Some(files::State::Saved(_)) => tr(" ✓ Show in folder ", " ✓ Mostrar na pasta "),
-        None => tr(" ⤓ Download (d) ", " ⤓ Baixar (d) "),
+        Some(files::State::Saving(p)) => trf!(" downloading {} ", " baixando {} ", p.label()),
+        Some(files::State::Saved(_)) => tr(" ✓ Show in folder ", " ✓ Mostrar na pasta ").to_string(),
+        None => tr(" ⤓ Download (d) ", " ⤓ Baixar (d) ").to_string(),
     };
     let hint = tr(" o open in viewer · Esc close ", " o abrir no visualizador · Esc fechar ");
     let inner_w = cols.max((link.width() + save.width() + hint.width()) as u16).min(max_w);
@@ -2199,9 +2199,18 @@ fn lines_with(
         let time = Local.timestamp_opt(secs(&m.ts), 0).single();
         let day = time.map(|t| t.date_naive());
         // Slack's "Igor and 6 others left #x. Also, Ana rejoined.": the joins
-        // and leaves in a row, that day, as one quiet line with no avatar.
-        let same_day = |n: &&Message| Local.timestamp_opt(secs(&n.ts), 0).single().map(|t| t.date_naive()) == day;
-        let run: Vec<&Message> = msgs[i..].iter().take_while(|n| crate::text::membership(n).is_some() && same_day(n)).collect();
+        // and leaves in a row, that day, as one quiet line with no avatar;
+        // one with reactions stays on its own line (`text::folds`).
+        let mut run: Vec<&Message> = Vec::new();
+        if crate::text::membership(m).is_some() {
+            run.push(m);
+            for n in &msgs[i + 1..] {
+                if !crate::text::folds(run[run.len() - 1], n) {
+                    break;
+                }
+                run.push(n);
+            }
+        }
         let mut spaced = false;
         if day != prev_day {
             if let Some(t) = time {
@@ -2251,7 +2260,12 @@ fn lines_with(
                 l.spans.insert(0, Span::styled(lead, dim()));
                 lines.push(l);
             }
-            quiet.extend(run.iter().map(|n| (first..lines.len(), n.ts.clone())));
+            // Picked, hovered and reacted to as its first message, like a message.
+            if !m.reactions.is_empty() {
+                reaction_lines(app, m, gutter, body_width, &mut lines, &mut slots, &mut hits);
+            }
+            hits.push(Hit::Message { lines: first..lines.len(), ts: m.ts.clone() });
+            quiet.extend(run[1..].iter().map(|n| (first..lines.len(), n.ts.clone())));
             prev = None;
             continue;
         }
@@ -2332,6 +2346,11 @@ fn lines_with(
         // Block Kit and mrkdwn laid out at this width, then moved past the avatar.
         let mut pieces = blocks::parse(m, names);
         blocks::drop_author(&mut pieces, &author);
+        for p in &mut pieces {
+            if let blocks::Piece::Card(c) = p {
+                c.refresh = app.card_refresh(&c.ts, &c.entity);
+            }
+        }
         let mut rich = blocks::render(&pieces, body_width, font, if muted { dim().italic() } else { Style::new() });
         if app.copied.is_some_and(|(what, _)| what == "code") {
             blocks::mark_copied(&mut rich, &app.copied_code);

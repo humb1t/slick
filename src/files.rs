@@ -8,13 +8,67 @@ use crate::slack::{File, Res, Slack};
 use crate::ui::truncate;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
 
 /// A download, keyed by `Job::key`.
 pub enum State {
-    Saving,
+    Saving(Arc<Progress>),
     Saved(PathBuf),
+}
+
+/// How far a download got: the bytes so far and its size (0 while not known).
+#[derive(Default)]
+pub struct Progress {
+    pub done: AtomicU64,
+    pub total: AtomicU64,
+}
+
+impl Progress {
+    /// From 0 to 1, when the size is known.
+    pub fn fraction(&self) -> Option<f64> {
+        let (done, total) = (self.done.load(Ordering::Relaxed), self.total.load(Ordering::Relaxed));
+        (total > 0).then(|| (done as f64 / total as f64).min(1.0))
+    }
+
+    /// `42%`, else the bytes so far.
+    pub fn label(&self) -> String {
+        match self.fraction() {
+            Some(f) => format!("{}%", (f * 100.0).floor() as u64),
+            None => size_label(self.done.load(Ordering::Relaxed)),
+        }
+    }
+}
+
+/// Wakes the screen this often at most while bytes arrive.
+const PROGRESS_EVERY: Duration = Duration::from_millis(200);
+
+/// Counts what goes through into `Progress`, calling `tick` now and then.
+struct Counting<'a> {
+    out: &'a mut std::fs::File,
+    progress: &'a Progress,
+    tick: &'a dyn Fn(),
+    last: Instant,
+}
+
+impl Write for Counting<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let n = self.out.write(buf)?;
+        self.progress.done.fetch_add(n as u64, Ordering::Relaxed);
+        if self.last.elapsed() >= PROGRESS_EVERY {
+            self.last = Instant::now();
+            (self.tick)();
+        }
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.out.flush()
+    }
 }
 
 /// Something to save: a shared file or the image in the viewer.
@@ -134,14 +188,22 @@ fn claim(dir: &Path, name: &str) -> Res<(PathBuf, PathBuf, std::fs::File)> {
 }
 
 /// Saves into the downloads folder without overwriting anything; the file
-/// only gets its name once complete.
-pub fn save(s: &Slack, job: &Job) -> Res<PathBuf> {
+/// only gets its name once complete. Each try writes a `.part` of its own,
+/// so a retry never lands after what an earlier one left. `tick` is
+/// called as `progress` moves.
+pub fn save(s: &Slack, job: &Job, progress: &Progress, tick: &dyn Fn()) -> Res<PathBuf> {
     let dir = downloads_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let (path, part, mut out) = claim(&dir, &safe_name(&job.name))?;
+    let mut counting = Counting { out: &mut out, progress, tick, last: Instant::now() };
     let res = match &job.cached {
-        Some(c) => std::fs::File::open(c).and_then(|mut f| std::io::copy(&mut f, &mut out)).map_err(|e| e.to_string()),
-        None => s.download_to(&job.url, &mut out, job.html_ok),
+        Some(c) => std::fs::File::open(c)
+            .and_then(|mut f| {
+                progress.total.store(f.metadata()?.len(), Ordering::Relaxed);
+                std::io::copy(&mut f, &mut counting)
+            })
+            .map_err(|e| e.to_string()),
+        None => s.download_to(&job.url, &mut counting, job.html_ok, &|n| progress.total.store(n, Ordering::Relaxed)),
     };
     drop(out);
     match res.and_then(|_| std::fs::rename(&part, &path).map_err(|e| e.to_string())) {
@@ -161,9 +223,11 @@ pub fn cached(s: &Slack, job: &Job) -> Res<PathBuf> {
     }
     let dir = path.parent().unwrap();
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let part = dir.join(".part");
+    // One `.part` per try: two at once never write into the same one.
+    static TRY: AtomicU64 = AtomicU64::new(0);
+    let part = dir.join(format!(".part{}-{}", std::process::id(), TRY.fetch_add(1, Ordering::Relaxed)));
     let mut out = std::fs::File::create(&part).map_err(|e| e.to_string())?;
-    let res = s.download_to(&job.url, &mut out, job.html_ok);
+    let res = s.download_to(&job.url, &mut out, job.html_ok, &|_| {});
     drop(out);
     match res.and_then(|_| std::fs::rename(&part, &path).map_err(|e| e.to_string())) {
         Ok(()) => Ok(path),
@@ -172,6 +236,79 @@ pub fn cached(s: &Slack, job: &Job) -> Res<PathBuf> {
             Err(e)
         }
     }
+}
+
+/// A progress bar `cells` wide, in eighths of a cell.
+pub fn bar(f: f64, cells: usize) -> String {
+    const PARTS: [&str; 8] = [" ", "▏", "▎", "▍", "▌", "▋", "▊", "▉"];
+    let eighths = (f.clamp(0.0, 1.0) * (cells * 8) as f64).round() as usize;
+    let mut s = "█".repeat(eighths / 8);
+    if eighths / 8 < cells {
+        s.push_str(PARTS[eighths % 8]);
+        s.push_str(&"░".repeat(cells - eighths / 8 - 1));
+    }
+    s
+}
+
+/// The file manager with the file picked in it (`ShowItems` on Linux's
+/// session bus), else its folder.
+pub fn reveal(path: &Path) {
+    let quiet = |c: &mut std::process::Command| {
+        c.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    };
+    let path = path.to_path_buf();
+    // dbus-send waits for the file manager to start: not on the UI's thread.
+    std::thread::spawn(move || {
+        let shown = if cfg!(target_os = "macos") {
+            let mut c = std::process::Command::new("open");
+            c.arg("-R").arg(&path);
+            quiet(&mut c);
+            c.status().is_ok_and(|s| s.success())
+        } else if cfg!(windows) {
+            let mut arg = std::ffi::OsString::from("/select,");
+            arg.push(&path);
+            let mut c = std::process::Command::new("explorer");
+            c.arg(arg);
+            quiet(&mut c);
+            // Explorer's exit code says nothing: it showed it.
+            c.status().is_ok()
+        } else {
+            let mut c = std::process::Command::new("dbus-send");
+            c.args([
+                "--session",
+                "--print-reply",
+                "--dest=org.freedesktop.FileManager1",
+                "--type=method_call",
+                "/org/freedesktop/FileManager1",
+                "org.freedesktop.FileManager1.ShowItems",
+            ]);
+            c.arg(format!("array:string:{}", file_uri(&path))).arg("string:");
+            quiet(&mut c);
+            c.status().is_ok_and(|s| s.success())
+        };
+        if !shown {
+            if let Some(dir) = path.parent() {
+                let opener = if cfg!(windows) { "explorer" } else if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+                let mut c = std::process::Command::new(opener);
+                c.arg(dir);
+                quiet(&mut c);
+                let _ = c.spawn();
+            }
+        }
+    });
+}
+
+/// `file:///home/a/My%20file.pdf`.
+fn file_uri(p: &Path) -> String {
+    let mut out = String::from("file://");
+    for &b in p.as_os_str().as_encoded_bytes() {
+        if b.is_ascii_alphanumeric() || b"/-_.~".contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
 }
 
 /// `1.2 MB`, or `1,2 MB` the way Slack writes sizes in Portuguese.
@@ -257,9 +394,15 @@ pub fn card(f: &File, state: Option<&State>, indent: &str, width: usize, line: u
         x += label.width();
     };
     match (state, Job::file(f)) {
-        (Some(State::Saving), _) => action(&mut spans, "   ", tr("downloading…", "baixando…"), dim.italic(), None),
+        (Some(State::Saving(p)), _) => {
+            action(&mut spans, "   ", tr("Downloading", "Baixando"), dim.italic(), None);
+            if let Some(f) = p.fraction() {
+                action(&mut spans, " ", &bar(f, 10), Style::new().fg(Color::Cyan), None);
+            }
+            action(&mut spans, " ", &p.label(), dim, None);
+        }
         (Some(State::Saved(p)), _) => {
-            action(&mut spans, "   ", tr("✓ saved", "✓ salvo"), Style::new().fg(Color::Green), None);
+            action(&mut spans, "   ", tr("✓ Downloaded", "✓ Baixado"), Style::new().fg(Color::Green), None);
             action(&mut spans, "  ", tr("Open", "Abrir"), link, Some(Click::Open(p.clone())));
             action(&mut spans, " · ", tr("Show in folder", "Mostrar na pasta"), link, Some(Click::Reveal(p.clone())));
         }

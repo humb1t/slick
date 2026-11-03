@@ -156,6 +156,15 @@ pub fn membership(m: &Message) -> Option<bool> {
     }
 }
 
+/// Whether `next` goes into the same line of joins and leaves as `m`: both
+/// are, on the same day, and neither has reactions (one with them stays on
+/// its own line, to show them).
+pub fn folds(m: &Message, next: &Message) -> bool {
+    use chrono::TimeZone;
+    let day = |m: &Message| chrono::Local.timestamp_opt(ts_ms(&m.ts) / 1000, 0).single().map(|t| t.date_naive());
+    membership(m).is_some() && membership(next).is_some() && m.reactions.is_empty() && next.reactions.is_empty() && day(m) == day(next)
+}
+
 /// `:green_heart:` → 💚 for the shortcodes that have a Unicode emoji.
 pub fn shortcodes(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -203,6 +212,15 @@ fn push_line(out: &mut String, line: &str) {
 
 fn attachment(a: &Value, n: &Names) -> String {
     let mut out = String::new();
+    // An app's card (work object): its title and kind.
+    let card = &a["work_object_entity"]["layouts"]["expanded"];
+    if let Some(title) = card["title"]["text"].as_str().filter(|t| !t.is_empty()) {
+        push_line(&mut out, title);
+        if let Some(sub) = card["subtitle"]["text"].as_str().filter(|t| !t.is_empty()) {
+            push_line(&mut out, sub);
+        }
+        return out;
+    }
     if let Some(b) = a["blocks"].as_array() {
         out = blocks(b, n, false);
     }
@@ -419,7 +437,7 @@ fn rich_inline(e: &Value, n: &Names, html: bool, out: &mut String) {
     let s = |k: &str| e[k].as_str().unwrap_or("");
     match s("type") {
         "text" => out.push_str(s("text")),
-        "link" => out.push_str(if s("text").is_empty() { s("url") } else { s("text") }),
+        "link" | "attachment_mention" => out.push_str(if s("text").is_empty() { s("url") } else { s("text") }),
         "user" => {
             out.push('@');
             out.push_str(n.user(s("user_id")).unwrap_or(s("user_id")));
