@@ -837,26 +837,24 @@ impl App {
         self.dirty = true;
     }
 
-    /// Drops the old photo in every size, here and on disk, so the new one loads.
-    fn forget_photo(&mut self, uid: &str) {
-        self.drop_photo(uid, true);
+    /// Drops the old photo in every size so the new one loads (its new URL
+    /// names a new file on disk; the old file expires on its own).
+    pub(crate) fn forget_photo(&mut self, uid: &str) {
+        self.drop_photo(uid);
     }
 
     /// Someone's photo drawn again from the file on disk: they were
     /// deactivated or came back, and it changes to or from gray.
     pub(crate) fn repaint_photo(&mut self, uid: &str) {
-        self.drop_photo(uid, false);
+        self.drop_photo(uid);
     }
 
-    /// Someone's photo out of memory (and off the disk, with `file`).
-    fn drop_photo(&mut self, uid: &str, file: bool) {
+    /// Someone's photo out of memory, in every size.
+    fn drop_photo(&mut self, uid: &str) {
         let prefixes = ["avatar-", "avatar-big-", "avatar-512-", "photo-"].map(|p| format!("{p}{uid}"));
         let stale = |k: &str| prefixes.iter().any(|p| k.strip_prefix(p.as_str()).is_some_and(|r| r.is_empty() || r.starts_with(['+', '.'])));
         let keys: Vec<String> = self.images.keys().filter(|k| stale(k)).cloned().collect();
         for k in keys {
-            if file {
-                let _ = std::fs::remove_file(crate::cache::image_path(&k));
-            }
             self.images.remove(&k);
         }
         self.protocols.retain(|(k, ..), _| !stale(k));

@@ -102,7 +102,7 @@ impl Job {
             _ => r.name.clone(),
         };
         // `Slack::download` stops at 20 MB: a copy that size may be cut short.
-        let cached = Some(cache::image_path(&r.key)).filter(|p| p.metadata().is_ok_and(|m| m.len() < 20 << 20));
+        let cached = Some(r.file()).filter(|p| p.metadata().is_ok_and(|m| m.len() < 20 << 20));
         Self { key: r.key.clone(), url: r.url.clone(), name, html_ok: false, cached }
     }
 }

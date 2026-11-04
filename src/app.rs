@@ -255,6 +255,22 @@ impl ImgRef {
         let ext = url.rsplit_once('.').map(|(_, e)| format!(".{e}")).filter(|e| e.len() <= 5).unwrap_or_default();
         Self { key: format!("photo-{uid}{ext}"), url: url.to_string(), name: name.to_string(), link: Some(link) }
     }
+
+    /// Its copy on disk. A person's photo is named by its URL too: Slack
+    /// gives every new photo a new URL, so a changed one is downloaded
+    /// again instead of the old file being read back (the old one expires).
+    pub fn file(&self) -> std::path::PathBuf {
+        if !["avatar-", "photo-"].iter().any(|p| self.key.starts_with(p)) {
+            return cache::image_path(&self.key);
+        }
+        use sha2::Digest;
+        let hash: String = sha2::Sha256::digest(&self.url).iter().take(4).map(|b| format!("{b:02x}")).collect();
+        let (stem, ext) = match self.key.rsplit_once('.') {
+            Some((s, e)) if self.key.starts_with("photo-") => (s, format!(".{e}")),
+            _ => (self.key.as_str(), String::new()),
+        };
+        cache::image_path(&format!("{stem}-{hash}{ext}"))
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -1981,7 +1997,7 @@ impl App {
                 .find_map(|p| r.key.strip_prefix(p))
                 .is_some_and(|uid| self.users.deleted.contains(uid));
             self.spawn(move |s| {
-                let path = cache::image_path(&r.key);
+                let path = r.file();
                 let bytes = std::fs::read(&path).inspect(|_| cache::touch(&path)).or_else(|_| {
                     let b = s.download(&r.url)?;
                     let _ = std::fs::create_dir_all(path.parent().unwrap());
@@ -2463,7 +2479,7 @@ impl App {
     }
 
     fn open_external(&self, r: &ImgRef) {
-        let path = cache::image_path(&r.key);
+        let path = r.file();
         if path.exists() {
             cache::touch(&path);
             let _ = std::process::Command::new(OPENER)
@@ -2783,9 +2799,14 @@ impl App {
             Event::Users(Ok(mut users)) => {
                 users.apps = std::mem::take(&mut self.users.apps);
                 let changed: Vec<String> = self.users.deleted.symmetric_difference(&users.deleted).cloned().collect();
+                // A photo changed without its `user_change` reaching us (the socket was down).
+                let photos: Vec<String> = users.avatars.iter().filter(|(uid, url)| self.users.avatars.get(*uid).is_some_and(|old| old != *url)).map(|(uid, _)| uid.clone()).collect();
                 self.users = users;
                 for uid in changed {
                     self.repaint_photo(&uid);
+                }
+                for uid in photos {
+                    self.forget_photo(&uid);
                 }
                 self.resort();
             }
