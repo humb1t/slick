@@ -109,7 +109,7 @@ The script ([install.sh](install.sh)) downloads the latest
 (built on Ubuntu 24.04, so glibc 2.39 or newer), checks its SHA-256 and puts
 `slick` in `~/.local/bin`, without sudo. It warns when that folder is not on
 your `PATH`. `SLICK_INSTALL_DIR` changes the folder and
-`SLICK_VERSION=v0.5.0` picks a version. Installed this way, slick updates itself
+`SLICK_VERSION=v0.5.1` picks a version. Installed this way, slick updates itself
 (see below).
 
 ### Windows
@@ -127,7 +127,7 @@ irm https://slick.leonavas.com/install.ps1 | iex
 
 The script ([install.ps1](install.ps1)) downloads the latest release, checks its
 SHA-256, puts `slick.exe` in `%LOCALAPPDATA%\Programs\slick` and adds that folder
-to your user `PATH`, without admin rights (`$env:SLICK_VERSION = 'v0.5.0'` picks
+to your user `PATH`, without admin rights (`$env:SLICK_VERSION = 'v0.5.1'` picks
 a version). Open a new terminal and run `slick`. Only x86_64 for now.
 
 ### From source
