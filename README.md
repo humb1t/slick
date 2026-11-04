@@ -10,7 +10,7 @@
 One small binary, no browser inside: it opens with your workspace already on
 screen (from a local cache) and refreshes in the background.
 
-<!-- screenshot -->
+![slick: #engineering with a thread open](docs/screenshots/main.png)
 
 > slick is an unofficial client. It is not affiliated with, endorsed by or
 > supported by Slack Technologies or Salesforce. "Slack" is a trademark of
@@ -52,6 +52,21 @@ screen (from a local cache) and refreshes in the background.
   resizable sidebar.
 - Follows your terminal's color theme.
 - Auto-update from GitHub Releases (see below).
+
+## Screenshots
+
+| | |
+|---|---|
+| ![Search](docs/screenshots/search.png) | ![Activity](docs/screenshots/activity.png) |
+| **Ctrl+K search**: messages, channels and people, with a preview | **Activity**: mentions, threads, reactions |
+| ![Threads](docs/screenshots/threads.png) | ![Reaction picker](docs/screenshots/react.png) |
+| **Threads** you follow, with what's new | **Reactions**, custom emoji included |
+| ![Message box](docs/screenshots/compose.png) | ![Profile](docs/screenshots/profile.png) |
+| **Message box** with `:emoji:`, `@` and `#` autocomplete | **Profiles**, presence and status |
+| ![Workspaces](docs/screenshots/workspaces.png) | |
+| **Several workspaces**, `Ctrl+1…9` | |
+
+*All screenshots use the built-in demo workspace (see [Demo workspace](#demo-workspace)); every name, face and message is made up.*
 
 ## Trust me bro benchmark
 
@@ -140,6 +155,23 @@ or, from a clone:
 cargo build --release
 ./target/release/slick
 ```
+
+### Demo workspace
+
+A build with the `demo` feature runs against a pretend workspace instead of
+Slack, so nothing needs signing in and nothing reaches Slack (`src/demo.rs`,
+pictures in `assets/demo`). Its config and cache live in a temporary folder,
+fresh at every start:
+
+```sh
+cargo build --release --features demo
+SLICK_DEMO=1 ./target/release/slick
+```
+
+The screenshots come from it: `scripts/demo-shots.sh` takes them all off screen
+(a headless Hyprland output, Ghostty and grim) into `docs/screenshots` and
+`landing/public/screens`. `SLICK_DEMO_SCRIPT` drives the app for them (keys,
+clicks, typing; see `src/demo.rs`).
 
 ## Sign in
 

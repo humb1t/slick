@@ -9,6 +9,8 @@ mod cache;
 mod cli;
 mod compose;
 mod config;
+#[cfg(feature = "demo")]
+mod demo;
 mod details;
 mod edit;
 mod editor;
@@ -168,7 +170,19 @@ fn version() -> String {
     }
 }
 
+/// The pretend workspace is on (`demo`): no other slick, no updates.
+fn demo_on() -> bool {
+    #[cfg(feature = "demo")]
+    return demo::on();
+    #[cfg(not(feature = "demo"))]
+    false
+}
+
 fn main() {
+    #[cfg(feature = "demo")]
+    if demo::on() {
+        demo::setup();
+    }
     i18n::init();
     match std::env::args().nth(1).as_deref() {
         #[cfg(not(target_os = "linux"))]
@@ -199,7 +213,7 @@ fn main() {
     };
     // A slick already running is brought to the front instead of starting
     // another; this one doesn't even need a terminal for that.
-    let new_instance = args.first().map(String::as_str) == Some("--new-instance");
+    let new_instance = args.first().map(String::as_str) == Some("--new-instance") || demo_on();
     let server = match if new_instance { None } else { ipc::claim() } {
         Some(ipc::Claim::Owner(s)) => Some(s),
         Some(ipc::Claim::Running) => {
@@ -253,7 +267,9 @@ fn main() {
     // Whether the window has the keyboard: the open conversation only counts as read then.
     let _ = crossterm::execute!(std::io::stdout(), EnableFocusChange);
 
-    update::background(tx.clone());
+    if !demo_on() {
+        update::background(tx.clone());
+    }
     if let Some(s) = server {
         s.serve(tx.clone());
     }
@@ -275,7 +291,13 @@ fn main() {
     let (mut cell, mut cell_at) = (cell_px(), Instant::now());
     // Opening it counts as being there.
     rtm::touch();
+    #[cfg(feature = "demo")]
+    let mut script = demo::on().then(|| demo::Script::from_env(Duration::from_millis(1500))).flatten();
     while !ws.quit() {
+        #[cfg(feature = "demo")]
+        if let Some(s) = &mut script {
+            s.run(ws.active_mut());
+        }
         if cell_at.elapsed() >= Duration::from_secs(1) {
             cell_at = Instant::now();
             if recheck_cell(&mut cell, &mut ws) {

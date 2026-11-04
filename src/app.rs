@@ -506,7 +506,7 @@ impl NewLine {
 }
 
 pub struct App {
-    slack: Slack,
+    pub(crate) slack: Slack,
     tx: Sender<Event>,
     pub me: Option<AuthInfo>,
     pub users: Users,

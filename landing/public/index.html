@@ -37,7 +37,6 @@
   src: local("Maple Mono Bold"), local("MapleMono-Bold"), url(https://cdn.jsdelivr.net/npm/@fontsource/maple-mono@5.2.6/files/maple-mono-latin-700-normal.woff2) format("woff2"); }
 @font-face { font-family: "Maple Mono"; font-weight: 800; font-display: swap;
   src: local("Maple Mono ExtraBold"), local("MapleMono-ExtraBold"), url(https://cdn.jsdelivr.net/npm/@fontsource/maple-mono@5.2.6/files/maple-mono-latin-800-normal.woff2) format("woff2"); }
-/* Real terminal palettes. The page owns no colors of its own, like the app. */
 :root {
   /* the wordmark's colors, the same fixed RGB the app's login screen uses */
   --s-blue: #467996; --s-green: #598266; --s-red: #b65f4e; --s-yellow: #e7ba79;
@@ -49,34 +48,6 @@
   --red: #d0816f; --green: #7fae8c; --yellow: #e7ba79;
   --blue: #6fa3c2; --magenta: #c58fa6; --cyan: #8fbcd6;
   --badge-fg: #1d1b19;
-}
-[data-theme="terminal"] {
-  --bg: #282828; --surface: #3c3836; --line: #665c54;
-  --fg: #ebdbb2; --bright: #fbf1c7; --dim: #a89984;
-  --red: #fb4934; --green: #b8bb26; --yellow: #fabd2f;
-  --blue: #83a598; --magenta: #d3869b; --cyan: #8ec07c;
-  --badge-fg: #1d2021;
-}
-[data-theme="solarized-light"] {
-  --bg: #fdf6e3; --surface: #eee8d5; --line: #c9c2ab;
-  --fg: #586e75; --bright: #073642; --dim: #5f7379;
-  --red: #c4271f; --green: #6c7c00; --yellow: #946f00;
-  --blue: #1f72b0; --magenta: #c22a73; --cyan: #17716b;
-  --badge-fg: #fdf6e3;
-}
-[data-theme="nord"] {
-  --bg: #2e3440; --surface: #3b4252; --line: #4c566a;
-  --fg: #d8dee9; --bright: #eceff4; --dim: #9aa5ba;
-  --red: #d47680; --green: #a3be8c; --yellow: #ebcb8b;
-  --blue: #81a1c1; --magenta: #b48ead; --cyan: #88c0d0;
-  --badge-fg: #2e3440;
-}
-[data-theme="catppuccin-latte"] {
-  --bg: #eff1f5; --surface: #e6e9ef; --line: #bcc0cc;
-  --fg: #4c4f69; --bright: #1e2030; --dim: #5c5f77;
-  --red: #c80e36; --green: #2f7d1f; --yellow: #a35f00;
-  --blue: #1e5ee0; --magenta: #7a2fd9; --cyan: #127a80;
-  --badge-fg: #eff1f5;
 }
 
 * { box-sizing: border-box; }
@@ -261,6 +232,12 @@ b, strong { color: var(--bright); }
   }
 }
 .shot { margin: .75rem 0; max-width: 900px; }
+/* one column: a terminal's text needs the whole measure to be read */
+.gallery { display: grid; gap: 1.75rem; margin: .75rem 0; max-width: 900px; }
+.gallery figure { margin: 0; }
+.gallery img { width: 100%; height: auto; display: block; border: 1px solid var(--line); border-radius: 8px; }
+.gallery figcaption { margin-top: .5rem; color: var(--dim); }
+.note { color: var(--dim); font-size: .85rem; }
 .shot img { width: 100%; height: auto; display: block; border: 1px solid var(--line); border-radius: 8px; }
 .shots img {
   width: 100%; height: auto; display: block;
@@ -374,7 +351,6 @@ td:first-child, td:first-child * { color: var(--yellow); font-weight: 700; }
 .status .gh { display: inline-flex; align-items: center; gap: .6ch; }
 .lang [aria-pressed="true"] { color: var(--bright); font-weight: 700; }
 .lang span { color: var(--line); }
-#themeName { color: var(--fg); }
 
 /* ---- narrow screens: channels become a sticky strip above the conversation ---- */
 @media (max-width: 760px) {
@@ -483,7 +459,7 @@ td:first-child, td:first-child * { color: var(--yellow); font-weight: 700; }
         <div class="hero" id="hero">
           <svg class="logo" id="logo" style="--n:35" preserveAspectRatio="xMinYMid meet" aria-hidden="true" focusable="false"></svg>
           <div class="shots" aria-hidden="true">
-            <img src="screens/reaction-picker.webp" alt="" width="1400" height="803">
+            <img src="screens/hero.webp" alt="" width="1596" height="1410">
           </div>
           <div class="hero-copy">
             <h1 data-i18n="heroH">Ultrafast, slim and beautiful Slack TUI.</h1>
@@ -548,10 +524,30 @@ td:first-child, td:first-child * { color: var(--yellow); font-weight: 700; }
                 <li><span data-i18n="s7">Mouse support: drag to select messages and copy them, right-click menus, a sidebar you can resize.</span></li>
                 <li><span data-i18n="s17">A tray icon that lights up with unread DMs and mentions.</span></li>
                 <li><span data-i18n="s18">Updates itself from the GitHub releases, with one click.</span></li>
-                <li><span data-i18n="s9">Your terminal's own colors. Press <kbd>t</kbd> to see what that means.</span></li>
+                <li><span data-i18n="s9">Your terminal's own colors: slick draws with its palette, so it matches the rest of your setup.</span></li>
                 <li><span data-i18n="s19">In English or Brazilian Portuguese, switched in Settings.</span></li>
                 <li><span data-i18n="s20">Slack events for your system: new messages, mentions, reactions, presence, unread counts and pauses as a stream of JSON events, as hooks and as a state file, so any script, bar or notifier can react to them. Commands too: <code>slick open</code>, <code>slick status</code>, <code>slick dnd</code>.</span></li>
               </ul>
+            </div>
+          </div>
+        </article>
+        <article class="msg">
+          <span class="av" aria-hidden="true">s</span>
+          <div>
+            <div><span class="who">slick</span><span class="app"> APP</span><span class="time">11:31</span></div>
+            <div class="body">
+              <p data-i18n="g0">And how it looks:</p>
+              <div class="gallery">
+                <figure><img src="screens/main.webp" alt="slick: a channel with an image, code, an app's card and a thread open beside it" width="1600" height="940" loading="lazy" decoding="async"><figcaption data-i18n="g_main">Channels, threads in a side panel, images, code blocks and apps' cards, all in the terminal.</figcaption></figure>
+                <figure><img src="screens/search.webp" alt="Ctrl+K search: messages, channels and people, with a preview" width="1600" height="940" loading="lazy" decoding="async"><figcaption data-i18n="g_search"><kbd>Ctrl</kbd>+<kbd>K</kbd>: messages, channels and people, with a preview of each hit.</figcaption></figure>
+                <figure><img src="screens/activity.webp" alt="Activity: mentions, threads and reactions" width="1600" height="940" loading="lazy" decoding="async"><figcaption data-i18n="g_activity">Activity: mentions, threads and reactions in one place.</figcaption></figure>
+                <figure><img src="screens/threads.webp" alt="The threads you follow" width="1600" height="940" loading="lazy" decoding="async"><figcaption data-i18n="g_threads">The threads you follow, with what is new in each one.</figcaption></figure>
+                <figure><img src="screens/react.webp" alt="The reaction picker with custom emoji" width="1600" height="940" loading="lazy" decoding="async"><figcaption data-i18n="g_react">Reactions with a picker, your workspace's custom emoji included.</figcaption></figure>
+                <figure><img src="screens/compose.webp" alt="The message box with emoji autocomplete" width="1600" height="940" loading="lazy" decoding="async"><figcaption data-i18n="g_compose">The message box: <code>:</code> emoji, <code>@</code> people and <code>#</code> channels autocomplete.</figcaption></figure>
+                <figure><img src="screens/profile.webp" alt="A DM with the person's profile open" width="1600" height="940" loading="lazy" decoding="async"><figcaption data-i18n="g_profile">Profiles, presence and status, right beside the conversation.</figcaption></figure>
+                <figure><img src="screens/workspaces.webp" alt="Switching between two workspaces" width="1600" height="940" loading="lazy" decoding="async"><figcaption data-i18n="g_workspaces">Several workspaces, one keystroke apart: <kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>9</kbd>.</figcaption></figure>
+              </div>
+              <p class="note" data-i18n="g9">A made-up demo workspace: every name, face and message is fictional.</p>
             </div>
           </div>
         </article>
@@ -1049,8 +1045,7 @@ cookie = xoxd-…</pre></div>
 <footer class="status" id="statusBar">
   <span class="left" id="status" role="status" aria-live="polite"></span>
   <span class="right">
-    <span class="hints" data-i18n="hints">j k · Alt+↑↓ channels · ^K find · t theme</span>
-    <button id="themeBtn" type="button"><span data-i18n="themeWord">theme</span>: <span id="themeName">slick</span></button>
+    <span class="hints" data-i18n="hints">j k · Alt+↑↓ channels · ^K find</span>
     <span class="lang" role="group" aria-label="Language">
       <button type="button" data-lang="en" aria-pressed="true">EN</button><span>|</span><button type="button" data-lang="pt" aria-pressed="false">PT</button>
     </span>
@@ -1063,10 +1058,6 @@ cookie = xoxd-…</pre></div>
   const INSTALL = "curl -fsSL https://slick.leonavas.com/install.sh | sh";
   const SOURCE = "cargo install --locked --git https://github.com/leonavas/slick";
   const COPY = { install: INSTALL, windows: "irm https://slick.leonavas.com/install.ps1 | iex", source: SOURCE, login: "slick login", run: "slick", plugin: "omarchy plugin add https://github.com/leonavas/omarchy-slack.git && omarchy plugin enable leonavas.slack --section right" };
-  const THEMES = [
-    ["slick", "slick"], ["terminal", "Terminal"], ["solarized-light", "Solarized Light"],
-    ["nord", "Nord"], ["catppuccin-latte", "Catppuccin Latte"],
-  ];
   const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   // ---------- logo: ANSI Shadow, drawn with box characters ----------
@@ -1196,7 +1187,17 @@ cookie = xoxd-…</pre></div>
     s7: "Suporte a mouse: arraste para selecionar mensagens e copiar, menus no clique direito, barra lateral redimensionável.",
     s17: "Um ícone na bandeja do sistema que acende com DMs não lidas e menções.",
     s18: "Se atualiza sozinho pelas releases do GitHub, com um clique.",
-    s9: "As cores do seu próprio terminal. Aperte <kbd>t</kbd> para ver o que isso quer dizer.",
+    g0: "E como ele fica:",
+    g_main: "Canais, threads num painel ao lado, imagens, blocos de código e cards de apps, tudo no terminal.",
+    g_search: "<kbd>Ctrl</kbd>+<kbd>K</kbd>: mensagens, canais e pessoas, com uma prévia de cada resultado.",
+    g_activity: "Atividade: menções, threads e reações num lugar só.",
+    g_threads: "As threads que você segue, com o que há de novo em cada uma.",
+    g_react: "Reações com seletor, inclusive os emojis próprios do workspace.",
+    g_compose: "A caixa de mensagem: autocomplete de emoji com <code>:</code>, pessoas com <code>@</code> e canais com <code>#</code>.",
+    g_profile: "Perfis, presença e status, ao lado da conversa.",
+    g_workspaces: "Vários workspaces, a uma tecla de distância: <kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>9</kbd>.",
+    g9: "Um workspace de demonstração inventado: todos os nomes, rostos e mensagens são fictícios.",
+    s9: "As cores do seu próprio terminal: o slick desenha com a paleta dele, então combina com o resto do seu setup.",
     s19: "Em inglês ou português, com a troca nas Configurações.",
     s20: 'Eventos do Slack para o seu sistema: mensagens novas, menções, reações, presença, contagem de não lidas e pausas como um fluxo de eventos JSON, como hooks e como um arquivo de estado, para qualquer script, barra ou notificador reagir a eles. E comandos: <code>slick open</code>, <code>slick status</code>, <code>slick dnd</code>.',
     s10: 'Atalhos para tudo: <kbd>Ctrl</kbd>+<kbd>K</kbd> para pular para qualquer conversa, <kbd>j</kbd> <kbd>k</kbd> para navegar, <kbd>Tab</kbd> para escrever, <kbd>Shift</kbd>+<kbd>J</kbd> <kbd>K</kbd> para reordenar seções. Lista completa em <button class="chl" data-open="hotkeys">#hotkeys</button>.',
@@ -1322,8 +1323,7 @@ cookie = xoxd-…</pre></div>
     r010_4: "Abre a partir de um cache local, atualiza a conversa aberta a cada 3 segundos e marca como lida.",
     r010_5: "Login na própria página do Slack, numa janelinha: <code>slick login [workspace]</code> ou <kbd>Ctrl</kbd>+<kbd>L</kbd> no app. Token no arquivo de config ou variáveis de ambiente também funcionam.",
     r010_6: "Sua conta e status, ícone na bandeja para as não lidas e atualização com um clique pelas releases do GitHub.",
-    hints: "j k · Alt+↑↓ canais · ^K procurar · t tema",
-    themeWord: "tema",
+    hints: "j k · Alt+↑↓ canais · ^K procurar",
   };
   const S = {
     en: {
@@ -1336,9 +1336,8 @@ cookie = xoxd-…</pre></div>
       copied: "✓ Copied to the clipboard",
       copyFail: "✗ Couldn't copy. Select the text and copy it by hand.",
       quit: "q quits the real slick. This tab stays open.",
-      theme: "theme",
       noMatch: q => `No conversation matches “${q}”.`,
-      unknown: "✗ Unknown command. Try /theme, /lang pt or /help.",
+      unknown: "✗ Unknown command. Try /lang pt or /help.",
       message: n => `Message ${n}`,
       hintCopy: "Enter copies the command", hintSend: "Enter sends · Shift+Enter new line",
       copyBtn: "[Copy]", copiedBtn: "[Copied]", copyCmd: "Copy", copiedCmd: "Copied",
@@ -1371,9 +1370,8 @@ cookie = xoxd-…</pre></div>
       copied: "✓ Copiado para a área de transferência",
       copyFail: "✗ Não deu para copiar. Selecione o texto e copie manualmente.",
       quit: "q fecha o slick de verdade. Esta aba continua aberta.",
-      theme: "tema",
       noMatch: q => `Nenhuma conversa com “${q}”.`,
-      unknown: "✗ Comando desconhecido. Tente /theme, /lang en ou /help.",
+      unknown: "✗ Comando desconhecido. Tente /lang en ou /help.",
       message: n => `Mensagem para ${n}`,
       hintCopy: "Enter copia o comando", hintSend: "Enter envia · Shift+Enter nova linha",
       copyBtn: "[Copiar]", copiedBtn: "[Copiado]", copyCmd: "Copiar", copiedCmd: "Copiado",
@@ -1439,17 +1437,6 @@ cookie = xoxd-…</pre></div>
     updateHint();
     idle();
     measure();
-  }
-
-  // ---------- theme ----------
-  let themeIdx = 0;
-  function setTheme(i, persist) {
-    themeIdx = (i + THEMES.length) % THEMES.length;
-    const [id, name] = THEMES[themeIdx];
-    root.dataset.theme = id;
-    $("#themeName").textContent = name;
-    $('meta[name="theme-color"]').content = getComputedStyle(root).getPropertyValue("--bg").trim();
-    if (persist) { store.set("fs-theme", id); flash(`${t("theme")}: ${name}`, "ok"); }
   }
 
   // ---------- status line ----------
@@ -1705,7 +1692,7 @@ cookie = xoxd-…</pre></div>
     try { ts = await turnstile(); } catch { failed(body, "rqNoCaptcha", again); return; }
     ts.render(body.querySelector(".ts"), {
       sitekey: TURNSTILE_SITEKEY,
-      theme: ["slick", "terminal", "nord"].includes(THEMES[themeIdx][0]) ? "dark" : "light",
+      theme: "dark",
       language: lang === "pt" ? "pt-br" : "en",
       "error-callback": () => failed(body, "rqNoCaptcha", again),
       callback: token => {
@@ -1856,10 +1843,7 @@ cookie = xoxd-…</pre></div>
     if (v === INSTALL) { copy(INSTALL); return; }
     if (v.startsWith("/")) {
       const [cmd, arg] = v.slice(1).split(/\s+/);
-      if (cmd === "theme") {
-        const i = THEMES.findIndex(([id, n]) => arg && (id.startsWith(arg.toLowerCase()) || n.toLowerCase().startsWith(arg.toLowerCase())));
-        setTheme(i >= 0 ? i : themeIdx + 1, true);
-      } else if (cmd === "lang") setLang(arg === "pt" ? "pt" : "en", true);
+      if (cmd === "lang") setLang(arg === "pt" ? "pt" : "en", true);
       else if (cmd === "help") open("hotkeys", { focusInput: true });
       else if (cmd === "source") open("advanced", { focusInput: true });
       else if (COPY[cmd] || cmd === "install") open("install", { focusInput: true });
@@ -1886,7 +1870,6 @@ cookie = xoxd-…</pre></div>
     const l = e.target.closest("[data-lang]");
     if (l) setLang(l.dataset.lang, true);
   });
-  $("#themeBtn").addEventListener("click", () => setTheme(themeIdx + 1, true));
 
   // ---------- global keys ----------
   document.addEventListener("keydown", e => {
@@ -1919,7 +1902,6 @@ cookie = xoxd-…</pre></div>
       case "g": e.preventDefault(); open(order[0]); break;
       case "G": e.preventDefault(); open(order[order.length - 1]); break;
       case "Escape": flash(t("markedRead")(label(current)), "ok"); break;
-      case "t": setTheme(themeIdx + 1, true); break;
       case "q": flash(t("quit"), "busy", 3200); break;
       case "Tab":
         if (inSide && !e.shiftKey) { e.preventDefault(); box.focus({ preventScroll: true }); }
@@ -1929,9 +1911,6 @@ cookie = xoxd-…</pre></div>
 
   // ---------- boot: on screen at once, then catch up like the app ----------
   const qs = new URLSearchParams(location.search);
-  const wantTheme = qs.get("theme") || store.get("fs-theme");
-  const ti = THEMES.findIndex(([id]) => id === wantTheme);
-  setTheme(ti >= 0 ? ti : 0, false);
 
   const qLang = qs.get("lang");
   const saved = store.get("fs-lang");

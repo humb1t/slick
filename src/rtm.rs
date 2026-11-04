@@ -91,6 +91,10 @@ fn idle() -> bool {
 
 /// Runs for the life of the process, reconnecting with a growing pause.
 pub fn start(slack: Slack, tx: Sender<Event>) {
+    #[cfg(feature = "demo")]
+    if crate::demo::on() {
+        return crate::demo::rtm(slack, tx);
+    }
     std::thread::spawn(move || {
         let mut wait = Duration::from_secs(2);
         loop {

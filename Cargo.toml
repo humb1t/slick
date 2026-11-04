@@ -5,6 +5,11 @@ edition = "2021"
 description = "Cliente Slack leve para terminal"
 license = "Apache-2.0"
 
+[features]
+# A pretend workspace (`SLICK_DEMO=1`, src/demo.rs), for trying slick without
+# signing in and for the screenshots. Off in releases.
+demo = []
+
 [dependencies]
 ratatui = "0.30"
 crossterm = "0.29"

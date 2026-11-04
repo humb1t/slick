@@ -542,6 +542,10 @@ impl Slack {
     }
 
     pub fn call(&self, method: &str, params: &[(&str, &str)]) -> Res<Value> {
+        #[cfg(feature = "demo")]
+        if crate::demo::on() {
+            return crate::demo::call(&self.creds().token, method, params);
+        }
         let url = format!("https://slack.com/api/{method}");
         let creds = self.creds();
         let mut form: Vec<(&str, &str)> = params.to_vec();
@@ -678,6 +682,10 @@ impl Slack {
     /// they only take multipart, which ureq 2 lacks, so the body is put
     /// together by hand.
     pub fn multipart(&self, method: &str, params: &[(&str, &str)], field: &str, path: &std::path::Path, mime: &str) -> Res<Value> {
+        #[cfg(feature = "demo")]
+        if crate::demo::on() {
+            return crate::demo::call(&self.creds().token, method, params);
+        }
         let data = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let file = path.file_name().map(|n| n.to_string_lossy().replace('"', "")).unwrap_or_else(|| "image".into());
         let boundary = format!("slick{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
@@ -1049,6 +1057,10 @@ impl Slack {
     /// Files on files.slack.com need the same credentials as the API; anything
     /// else (avatars on gravatar, slack-edge) must never see them.
     pub fn download(&self, url: &str) -> Res<Vec<u8>> {
+        #[cfg(feature = "demo")]
+        if crate::demo::on() {
+            return crate::demo::download(url);
+        }
         let req = self.agent.get(url);
         let req = if is_slack(&req) { self.authed(req) } else { req };
         let resp = req.call().map_err(|e| e.to_string())?;
@@ -1064,6 +1076,12 @@ impl Slack {
     /// and read timeouts, so files of hundreds of MB get through. `size` hears
     /// the file's size, when the server says it.
     pub fn download_to(&self, url: &str, out: &mut dyn Write, html_ok: bool, size: &dyn Fn(u64)) -> Res<u64> {
+        #[cfg(feature = "demo")]
+        if crate::demo::on() {
+            let b = crate::demo::download(url)?;
+            size(b.len() as u64);
+            return out.write_all(&b).map(|_| b.len() as u64).map_err(|e| e.to_string());
+        }
         let agent = ureq::AgentBuilder::new()
             .timeout_connect(Duration::from_secs(20))
             .timeout_read(Duration::from_secs(60))

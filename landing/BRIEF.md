@@ -16,7 +16,7 @@ Seed key: 5e3f89cd (direction, persuade). Three proposals were built (keycaps, l
 
 ## Direction contract
 THESIS: you are already using it — the whole page is a slick session on a character grid; sections are channels and the page scroll moves through them. Refuses the "screenshot in a fake window" hero.
-OWN-WORLD: real terminal palettes as the color system (default "Terminal" = Gruvbox palette; Solarized Light, Nord, Catppuccin Latte via `t`), box-drawing borders, ANSI-style badges, Maple Mono at every size. Wordmark = the app's own login banner: ANSI Shadow "FAST SLACK" as SVG, FAST in the theme's bright text, SLACK letter by letter in the app's fixed RGB (#36c5f0 blue, #2eb67d green, #e01e5a red, #ecb22e yellow, blue), shadow strokes in the letter color at 55%. Slack's pixel mark is NOT used on the landing.
+OWN-WORLD: one fixed palette, the logo's four colors on a dark ground (the theme switcher was removed: slick has no themes of its own, it uses the terminal's palette), box-drawing borders, ANSI-style badges, Maple Mono at every size. Wordmark = the app's own login banner: ANSI Shadow "FAST SLACK" as SVG, FAST in the theme's bright text, SLACK letter by letter in the app's fixed RGB (#36c5f0 blue, #2eb67d green, #e01e5a red, #ecb22e yellow, blue), shadow strokes in the letter color at 55%. Slack's pixel mark is NOT used on the landing.
 STORY: lands on #welcome hero → copies install → scrolls (or j / Alt+↓ / Ctrl+K) through #install, #why-fast, #keys, #features, #roadmap; reaching a channel marks it read in the sidebar.
 FIRST VIEWPORT: poster, left-aligned (centered was rejected). Wordmark runs the full width of the right pane (stacks FAST over SLACK under 620px of container); below it, single column inside a 1080px measure centered in the pane: H1 "Ultrafast, slim and beautiful Slack TUI." (PT "Uma TUI de Slack ultrarrápida, enxuta e bonita."), one-line lede, install command with solid yellow Copy key. Nothing else (boot log, sign-in link, nav line removed). Every channel not yet visited starts bold/unread. Message box docked at the bottom, status line pinned.
 FORM: live TUI session, grounded #1 (pick), seed 5e3f89cd.
@@ -26,3 +26,8 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
 - `● slick`: changelog (0.1.0, 2026-10-12).
 - `● feature-requests`: proposal → Turnstile → email asked in the input box → POST `/api/feature-request` (Worker `src/worker.js`: verifies Turnstile, stores a pending row in D1 `slick-feature-requests`, sends a confirmation email from noreply@slick.leonavas.com via Cloudflare Email Sending) → link `/api/confirm?t=…` marks it confirmed and redirects to `/?confirmed=<id>#requests` → "Your proposal was sent." History in localStorage `slick-requests` (id, text, status), pending ones re-checked via `GET /api/feature-request/:id`.
 - Wordmark: "SLICK" only, letter by letter in the app's four colors (blue, green, red, yellow, blue). No Slack mark.
+
+## Screenshots
+- Hero: `screens/hero.webp`, the demo workspace's #engineering without the thread pane (readable at the hero's size).
+- #features ends with a second message, a one-column gallery: the full main window, then search, activity, threads, reactions, message box, profile and workspaces, each with a caption (EN/PT, keys `g_*`).
+- All of them come from the demo workspace (`SLICK_DEMO=1`, `scripts/demo-shots.sh`); every name, face and message is made up, and the page says so under the gallery.

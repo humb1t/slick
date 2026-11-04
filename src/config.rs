@@ -226,6 +226,10 @@ fn shared_cookie_used(moved: &[String]) -> bool {
 /// `workspaces` is the single legacy one.
 #[allow(dead_code)]
 pub fn workspaces() -> Vec<WsConf> {
+    #[cfg(feature = "demo")]
+    if crate::demo::on() {
+        return crate::demo::workspaces();
+    }
     if let Some(token) = std::env::var("SLACK_TOKEN").ok().filter(|t| !t.is_empty()) {
         let cookie = std::env::var("SLACK_COOKIE").ok().filter(|c| !c.is_empty());
         return vec![WsConf { team_id: None, domain: workspace(), creds: Creds { token, cookie } }];
