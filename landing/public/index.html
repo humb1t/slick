@@ -223,30 +223,30 @@ b, strong { color: var(--bright); }
 .hero { position: relative; }
 .hero > .logo, .hero-copy { position: relative; z-index: 1; }
 .hero > .trailer { order: 3; margin-top: clamp(1.75rem, 3cqi, 2.5rem); max-width: 900px; }
-/* standard desktop screens: two balanced columns, centered as one group (text left, trailer right) */
+/* standard desktop screens: a slim text column on the left, the trailer as big as the rest allows */
 @media (min-width: 1200px) {
   .hero {
-    display: grid; grid-template-columns: fit-content(640px) minmax(0, 1fr);
+    display: grid; grid-template-columns: fit-content(30rem) minmax(0, 1fr);
     grid-template-areas: "logo trailer" "copy trailer";
-    align-content: center; column-gap: clamp(2rem, 4.5cqi, 4.5rem);
-    width: min(100%, 1480px); margin-inline: auto; box-sizing: border-box;
-    padding-inline: clamp(1.25rem, 3.5cqi, 3rem);
+    align-content: center; column-gap: clamp(2rem, 4cqi, 4rem);
+    width: min(100%, 1640px); margin-inline: auto; box-sizing: border-box;
+    padding-inline: clamp(1.25rem, 3cqi, 3rem);
   }
   .hero > * { width: auto; }
-  .hero > .logo { grid-area: logo; align-self: end; width: 100%; height: clamp(64px, 8cqi, 140px); }
-  .hero-copy { grid-area: copy; align-self: start; margin-top: clamp(1.25rem, 2.2cqi, 2rem); }
-  .hero > .trailer { grid-area: trailer; align-self: center; order: 0; margin: 0; max-width: none; width: 100%; }
-  .hero h1 { font-size: clamp(1.7rem, 2.6cqi, 2.9rem); }
-  .hero .lede { font-size: 1rem; max-width: 46ch; }
-  .hero .cmd { font-size: .92rem; }
-  .hero .cmd pre { white-space: pre; }
+  .hero > .logo { grid-area: logo; align-self: end; width: 100%; height: clamp(64px, 7cqi, 120px); }
+  .hero-copy { grid-area: copy; align-self: start; margin-top: clamp(1.25rem, 2cqi, 1.75rem); }
+  .hero > .trailer { grid-area: trailer; align-self: center; order: 0; margin: 0; max-width: none; width: 100%; max-height: calc(100svh - 12rem); }
+  .hero h1 { font-size: clamp(1.45rem, 2.2cqi, 2.3rem); }
+  .hero .lede { font-size: .92rem; max-width: 36ch; }
+  .hero .cmd { font-size: .76rem; }
+  .hero .cmd pre { white-space: pre; padding-inline: 1.5ch; }
 }
-/* 1280–1440 laptops: a slimmer text column so the trailer keeps a good size */
+/* 1200–1500: tighter gutters and a smaller command, every pixel to the trailer */
 @media (min-width: 1200px) and (max-width: 1499px) {
-  .hero h1 { font-size: clamp(1.45rem, 2.3cqi, 2.1rem); }
-  .hero .lede { font-size: .9rem; max-width: 40ch; }
-  .hero .cmd { font-size: .78rem; }
-  .hero .cmd pre { padding-inline: 1.5ch; }
+  .hero { column-gap: 1.75rem; padding-inline: 1rem; }
+  .hero .cmd { font-size: .7rem; }
+  .hero h1 { font-size: 1.4rem; }
+  .hero .lede { font-size: .85rem; }
 }
 .trailer { aspect-ratio: 16 / 9; container-type: inline-size; }
 .trailer-play, .trailer video {
