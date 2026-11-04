@@ -31,7 +31,7 @@ ksni = { version = "0.3", features = ["blocking"] }
 # Desktop notifications (`notify`), on the zbus the tray already brings.
 zbus = { version = "5", default-features = false, features = ["tokio", "blocking-api"] }
 
-# The sign-in window (`login_window`), WebView2 on Windows. On Linux it's the
+# The sign-in window (`login_window`), WebView2 on Windows, WKWebView on macOS. On Linux it's the
 # `slick-login` helper in login/, built by build.rs and carried inside slick,
 # so slick starts without WebKitGTK.
 [target.'cfg(not(target_os = "linux"))'.dependencies]
@@ -39,6 +39,10 @@ wry = "0.57"
 tao = "0.37"
 # Pasted images (`attach`); Linux shells out to wl-paste or xclip instead.
 arboard = { version = "3", default-features = false, features = ["image-data"] }
+
+# The sign-in window's Edit menu: without one, Cmd+V doesn't reach the page.
+[target.'cfg(target_os = "macos")'.dependencies]
+muda = { version = "0.21", default-features = false }
 
 # Its own workspace, also when checked out inside another (worktrees).
 [workspace]

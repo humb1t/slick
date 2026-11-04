@@ -1,5 +1,5 @@
 #!/bin/sh
-# slick installer for Linux.
+# slick installer for Linux and macOS.
 #
 #   curl -fsSL https://slick.leonavas.com/install.sh | sh
 #
@@ -43,13 +43,13 @@ target() {
     os=$(uname -s)
     arch=$(uname -m)
     case "$os" in
-        Linux) ;;
-        Darwin) err "macOS is not supported yet; build from source: cargo install --locked --git https://github.com/$REPO" ;;
+        Linux) suffix="unknown-linux-gnu" ;;
+        Darwin) suffix="apple-darwin" ;;
         *) err "unsupported OS: $os (on Windows use install.ps1)" ;;
     esac
     case "$arch" in
-        x86_64 | amd64) echo "x86_64-unknown-linux-gnu" ;;
-        aarch64 | arm64) echo "aarch64-unknown-linux-gnu" ;;
+        x86_64 | amd64) echo "x86_64-$suffix" ;;
+        aarch64 | arm64) echo "aarch64-$suffix" ;;
         *) err "unsupported architecture: $arch" ;;
     esac
 }
@@ -97,8 +97,10 @@ main() {
     case ":${PATH:-}:" in
         *":$dir:"*) ;;
         *)
+            # macOS's default shell, zsh, doesn't read ~/.profile.
+            case "$tgt" in *-apple-darwin) profile="~/.zprofile" ;; *) profile="~/.profile" ;; esac
             say "warning: $dir is not on your PATH. Add it with:"
-            say "  echo 'export PATH=\"$dir:\$PATH\"' >> ~/.profile   # then open a new shell"
+            say "  echo 'export PATH=\"$dir:\$PATH\"' >> $profile   # then open a new shell"
             ;;
     esac
 

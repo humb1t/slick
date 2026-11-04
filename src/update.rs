@@ -50,7 +50,7 @@ impl State {
 }
 
 enum Mode {
-    /// A cargo build, or neither Linux nor Windows: nothing is checked.
+    /// A development build, or a system with no releases: nothing is checked.
     Off,
     /// Owned by another tool, or in a folder we can't write to.
     Managed,
@@ -88,7 +88,7 @@ fn cargo_bin() -> PathBuf {
 /// From a release (install.sh in ~/.local/bin, install.ps1 in
 /// %LOCALAPPDATA%\Programs\slick, or any folder you can write to) it is ours.
 fn mode() -> Mode {
-    let Some(exe) = exe().filter(|_| cfg!(any(target_os = "linux", windows))) else { return Mode::Off };
+    let Some(exe) = exe().filter(|_| cfg!(any(target_os = "linux", target_os = "macos", windows))) else { return Mode::Off };
     if exe.components().any(|c| c.as_os_str() == "target") {
         return Mode::Off;
     }
@@ -167,6 +167,8 @@ fn archive(ver: &str) -> String {
     let arch = std::env::consts::ARCH;
     if cfg!(windows) {
         format!("slick-{ver}-{arch}-pc-windows-msvc.zip")
+    } else if cfg!(target_os = "macos") {
+        format!("slick-{ver}-{arch}-apple-darwin.tar.gz")
     } else {
         format!("slick-{ver}-{arch}-unknown-linux-gnu.tar.gz")
     }

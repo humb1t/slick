@@ -85,7 +85,8 @@ each install and cache directory on disk).
 
 ## Requirements
 
-- Linux (x86_64 or aarch64) or Windows 10/11 (x86_64).
+- Linux (x86_64 or aarch64), macOS 11 or newer (Apple Silicon or Intel), or
+  Windows 10/11 (x86_64).
 - A terminal with an image protocol is recommended: kitty, ghostty, WezTerm,
   foot or any sixel terminal. Others fall back to half-block images.
 - A [Nerd Font](https://www.nerdfonts.com/) for the icons.
@@ -93,6 +94,8 @@ each install and cache directory on disk).
   `libwebkit2gtk-4.1-0` on Debian/Ubuntu, `webkit2gtk4.1` on Fedora). slick
   starts without it and says so when you try to sign in; signing in with a
   token doesn't need it.
+- macOS: no tray icon or desktop notifications yet, and the session stays in the
+  config file rather than the Keychain. The sign-in window uses the system's WebKit.
 - Windows: [Windows Terminal](https://aka.ms/terminal) (or another terminal
   with true color and, ideally, an image protocol, like WezTerm); the old
   console host is not supported. The sign-in window uses WebView2, which comes
@@ -105,8 +108,8 @@ curl -fsSL https://slick.leonavas.com/install.sh | sh
 ```
 
 The script ([install.sh](install.sh)) downloads the latest
-[release](https://github.com/leonavas/slick/releases) for your architecture
-(built on Ubuntu 24.04, so glibc 2.39 or newer), checks its SHA-256 and puts
+[release](https://github.com/leonavas/slick/releases) for your system and
+architecture (on Linux built on Ubuntu 24.04, so glibc 2.39 or newer), checks its SHA-256 and puts
 `slick` in `~/.local/bin`, without sudo. It warns when that folder is not on
 your `PATH`. `SLICK_INSTALL_DIR` changes the folder and
 `SLICK_VERSION=v0.5.1` picks a version. Installed this way, slick updates itself
@@ -132,7 +135,8 @@ a version). Open a new terminal and run `slick`. Only x86_64 for now.
 
 ### From source
 
-Install Rust and the GTK/WebKitGTK development packages first:
+Install Rust first. macOS also needs the Xcode Command Line Tools
+(`xcode-select --install`). Linux also needs the GTK/WebKitGTK development packages:
 
 ```sh
 # Debian/Ubuntu
@@ -190,7 +194,8 @@ locally in `~/.config/slick/config`, readable only by you, and is only ever sent
 to Slack.
 
 The window keeps its own browser profile in `~/.local/share/slick/webview`
-(`%LOCALAPPDATA%\slick\webview` on Windows), so
+(`%LOCALAPPDATA%\slick\webview` on Windows; `~/Library/WebKit/slick` and
+`~/Library/HTTPStorages/slick` on macOS), so
 signing out of Slack in your browser does not sign slick out.
 
 Other ways: paste the token and cookie on the sign-in screen, set

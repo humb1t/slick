@@ -25,7 +25,7 @@
 <meta name="twitter:description" content="Ultrafast, slim and beautiful Slack TUI. One small Rust binary, no browser inside, with Slack's channels, DMs, threads, search and hotkeys.">
 <meta name="twitter:image" content="https://slick.leonavas.com/og.png">
 <script type="application/ld+json">
-{"@context":"https://schema.org","@type":"SoftwareApplication","name":"slick","url":"https://slick.leonavas.com/","image":"https://slick.leonavas.com/og.png","description":"slick is an ultrafast, slim and beautiful Slack client for the terminal. One small Rust binary, no browser inside: channels, DMs, threads, search, reactions and Slack's hotkeys.","applicationCategory":"CommunicationApplication","operatingSystem":"Linux, Windows","license":"https://www.apache.org/licenses/LICENSE-2.0","sameAs":"https://github.com/leonavas/slick","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"slick","url":"https://slick.leonavas.com/","image":"https://slick.leonavas.com/og.png","description":"slick is an ultrafast, slim and beautiful Slack client for the terminal. One small Rust binary, no browser inside: channels, DMs, threads, search, reactions and Slack's hotkeys.","applicationCategory":"CommunicationApplication","operatingSystem":"Linux, macOS, Windows","license":"https://www.apache.org/licenses/LICENSE-2.0","sameAs":"https://github.com/leonavas/slick","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}
 </script>
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link rel="preload" href="https://cdn.jsdelivr.net/npm/@fontsource/maple-mono@5.2.6/files/maple-mono-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
@@ -479,7 +479,7 @@ td:first-child, td:first-child * { color: var(--yellow); font-weight: 700; }
           <div>
             <div><span class="who">slick</span><span class="app"> APP</span><span class="time">09:10</span></div>
             <div class="body">
-              <p data-i18n="i1"><b>1.</b> Install it. On Linux (x86_64 and arm64):</p>
+              <p data-i18n="i1"><b>1.</b> Install it. On Linux (x86_64 and arm64) or macOS 11+ (Apple Silicon and Intel):</p>
               <div class="block"><pre>curl -fsSL https://slick.leonavas.com/install.sh | sh</pre><button class="btn" data-copy="install">[Copy]</button></div>
               <p data-i18n="i1win">On Windows 10/11 (x86_64), in PowerShell:</p>
               <div class="block"><pre>irm https://slick.leonavas.com/install.ps1 | iex</pre><button class="btn" data-copy="windows">[Copy]</button></div>
@@ -1036,7 +1036,7 @@ cookie = xoxd-…</pre></div>
           <div>
             <div><span class="who">slick</span><span class="app"> APP</span><span class="time">09:23</span></div>
             <div class="body">
-              <p data-i18n="aLinux"><b>Linux.</b> The script downloads the latest release for your machine, checks its SHA-256 and puts <code>slick</code> in <code>~/.local/bin</code>, no sudo. <code>SLICK_INSTALL_DIR</code> changes the folder.</p>
+              <p data-i18n="aLinux"><b>Linux and macOS.</b> The script downloads the latest release for your machine, checks its SHA-256 and puts <code>slick</code> in <code>~/.local/bin</code>, no sudo. <code>SLICK_INSTALL_DIR</code> changes the folder.</p>
               <p data-i18n="aWin"><b>Windows.</b> It installs to <code>%LOCALAPPDATA%\Programs\slick</code> and adds it to your PATH. Use Windows Terminal (or another terminal with colors and images); there's no tray icon on Windows yet.</p>
             </div>
           </div>
@@ -1131,7 +1131,7 @@ cookie = xoxd-…</pre></div>
     heroH: "Uma TUI de Slack ultrarrápida, enxuta e bonita.",
     heroLede: "Um binário Rust pequeno, sem navegador dentro. Tem todas as features e atalhos importantes do Slack.",
     copyCmd: "Copiar",
-    i1: "<b>1.</b> Instale. No Linux (x86_64 e arm64):",
+    i1: "<b>1.</b> Instale. No Linux (x86_64 e arm64) ou no macOS 11+ (Apple Silicon e Intel):",
     i1win: "No Windows 10/11 (x86_64), no PowerShell:",
     i1src: "Você precisa do Rust, do cargo e do pacote de desenvolvimento do WebKitGTK (<code>libwebkit2gtk-4.1-dev</code> no Debian/Ubuntu).",
     i2: "<b>2.</b> Rode. Na primeira vez, uma janelinha abre a página de login do próprio Slack.",
@@ -1142,7 +1142,7 @@ cookie = xoxd-…</pre></div>
     aSrc: "<b>Compilar do código-fonte.</b>",
     aTok: "<b>Um token ou variáveis de ambiente em vez da janela de login.</b>",
     aSess: "<b>A sua sessão.</b> Fica salva em <code>~/.config/slick/config</code>, que só você consegue ler. A janela de login tem um perfil próprio, então sair do Slack no navegador não te desconecta aqui. Se a sessão expirar, o slick pede para você entrar de novo; <kbd>Ctrl</kbd>+<kbd>L</kbd> abre a mesma tela quando quiser.",
-    aLinux: "<b>Linux.</b> O script baixa a última release para a sua máquina, confere o SHA-256 e coloca o <code>slick</code> em <code>~/.local/bin</code>, sem sudo. <code>SLICK_INSTALL_DIR</code> muda a pasta.",
+    aLinux: "<b>Linux e macOS.</b> O script baixa a última release para a sua máquina, confere o SHA-256 e coloca o <code>slick</code> em <code>~/.local/bin</code>, sem sudo. <code>SLICK_INSTALL_DIR</code> muda a pasta.",
     aWin: "<b>Windows.</b> Ele instala em <code>%LOCALAPPDATA%\Programs\slick</code> e coloca a pasta no PATH. Use o Windows Terminal (ou outro terminal com cores e imagens); por enquanto não há ícone na bandeja no Windows.",
     f1: "tá, mas por que ele é tão rápido?",
     f2: "Rust, principalmente. Olha o meu <i>trust me bro benchmark</i>: slick e o app desktop do Slack, os mesmos dois workspaces, rodando lado a lado na minha máquina agora:",

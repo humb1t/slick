@@ -1,5 +1,5 @@
-# A tag v* builds slick for Linux and Windows and attaches
-# slick-<version>-<target>.tar.gz (Linux) or .zip (Windows), each with a
+# A tag v* builds slick for Linux, macOS and Windows and attaches
+# slick-<version>-<target>.tar.gz (Linux, macOS) or .zip (Windows), each with a
 # .sha256, to that tag's release. The app's auto-update (src/update.rs) and
 # install.sh / install.ps1 download exactly these names.
 # TODO: sign the archives (minisign) and verify the signature in the app.
@@ -23,6 +23,10 @@ jobs:
             target: x86_64-unknown-linux-gnu
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -34,7 +38,9 @@ jobs:
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME, Cargo.toml $version"; exit 1; }
 
+      # macOS comes with WebKit: nothing to install.
       - name: System libraries (the sign-in window is GTK/WebKitGTK)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -47,6 +53,9 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build
+        env:
+          # Read on macOS only: the oldest version the binaries run on.
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
         run: cargo build --release --locked
 
       - name: Package
@@ -54,7 +63,7 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           name="slick-${version}-${{ matrix.target }}.tar.gz"
           tar -czf "$name" -C target/release slick
-          sha256sum "$name" > "$name.sha256"
+          shasum -a 256 "$name" > "$name.sha256"
           echo "ASSET=$name" >> "$GITHUB_ENV"
 
       - name: Upload to the release

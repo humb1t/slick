@@ -16,12 +16,14 @@
 //! takes a workspace outside the list.
 //!
 //! The browser profile lives in ~/.local/share/slick/webview
-//! (%LOCALAPPDATA%\slick\webview on Windows), apart from any other browser,
-//! so signing out elsewhere does not touch this session. Its HTTP cache is
+//! (%LOCALAPPDATA%\slick\webview on Windows; on macOS WebKit picks the place:
+//! ~/Library/WebKit/slick and ~/Library/HTTPStorages/slick), apart from any
+//! other browser, so signing out elsewhere does not touch this session. Its HTTP cache is
 //! dropped once the window closes (`login::purge_cache`); cookies and
 //! storage stay, so signing in again doesn't ask for the password.
 //!
-//! Linux draws it with WebKitGTK, Windows with WebView2 (part of Windows 10/11).
+//! Linux draws it with WebKitGTK, Windows with WebView2 (part of Windows 10/11),
+//! macOS with WKWebView (part of the system).
 
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
@@ -145,6 +147,33 @@ const PASSWORD_FIRST: &str = r#"
 })();
 "#;
 
+/// Slack turns away WKWebView's own user agent ("Please change browsers"); it
+/// is the same engine as Safari, which it takes.
+#[cfg(target_os = "macos")]
+const SAFARI: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
+
+/// macOS only sends Cmd+C, Cmd+V and the like to a page through the menu bar.
+/// Cmd+W asks to close like the window's button, so it exits with status 1.
+#[cfg(target_os = "macos")]
+fn menu_bar() -> muda::Menu {
+    use crate::i18n::tr;
+    use muda::{Menu, PredefinedMenuItem as Item, Submenu};
+    let (close, undo, redo, cut, copy, paste, all) = (
+        Item::close_window(Some(tr("Close Window", "Fechar janela"))),
+        Item::undo(Some(tr("Undo", "Desfazer"))),
+        Item::redo(Some(tr("Redo", "Refazer"))),
+        Item::cut(Some(tr("Cut", "Recortar"))),
+        Item::copy(Some(tr("Copy", "Copiar"))),
+        Item::paste(Some(tr("Paste", "Colar"))),
+        Item::select_all(Some(tr("Select All", "Selecionar tudo"))),
+    );
+    let app = Submenu::with_items("slick", true, &[&close]).expect("menu");
+    let edit = Submenu::with_items(tr("Edit", "Editar"), true, &[&undo, &redo, &cut, &copy, &paste, &all]).expect("menu");
+    let menu = Menu::with_items(&[&app, &edit]).expect("menu");
+    menu.init_for_nsapp();
+    menu
+}
+
 fn data_dir() -> std::path::PathBuf {
     crate::config::data_dir().join("webview")
 }
@@ -175,6 +204,8 @@ pub fn run() -> ! {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
     let event_loop = EventLoopBuilder::<Msg>::with_user_event().build();
+    #[cfg(target_os = "macos")]
+    let _menu = menu_bar();
     let proxy = event_loop.create_proxy();
     let (nav_proxy, window_proxy) = (proxy.clone(), proxy.clone());
     let window = WindowBuilder::new()
@@ -223,6 +254,8 @@ pub fn run() -> ! {
         use wry::WebViewBuilderExtUnix;
         builder.build_gtk(window.default_vbox().expect("vbox")).expect("webview")
     };
+    #[cfg(target_os = "macos")]
+    let builder = builder.with_user_agent(SAFARI);
     #[cfg(not(target_os = "linux"))]
     let webview = builder.build(&window).expect("webview");
 
@@ -238,11 +271,15 @@ pub fn run() -> ! {
                     return;
                 }
                 // The `d` cookie is HttpOnly: the page cannot read it, the webview can.
-                let cookie = webview
-                    .cookies_for_url("https://app.slack.com/")
+                // On macOS `cookies_for_url` wants the exact host, and `d` is on .slack.com.
+                #[cfg(target_os = "macos")]
+                let cookies = webview.cookies();
+                #[cfg(not(target_os = "macos"))]
+                let cookies = webview.cookies_for_url("https://app.slack.com/");
+                let cookie = cookies
                     .unwrap_or_default()
                     .into_iter()
-                    .find(|c| c.name() == "d")
+                    .find(|c| c.name() == "d" && c.domain().is_some_and(|d| d == "slack.com" || d.ends_with(".slack.com")))
                     .map(|c| c.value().to_string());
                 if let Some(cookie) = cookie {
                     found["cookie"] = serde_json::json!(cookie);

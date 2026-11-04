@@ -55,6 +55,11 @@ fn program() -> Res<PathBuf> {
 /// signed in, so adding a workspace or signing in again skips the password.
 /// Folders that aren't there or are still in use are left as they are.
 pub fn purge_cache() {
+    // WKWebView chooses its own folder, whatever slick's profile folder says.
+    if cfg!(target_os = "macos") {
+        let _ = std::fs::remove_dir_all(crate::config::home().join("Library/Caches/slick/WebKit"));
+        return;
+    }
     let dir = crate::config::data_dir().join("webview");
     // WebKitGTK; WebView2 keeps its profile in EBWebView.
     let caches: &[&str] = if cfg!(windows) {
