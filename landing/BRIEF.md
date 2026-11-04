@@ -28,6 +28,6 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
 - Wordmark: "SLICK" only, letter by letter in the app's four colors (blue, green, red, yellow, blue). No Slack mark.
 
 ## Screenshots
-- Hero: `screens/hero.webp`, the demo workspace's #engineering without the thread pane (readable at the hero's size).
+- Hero: the 48 s trailer (`media/slick-trailer.mp4`, made from the demo workspace with a Lyria track), shown as its poster (`media/trailer-poster.webp`) with a yellow play pill; a click swaps in the `<video>` with sound and controls. On the right of the text from 1500px, under the install command below that. `og.png` is the same cover art at 1200×630.
 - #features ends with a second message, a one-column gallery: the full main window, then search, activity, threads, reactions, message box, profile and workspaces, each with a caption (EN/PT, keys `g_*`).
 - All of them come from the demo workspace (`SLICK_DEMO=1`, `scripts/demo-shots.sh`); every name, face and message is made up, and the page says so under the gallery.

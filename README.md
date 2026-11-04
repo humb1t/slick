@@ -7,6 +7,12 @@
 
 <p align="center">A fast, lightweight Slack client for the terminal, written in Rust.</p>
 
+<p align="center">
+  <a href="https://slick.leonavas.com"><img src="assets/readme/trailer.webp" alt="Watch the slick trailer (48 seconds)" width="820"></a>
+  <br>
+  <sub>▶ <a href="https://slick.leonavas.com">Watch the trailer</a> on slick.leonavas.com, or grab the <a href="landing/public/media/slick-trailer.mp4">MP4</a> (48 s, sound on).</sub>
+</p>
+
 One small binary, no browser inside: it opens with your workspace already on
 screen (from a local cache) and refreshes in the background.
 
