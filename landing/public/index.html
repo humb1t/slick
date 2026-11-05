@@ -310,7 +310,8 @@ b, strong { color: var(--bright); }
 }
 .cmd pre .p { color: var(--yellow); user-select: none; }
 .cmd .go {
-  flex: none; padding: 0 2ch; font-weight: 800;
+  /* wide enough for the longest label ("Copiado") so the swap doesn't shift the layout */
+  flex: none; min-width: 11ch; padding: 0 2ch; font-weight: 800; text-align: center;
   background: var(--yellow); color: var(--bg);
   transition: filter .15s;
 }
