@@ -154,7 +154,7 @@ impl Slack {
 
     /// Slack's "Salvos" still to do, as (channel, ts).
     pub fn saved(&self) -> Res<HashSet<(String, String)>> {
-        let items = self.paginate("saved.list", &[("limit", "100")], "saved_items")?;
+        let items = self.paginate("saved.list", &[("limit", "50")], "saved_items")?;
         Ok(items
             .iter()
             .filter(|i| i["item_type"] == "message" && i["state"] == "in_progress")
