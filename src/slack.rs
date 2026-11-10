@@ -766,7 +766,7 @@ impl Slack {
     /// Only the conversations the user is in, archived channels included:
     /// Slack keeps their members, so the same call lists them, a page or so more.
     pub fn conversations(&self) -> Res<Vec<Conversation>> {
-        let list = self.paginate(
+        let list = match self.paginate(
             "users.conversations",
             &[
                 ("types", "public_channel,private_channel,mpim,im"),
@@ -774,12 +774,37 @@ impl Slack {
                 ("limit", "200"),
             ],
             "channels",
-        )?;
+        ) {
+            Ok(list) => list,
+            // An Enterprise Grid org can forbid the method; the official client's start-up call still lists them.
+            Err(e) if e.ends_with("enterprise_is_restricted") => return self.boot_conversations().map_err(|_| e),
+            Err(e) => return Err(e),
+        };
         Ok(list
             .iter()
             .filter(|c| !c["is_user_deleted"].as_bool().unwrap_or(false))
             .map(parse_conversation)
             .collect())
+    }
+
+    /// The user's conversations from `client.userBoot`, for where `users.conversations`
+    /// is restricted: its `channels` (group DMs among them), `mpims` should it ever
+    /// have them, and `ims`. An open one it leaves out (`has_more_mpdms`) is asked
+    /// for on its own. Session tokens only.
+    fn boot_conversations(&self) -> Res<Vec<Conversation>> {
+        let v = self.call("client.userBoot", &[])?;
+        let mut seen = HashSet::new();
+        let mut out: Vec<Conversation> = ["channels", "mpims", "ims"]
+            .iter()
+            .flat_map(|k| v[*k].as_array().into_iter().flatten())
+            .filter(|c| !c["is_user_deleted"].as_bool().unwrap_or(false))
+            .map(parse_conversation)
+            .filter(|c| !c.id.is_empty() && seen.insert(c.id.clone()))
+            .collect();
+        let missing: Vec<String> =
+            v["is_open"].as_array().into_iter().flatten().filter_map(|i| i.as_str()).filter(|i| !seen.contains(*i)).map(String::from).collect();
+        out.extend(missing.iter().filter_map(|id| self.conversation(id).ok()));
+        Ok(out)
     }
 
     /// Every public channel of the workspace, archived ones too (`Directory`).
@@ -926,7 +951,15 @@ impl Slack {
 
     /// Starred conversations: Slack's "Favoritos".
     pub fn stars(&self) -> Res<Vec<String>> {
-        let items = self.paginate("stars.list", &[("limit", "200")], "items")?;
+        let items = match self.paginate("stars.list", &[("limit", "200")], "items") {
+            Ok(items) => items,
+            // Restricted like `users.conversations`: `client.userBoot` has the starred ones too.
+            Err(e) if e.ends_with("enterprise_is_restricted") => {
+                let v = self.call("client.userBoot", &[]).map_err(|_| e)?;
+                return Ok(v["starred"].as_array().into_iter().flatten().filter_map(|i| i.as_str().map(String::from)).collect());
+            }
+            Err(e) => return Err(e),
+        };
         Ok(items
             .iter()
             .filter(|i| matches!(i["type"].as_str(), Some("im" | "mpim" | "channel" | "group")))

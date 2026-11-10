@@ -30,6 +30,12 @@ pub fn on() -> bool {
     std::env::var("SLICK_DEMO").is_ok_and(|v| v == "1")
 }
 
+/// `SLICK_DEMO_GRID=1`: the workspaces behave like an Enterprise Grid org
+/// that restricts `users.conversations` and `stars.list`.
+fn grid() -> bool {
+    std::env::var("SLICK_DEMO_GRID").is_ok_and(|v| v == "1")
+}
+
 /// Its own config, cache and data folders, fresh at every start, so the
 /// real ones are never read or written: `$SLICK_DEMO_DIR`, else a folder in /tmp.
 pub fn setup() {
@@ -546,8 +552,11 @@ fn answer(d: &mut Space, method: &str, params: &[(&str, &str)]) -> Value {
             let u = d.users.iter().find(|u| u["id"] == p("user")).unwrap_or(&d.users[0]);
             json!({ "ok": true, "user": u })
         }
+        // `SLICK_DEMO_GRID=1`: an Enterprise Grid org, whose org-level session is refused some workspace-level methods.
+        "users.conversations" if grid() => json!({ "ok": false, "error": "enterprise_is_restricted" }),
         "users.conversations" => json!({ "ok": true, "channels": d.convs }),
         "users.channelSections.list" => json!({ "ok": true, "channel_sections": d.sections }),
+        "stars.list" if grid() => json!({ "ok": false, "error": "enterprise_is_restricted" }),
         "stars.list" => {
             let items: Vec<Value> = d
                 .stars
@@ -574,7 +583,17 @@ fn answer(d: &mut Space, method: &str, params: &[(&str, &str)]) -> Value {
                 None => json!({ "ok": false, "error": "bot_not_found" }),
             }
         }
-        "client.userBoot" => json!({ "ok": true, "is_open": d.open, "prefs": { "show_sidebar_avatars": true }, "team": { "plan": "std" } }),
+        "client.userBoot" => {
+            let mut v = json!({ "ok": true, "is_open": d.open, "prefs": { "show_sidebar_avatars": true }, "team": { "plan": "std" } });
+            if grid() {
+                // Where `users.conversations` is restricted, the conversations come from here.
+                let (ims, channels): (Vec<&Value>, Vec<&Value>) = d.convs.iter().partition(|c| c["is_im"] == true);
+                v["channels"] = json!(channels);
+                v["ims"] = json!(ims);
+                v["starred"] = json!(d.stars);
+            }
+            v
+        }
         "client.counts" => {
             let mut out = json!({ "ok": true, "channels": [], "ims": [], "mpims": [],
                                   "threads": { "has_unreads": !d.threads.is_empty(), "mention_count": if d.threads.is_empty() { 0 } else { 1 } } });
