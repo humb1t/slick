@@ -1,5 +1,5 @@
 # Every pull request and push to master: slick builds (with and without the
-# demo workspace), its tests pass, and clippy has its say. Linux only, the
+# demo workspace), its tests and the sign-in helper's pass, and clippy has its say. Linux only, the
 # platform most changes are made on; release.yml still builds the others.
 # Clippy reports but doesn't fail: the code has warnings from before.
 name: ci
@@ -43,6 +43,10 @@ jobs:
 
       - name: Test
         run: cargo test --locked --features demo
+
+      # On Linux the sign-in window is its own crate (login/), with its own tests.
+      - name: Test the sign-in helper
+        run: cargo test --locked --manifest-path login/Cargo.toml
 
       - name: Clippy
         run: cargo clippy --locked --all-targets --features demo
