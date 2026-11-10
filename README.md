@@ -184,8 +184,9 @@ The screenshots come from it: `scripts/demo-shots.sh` takes them all off screen
 clicks, typing; see `src/demo.rs`).
 
 `SLICK_DEMO_GRID=1` makes it an Enterprise Grid org that restricts
-`users.conversations` and `stars.list`, so the conversations come from
-`client.userBoot` instead.
+`users.conversations`, `stars.list`, `conversations.members` and
+`conversations.list`, so slick takes them from `client.userBoot` and the
+edge API instead.
 
 ## Sign in
 

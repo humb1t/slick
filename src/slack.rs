@@ -2,7 +2,7 @@
 
 use crate::i18n::tr;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex, RwLock};
@@ -811,18 +811,86 @@ impl Slack {
     pub fn directory(&self) -> Res<Vec<DirChan>> {
         let mut out = Vec::new();
         let params = [("types", "public_channel"), ("exclude_archived", "false"), ("limit", "1000")];
-        self.paginate_each("conversations.list", &params, "channels", |c| {
-            out.push(DirChan {
-                id: str_of(&c["id"]),
-                name: str_of(&c["name"]),
-                archived: c["is_archived"].as_bool() == Some(true),
-                members: c["num_members"].as_u64().unwrap_or(0) as u32,
-                updated: updated(c),
-                folded: Default::default(),
-            });
-        })?;
+        let dir = |c: &Value| DirChan {
+            id: str_of(&c["id"]),
+            name: str_of(&c["name"]),
+            archived: c["is_archived"].as_bool() == Some(true),
+            members: c["num_members"].as_u64().unwrap_or(0) as u32,
+            updated: updated(c),
+            folded: Default::default(),
+        };
+        match self.paginate_each("conversations.list", &params, "channels", |c| out.push(dir(c))) {
+            Ok(()) => {}
+            // Restricted on some Enterprise Grid orgs: the channel browser's own search
+            // lists them there, private ones it can see too, without member counts.
+            Err(e) if e.ends_with("enterprise_is_restricted") => {
+                out.clear();
+                let all = self.edge_pages("channels/search", json!({ "query": "", "count": 1000 })).map_err(|_| e)?;
+                out.extend(all.iter().filter(|c| c["is_private"].as_bool() != Some(true)).map(dir));
+            }
+            Err(e) => return Err(e),
+        }
         out.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(out)
+    }
+
+    /// A channel's members from the edge API, for where `conversations.members`
+    /// is restricted (an Enterprise Grid org); session tokens only.
+    pub fn edge_members(&self, chan: &str) -> Res<Vec<String>> {
+        let all = self.edge_pages("users/list", json!({ "channels": [chan], "filter": "everyone", "count": 100 }))?;
+        Ok(all.iter().filter_map(|u| u["id"].as_str().map(String::from)).collect())
+    }
+
+    /// Every page of an edge API list (`results`, `next_marker`), up to 50.
+    fn edge_pages(&self, path: &str, body: Value) -> Res<Vec<Value>> {
+        let org = self.org()?;
+        let mut out = Vec::new();
+        let mut body = body;
+        for _ in 0..50 {
+            let v = self.edge(&org, path, &body)?;
+            out.extend(v["results"].as_array().into_iter().flatten().cloned());
+            match v["next_marker"].as_str().filter(|m| !m.is_empty()) {
+                Some(m) => body["marker"] = json!(m),
+                None => break,
+            }
+        }
+        Ok(out)
+    }
+
+    /// The id the edge API is addressed by: the org's on Enterprise Grid, else the workspace's.
+    fn org(&self) -> Res<String> {
+        let v = self.call("auth.test", &[])?;
+        Ok([&v["enterprise_id"], &v["team_id"]].iter().find_map(|i| i.as_str().filter(|s| !s.is_empty())).unwrap_or_default().to_string())
+    }
+
+    /// Slack's edge API (`edgeapi.slack.com/cache/<org>/<path>`), which the web
+    /// client asks for some lists. Undocumented: only session tokens get it.
+    fn edge(&self, org: &str, path: &str, body: &Value) -> Res<Value> {
+        #[cfg(feature = "demo")]
+        if crate::demo::on() {
+            return crate::demo::call(&self.creds().token, &format!("edge/{path}"), &[("channel", body["channels"][0].as_str().unwrap_or(""))]);
+        }
+        let mut body = body.clone();
+        body["token"] = json!(self.creds().token);
+        let url = format!("https://edgeapi.slack.com/cache/{org}/{path}");
+        // Rate limits as in `call`.
+        for _ in 0..8 {
+            match self.authed(self.agent.post(&url)).send_json(&body) {
+                Ok(resp) => {
+                    let v: Value = resp.into_json().map_err(|e| e.to_string())?;
+                    if v["ok"].as_bool() == Some(true) {
+                        return Ok(v);
+                    }
+                    return Err(format!("edge {path}: {}", v["error"].as_str().unwrap_or(tr("unknown error", "erro desconhecido"))));
+                }
+                Err(ureq::Error::Status(429, resp)) => {
+                    let secs = resp.header("Retry-After").and_then(|s| s.parse().ok()).unwrap_or(2u64);
+                    std::thread::sleep(Duration::from_secs(secs.min(30)));
+                }
+                Err(e) => return Err(format!("edge {path}: {e}")),
+            }
+        }
+        Err(format!("edge {path}: rate limited"))
     }
 
     /// Joins a public channel; Slack answers with it as the user now sees it.

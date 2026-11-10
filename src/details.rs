@@ -269,8 +269,12 @@ fn info(s: &Slack, chan: &str) -> Res<Info> {
 }
 
 fn members(s: &Slack, chan: &str) -> Res<Vec<String>> {
-    let list = s.paginate("conversations.members", &[("channel", chan), ("limit", "200")], "members")?;
-    Ok(list.iter().filter_map(|m| m.as_str().map(String::from)).collect())
+    match s.paginate("conversations.members", &[("channel", chan), ("limit", "200")], "members") {
+        Ok(list) => Ok(list.iter().filter_map(|m| m.as_str().map(String::from)).collect()),
+        // Restricted on some Enterprise Grid orgs, where the web client asks the edge API.
+        Err(e) if e.ends_with("enterprise_is_restricted") => s.edge_members(chan).map_err(|_| e),
+        Err(e) => Err(e),
+    }
 }
 
 /// The channel's managers, as Slack's own client lists them, and whether

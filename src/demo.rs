@@ -31,7 +31,8 @@ pub fn on() -> bool {
 }
 
 /// `SLICK_DEMO_GRID=1`: the workspaces behave like an Enterprise Grid org
-/// that restricts `users.conversations` and `stars.list`.
+/// that restricts `users.conversations`, `stars.list`, `conversations.members`
+/// and `conversations.list`.
 fn grid() -> bool {
     std::env::var("SLICK_DEMO_GRID").is_ok_and(|v| v == "1")
 }
@@ -711,6 +712,16 @@ fn answer(d: &mut Space, method: &str, params: &[(&str, &str)]) -> Value {
             Some(c) => json!({ "ok": true, "channel": c }),
             None => json!({ "ok": false, "error": "channel_not_found" }),
         },
+        "conversations.members" | "conversations.list" if grid() => json!({ "ok": false, "error": "enterprise_is_restricted" }),
+        "edge/users/list" => {
+            let users: Vec<Value> = d.users.iter().filter(|u| u["is_bot"] != true).map(|u| json!({ "id": u["id"] })).collect();
+            json!({ "ok": true, "results": users })
+        }
+        "edge/channels/search" => {
+            let mut list: Vec<Value> = d.convs.iter().filter(|c| c["is_channel"] == true).cloned().collect();
+            list.extend(d.directory.iter().cloned());
+            json!({ "ok": true, "results": list })
+        }
         "conversations.members" => {
             let ids: Vec<&Value> = d.users.iter().filter(|u| u["is_bot"] != true).map(|u| &u["id"]).collect();
             json!({ "ok": true, "members": ids })
