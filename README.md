@@ -318,6 +318,10 @@ on Windows), `key = value` per line:
 The `SLICK_LANG` environment variable (`en-US`, `pt-BR`) takes priority over
 `language` in the config.
 
+`SLICK_LOG=<file>` appends every failed Slack API call to that file, one line
+each with the time, the method and Slack's error (never a token or cookie),
+for when an error went by in the status line too fast.
+
 The cache lives in `~/.cache/slick/` (`%LOCALAPPDATA%\slick` on Windows):
 conversations, users, recent messages and images; images unseen for a week are
 deleted.

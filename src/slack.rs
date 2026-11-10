@@ -542,6 +542,10 @@ impl Slack {
     }
 
     pub fn call(&self, method: &str, params: &[(&str, &str)]) -> Res<Value> {
+        self.call_once(method, params).inspect_err(|e| log_error(method, e))
+    }
+
+    fn call_once(&self, method: &str, params: &[(&str, &str)]) -> Res<Value> {
         #[cfg(feature = "demo")]
         if crate::demo::on() {
             return crate::demo::call(&self.creds().token, method, params);
@@ -682,6 +686,10 @@ impl Slack {
     /// they only take multipart, which ureq 2 lacks, so the body is put
     /// together by hand.
     pub fn multipart(&self, method: &str, params: &[(&str, &str)], field: &str, path: &std::path::Path, mime: &str) -> Res<Value> {
+        self.multipart_once(method, params, field, path, mime).inspect_err(|e| log_error(method, e))
+    }
+
+    fn multipart_once(&self, method: &str, params: &[(&str, &str)], field: &str, path: &std::path::Path, mime: &str) -> Res<Value> {
         #[cfg(feature = "demo")]
         if crate::demo::on() {
             return crate::demo::call(&self.creds().token, method, params);
@@ -1117,6 +1125,21 @@ fn is_slack(req: &ureq::Request) -> bool {
     req.request_url().is_ok_and(|url| {
         url.scheme() == "https" && (url.host() == "slack.com" || url.host().ends_with(".slack.com"))
     })
+}
+
+/// `SLICK_LOG=<file>`: each failed Web API call appended there with its time,
+/// for finding out afterwards what the status line showed for a few seconds.
+/// Only errors that are the method's own answer ("method: error"): never a
+/// token, cookie, parameter or, for an upload, the local file's path.
+fn log_error(method: &str, e: &str) {
+    if !e.strip_prefix(method).is_some_and(|rest| rest.starts_with(": ")) {
+        return;
+    }
+    if let Some(path) = std::env::var_os("SLICK_LOG") {
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(f, "{} {e}", chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z"));
+        }
+    }
 }
 
 fn parse_conversation(c: &Value) -> Conversation {

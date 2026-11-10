@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use ratatui::widgets::{ListState, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use ratatui::Frame;
 use crate::icons::Presence;
@@ -518,6 +518,19 @@ fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
         f.render_stateful_widget(list, list_area, &mut state);
     } else {
         f.render_stateful_widget(list, list_area, &mut app.list);
+    }
+
+    // The conversation list failed to load, so the sidebar is empty or only
+    // what was cached: say why, until a load succeeds. Under the rows where
+    // there's room, else over the list's last rows.
+    if let Some(e) = &app.convs_error {
+        let text = format!("{}\n{e}", tr("Couldn't load conversations:", "Não foi possível carregar as conversas:"));
+        let shown = rows.len().saturating_sub(app.list.offset());
+        let below = list_area.y.saturating_add(u16::try_from(shown + 1).unwrap_or(u16::MAX));
+        let y = if below.saturating_add(3) <= list_area.bottom() { below } else { list_area.bottom().saturating_sub(3).max(list_area.y) };
+        let area = Rect::new(list_area.x, y, list_area.width, list_area.bottom() - y);
+        f.render_widget(Clear, area);
+        f.render_widget(Paragraph::new(text).style(Style::new().fg(Color::Red)).wrap(Wrap { trim: true }).block(Block::new().padding(ratatui::widgets::Padding::horizontal(1))), area);
     }
 
     // Like Slack: a pill over the list's edge for each side with a mention

@@ -694,6 +694,9 @@ pub struct App {
     /// Quitting to run the updated binary.
     pub restart: bool,
     pub error: Option<String>,
+    /// Why the conversation list failed to load, until it loads: the sidebar
+    /// keeps saying so after `error` has cleared from the status line.
+    pub convs_error: Option<String>,
     loading: HashSet<String>,
     /// Conversations whose history is loaded back to the first message.
     pub no_older: HashSet<String>,
@@ -854,6 +857,7 @@ impl App {
             copied: None,
             copied_code: String::new(),
             error: None,
+            convs_error: None,
             loading: HashSet::new(),
             no_older: HashSet::new(),
             polling: false,
@@ -2759,6 +2763,7 @@ impl App {
                 // Another account: nothing cached belongs to it.
                 if !self.owner.is_empty() && self.owner != me.user_id {
                     self.convs.clear();
+                    self.convs_error = None;
                     self.sections.clear();
                     self.stars.clear();
                     self.messages.clear();
@@ -2811,6 +2816,7 @@ impl App {
                 self.resort();
             }
             Event::Convs(Ok(convs)) => {
+                self.convs_error = None;
                 // The channel being previewed stays until it is left.
                 let guest = self.convs.iter().find(|c| c.guest && self.current.as_ref() == Some(&c.id)).cloned();
                 self.convs = convs;
@@ -2888,7 +2894,11 @@ impl App {
             // Sections and counts are session-token only; without them the
             // sidebar falls back to favourites, DMs and channels.
             Event::Sections(Err(_)) | Event::Counts(Err(_)) => {}
-            Event::Auth(Err(e)) | Event::Users(Err(e)) | Event::Convs(Err(e)) | Event::Stars(Err(e)) => self.error = Some(e),
+            Event::Convs(Err(e)) => {
+                self.convs_error = Some(e.clone());
+                self.error = Some(e);
+            }
+            Event::Auth(Err(e)) | Event::Users(Err(e)) | Event::Stars(Err(e)) => self.error = Some(e),
             Event::History { chan, fetch, res } => {
                 self.loading.remove(&format!("{chan}:{}", fetch as u8));
                 if fetch == Fetch::Poll {
@@ -3553,6 +3563,7 @@ impl App {
         self.users = Users::default();
         self.emoji = emoji::Emoji::default();
         self.convs.clear();
+        self.convs_error = None;
         self.chans.clear();
         self.private.clear();
         self.others.clear();
