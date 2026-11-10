@@ -77,9 +77,9 @@ fn take_team(args: &[String]) -> (Vec<String>, Option<String>) {
     (rest, team)
 }
 
-/// A workspace as `--team` takes it: an id (`T0AAA`) as it is, else its address.
+/// A workspace as `--team` takes it: an id (`T0AAA`, an Enterprise Grid org's `E0AAA`) as it is, else its address.
 fn team_name(t: &str) -> Option<String> {
-    let id = t.starts_with('T') && t.len() > 1 && t.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit());
+    let id = (t.starts_with('T') || t.starts_with('E')) && t.len() > 1 && t.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit());
     if id { Some(t.to_string()) } else { crate::config::workspace_name(t) }
 }
 

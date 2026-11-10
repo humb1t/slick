@@ -39,8 +39,8 @@ enum Msg {
 }
 
 /// Where a link the webview won't follow should go instead: `slack://`
-/// (the desktop app: `slack://open?team=T0AAA…`) becomes that workspace in
-/// the web client; web pages stay as they are.
+/// (the desktop app: `slack://open?team=T0AAA…`, or an Enterprise Grid org's
+/// `E0AAA…`) becomes that workspace in the web client; web pages stay as they are.
 fn web_url(url: &str) -> Option<String> {
     if url.starts_with("https://") || url.starts_with("http://") {
         return Some(url.to_string());
@@ -50,7 +50,7 @@ fn web_url(url: &str) -> Option<String> {
         .split(['?', '&'])
         .find_map(|kv| kv.strip_prefix("team="))
         .map(|t| t.chars().take_while(|c| c.is_ascii_alphanumeric()).collect::<String>())
-        .filter(|t| t.starts_with('T'));
+        .filter(|t| t.starts_with('T') || t.starts_with('E'));
     Some(match team {
         Some(t) => format!("https://app.slack.com/client/{t}"),
         None => "https://app.slack.com/client".to_string(),
@@ -79,16 +79,24 @@ const GRAB_TOKEN: &str = r#"
     return;
   }
   if (location.hostname !== 'app.slack.com') return;
-  const known = __KNOWN__;
+  const saved = __KNOWN__;
   function grab() {
     try {
       const cfg = JSON.parse(localStorage.getItem('localConfig_v2') || 'null');
       if (!cfg || !cfg.teams) return false;
-      const m = location.pathname.match(/\/client\/(T[A-Z0-9]+)/);
-      // Only workspaces slick doesn't have yet: the browser may be signed in to those too.
-      const fresh = Object.values(cfg.teams).filter((t) => t && t.id && !known.includes(t.id));
+      // A workspace slick has of a Grid org stands for its org too.
+      const known = saved.concat(saved.map((id) => cfg.teams[id] && cfg.teams[id].enterprise_id).filter(Boolean));
+      const m = location.pathname.match(/\/client\/([TE][A-Z0-9]+)/);
+      // Only workspaces slick doesn't have yet, nor ones of an org it has: the browser may be signed in to those too.
+      const fresh = Object.values(cfg.teams).filter((t) => t && t.id && !known.includes(t.id) && !known.includes(t.enterprise_id));
       const named = m && cfg.teams[m[1]];
-      const team = (named && !known.includes(named.id) ? named : null) || (fresh.length === 1 ? fresh[0] : null);
+      // On Enterprise Grid the browser has the org (E…) and its workspaces (T…, with
+      // enterprise_id). The client runs on the org's session: only it gets the sidebar,
+      // unread counts and start-up calls, so a workspace of the org gives way to it.
+      const org = (t) => (t && t.enterprise_id && fresh.includes(cfg.teams[t.enterprise_id]) ? cfg.teams[t.enterprise_id] : t);
+      const orgs = fresh.filter((t) => t.id[0] === 'E');
+      const whole = orgs.length === 1 && fresh.every((t) => t === orgs[0] || t.enterprise_id === orgs[0].id) ? orgs[0] : null;
+      const team = org((named && fresh.includes(named) ? named : null) || (fresh.length === 1 ? fresh[0] : null)) || whole;
       if (!team || !team.token) return false;
       const teams = Object.values(cfg.teams)
         .filter((t) => t && t.id && t.token)

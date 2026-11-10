@@ -85,7 +85,9 @@ pub fn workspace_name(s: &str) -> Option<String> {
     let s = s.trim().trim_start_matches("https://").trim_start_matches("http://");
     let s = s.split('/').next().unwrap_or("").to_lowercase();
     let s = s.strip_suffix(".slack.com").unwrap_or(&s);
-    (!s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).then(|| s.to_string())
+    // An Enterprise Grid org's own address is `acme.enterprise`.
+    let label = |p: &str| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    s.split('.').all(label).then(|| s.to_string())
 }
 
 pub fn workspace() -> Option<String> {
