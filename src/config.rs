@@ -455,3 +455,31 @@ pub fn set(values: &[(&str, String)]) -> std::io::Result<()> {
     f.write_all(text.as_bytes())?;
     std::fs::rename(tmp, p)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn workspace_name_takes_name_address_or_link() {
+        assert_eq!(workspace_name("acme").as_deref(), Some("acme"));
+        assert_eq!(workspace_name(" Acme.slack.com ").as_deref(), Some("acme"));
+        assert_eq!(workspace_name("https://acme-corp.slack.com/archives/C0123").as_deref(), Some("acme-corp"));
+        assert_eq!(workspace_name("http://acme.slack.com/").as_deref(), Some("acme"));
+    }
+
+    #[test]
+    fn workspace_name_refuses_empty_or_odd_input() {
+        assert_eq!(workspace_name(""), None);
+        assert_eq!(workspace_name("https://"), None);
+        assert_eq!(workspace_name("my workspace"), None);
+        assert_eq!(workspace_name("acme_corp"), None);
+    }
+
+    #[test]
+    fn keyring_label_prefers_domain_over_id() {
+        assert_eq!(label(Some("acme"), "T0AAA"), "slick: acme");
+        assert_eq!(label(Some(""), "T0AAA"), "slick: T0AAA");
+        assert_eq!(label(None, "T0AAA"), "slick: T0AAA");
+    }
+}

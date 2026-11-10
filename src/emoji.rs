@@ -1030,3 +1030,36 @@ impl App {
         false
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn name_of_makes_an_emoji_name_from_a_file_name() {
+        assert_eq!(name_of("Party Parrot.gif"), "party_parrot_gif");
+        assert_eq!(name_of(":blob-wave:"), "blob-wave");
+        assert_eq!(name_of("Ação  Já!"), "ao_j");
+    }
+
+    #[test]
+    fn fragment_finds_the_colon_word_before_the_cursor() {
+        assert_eq!(fragment("hi :tada", 8), Some((3, "tada".to_string())));
+        assert_eq!(fragment(":+1", 3), Some((0, "+1".to_string())));
+        // One character is too few; a colon inside a word is not a start.
+        assert_eq!(fragment("hi :t", 5), None);
+        assert_eq!(fragment("at 10:30", 8), None);
+    }
+
+    #[test]
+    fn toggle_adds_then_takes_back_my_reaction() {
+        let mut list = vec![Reaction { name: "+1".into(), users: vec!["U0AAA".into()], count: 1 }];
+        assert!(toggle(&mut list, "+1", "U0ME"));
+        assert_eq!((list[0].count, list[0].users.len()), (2, 2));
+        assert!(!toggle(&mut list, "+1", "U0ME"));
+        assert_eq!((list[0].count, list[0].users.clone()), (1, vec!["U0AAA".to_string()]));
+        assert!(toggle(&mut list, "eyes", "U0ME"));
+        assert!(!toggle(&mut list, "eyes", "U0ME"));
+        assert_eq!(list.len(), 1);
+    }
+}

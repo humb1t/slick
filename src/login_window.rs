@@ -292,3 +292,23 @@ pub fn run() -> ! {
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn web_url_turns_slack_scheme_into_the_workspace_in_the_web_client() {
+        assert_eq!(web_url("slack://open?team=T0AAA").as_deref(), Some("https://app.slack.com/client/T0AAA"));
+        assert_eq!(web_url("slack://channel?id=C0123&team=T0AAA").as_deref(), Some("https://app.slack.com/client/T0AAA"));
+        // Not a team id: the client picks one.
+        assert_eq!(web_url("slack://open?team=acme").as_deref(), Some("https://app.slack.com/client"));
+        assert_eq!(web_url("slack://open").as_deref(), Some("https://app.slack.com/client"));
+    }
+
+    #[test]
+    fn web_url_keeps_web_pages_and_drops_other_schemes() {
+        assert_eq!(web_url("https://acme.slack.com/archives/C0123").as_deref(), Some("https://acme.slack.com/archives/C0123"));
+        assert_eq!(web_url("mailto:me@example.com"), None);
+    }
+}

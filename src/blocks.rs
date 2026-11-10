@@ -1949,3 +1949,29 @@ fn truncate(s: &str, width: usize) -> String {
     out.push('…');
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn permalink_reads_archives_link_with_thread_ts() {
+        let p = permalink("https://acme.slack.com/archives/C0123/p1760000000000100?thread_ts=1760000000.000050&cid=C0123").unwrap();
+        assert_eq!(p.chan, "C0123");
+        assert_eq!(p.ts.as_deref(), Some("1760000000.000100"));
+        assert_eq!(p.thread.as_deref(), Some("1760000000.000050"));
+    }
+
+    #[test]
+    fn permalink_reads_web_client_thread_and_rejects_other_hosts() {
+        let p = permalink("https://app.slack.com/client/T0AAA/C0123/thread/C0123-1760000000.000050").unwrap();
+        assert_eq!(p.chan, "C0123");
+        // A thread's own link is at its first message.
+        assert_eq!(p.ts.as_deref(), Some("1760000000.000050"));
+        assert_eq!(p.thread.as_deref(), Some("1760000000.000050"));
+        let p = permalink("https://acme.slack.com/archives/C0123").unwrap();
+        assert_eq!((p.ts, p.thread), (None, None));
+        assert!(permalink("https://example.com/archives/C0123/p1760000000000100").is_none());
+        assert!(permalink("https://notslack.com/archives/C0123").is_none());
+    }
+}

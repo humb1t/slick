@@ -4500,3 +4500,17 @@ fn focus_window() {
     #[cfg(target_os = "linux")]
     crate::tray::focus();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_auth_error_matches_the_code_at_the_end_of_a_call_error() {
+        assert!(is_auth_error("auth.test: invalid_auth"));
+        assert!(is_auth_error("conversations.history: token_revoked"));
+        assert!(is_auth_error("not_authed"));
+        assert!(!is_auth_error("chat.postMessage: rate limited"));
+        assert!(!is_auth_error("conversations.history: channel_not_found"));
+    }
+}

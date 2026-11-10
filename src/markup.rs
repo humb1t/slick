@@ -560,3 +560,89 @@ pub fn continued(line: &[char]) -> Option<(String, usize)> {
     };
     Some((next, n))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blocks_styles_bold_and_turns_mentions_links_and_emoji_into_elements() {
+        let b = blocks("hi *there* <@U0ME> see https://example.com/a. :wave:");
+        assert_eq!(
+            b,
+            json!([{ "type": "rich_text", "elements": [{ "type": "rich_text_section", "elements": [
+                { "type": "text", "text": "hi " },
+                { "type": "text", "text": "there", "style": { "bold": true } },
+                { "type": "text", "text": " " },
+                { "type": "user", "user_id": "U0ME" },
+                { "type": "text", "text": " see " },
+                { "type": "link", "url": "https://example.com/a" },
+                { "type": "text", "text": ". " },
+                { "type": "emoji", "name": "wave" },
+            ]}]}])
+        );
+    }
+
+    #[test]
+    fn blocks_leaves_markers_inside_words_alone() {
+        let b = blocks("snake_case_name and 2*3*4");
+        assert_eq!(b[0]["elements"][0]["elements"], json!([{ "type": "text", "text": "snake_case_name and 2*3*4" }]));
+    }
+
+    #[test]
+    fn blocks_builds_ordered_list_with_offset_and_code_block() {
+        let b = blocks("3. one\n4. two\n```\nlet x = *1*;\n```");
+        assert_eq!(
+            b[0]["elements"],
+            json!([
+                { "type": "rich_text_list", "style": "ordered", "indent": 0, "border": 0, "offset": 2, "elements": [
+                    { "type": "rich_text_section", "elements": [{ "type": "text", "text": "one" }] },
+                    { "type": "rich_text_section", "elements": [{ "type": "text", "text": "two" }] },
+                ]},
+                { "type": "rich_text_preformatted", "border": 0, "elements": [{ "type": "text", "text": "let x = *1*;" }] },
+            ])
+        );
+    }
+
+    #[test]
+    fn unclosed_fence_is_text_when_sent_but_a_block_while_typing() {
+        let b = blocks("```oops");
+        assert_eq!(b[0]["elements"][0]["elements"], json!([{ "type": "text", "text": "```oops" }]));
+        let c: Vec<char> = "```\nfn main".chars().collect();
+        assert!(in_block(&c));
+        let c: Vec<char> = "```x``` y".chars().collect();
+        assert!(!in_block(&c));
+    }
+
+    #[test]
+    fn markup_writes_blocks_back_as_escaped_markup() {
+        let text = "> quoted *bold*\n- item <#C0123>\n  - nested ~gone~\nplain &lt;tag&gt; :+1::skin-tone-3:";
+        let b = json!([{ "type": "rich_text", "elements": [
+            { "type": "rich_text_quote", "elements": [
+                { "type": "text", "text": "quoted " },
+                { "type": "text", "text": "bold", "style": { "bold": true } },
+            ]},
+            { "type": "rich_text_list", "style": "bullet", "indent": 0, "elements": [
+                { "type": "rich_text_section", "elements": [{ "type": "text", "text": "item " }, { "type": "channel", "channel_id": "C0123" }] },
+            ]},
+            { "type": "rich_text_list", "style": "bullet", "indent": 1, "elements": [
+                { "type": "rich_text_section", "elements": [{ "type": "text", "text": "nested " }, { "type": "text", "text": "gone", "style": { "strike": true } }] },
+            ]},
+            { "type": "rich_text_section", "elements": [
+                { "type": "text", "text": "plain <tag> " },
+                { "type": "emoji", "name": "+1", "skin_tone": 3 },
+            ]},
+        ]}]);
+        assert_eq!(markup(&b).as_deref(), Some(text));
+        assert_eq!(markup(&json!([{ "type": "section", "text": {} }])), None);
+    }
+
+    #[test]
+    fn continued_carries_list_and_quote_prefixes() {
+        let c = |s: &str| continued(&s.chars().collect::<Vec<_>>());
+        assert_eq!(c("  9. ninth"), Some(("  10. ".into(), 5)));
+        assert_eq!(c("- item"), Some(("- ".into(), 2)));
+        assert_eq!(c(">no space"), Some(("> ".into(), 1)));
+        assert_eq!(c("1234. too long"), None);
+    }
+}

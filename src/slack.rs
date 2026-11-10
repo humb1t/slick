@@ -1284,3 +1284,140 @@ fn form_encode(s: &str) -> String {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_conversation_reads_a_private_shared_channel() {
+        let c = parse_conversation(&json!({
+            "id": "C0123", "name": "ops", "is_channel": true, "is_private": true,
+            "is_ext_shared": true, "is_archived": false, "updated": 1700000000123i64,
+            "properties": {"is_dormant": true}
+        }));
+        assert_eq!((c.id.as_str(), c.name.as_str(), c.kind), ("C0123", "ops", Kind::Private));
+        assert!(c.ext_shared && c.dormant && !c.archived && !c.general && !c.guest);
+        assert_eq!(c.user, None);
+        assert_eq!(c.updated, 1700000000123);
+    }
+
+    #[test]
+    fn parse_conversation_im_wins_over_private_and_keeps_the_user() {
+        // Slack marks DMs private too; the DM flag decides.
+        let c = parse_conversation(&json!({"id": "D0123", "is_im": true, "is_private": true, "user": "U0ME", "created": 1600000000}));
+        assert_eq!(c.kind, Kind::Direct);
+        assert_eq!(c.user.as_deref(), Some("U0ME"));
+        assert_eq!(c.name, "");
+        assert_eq!(c.updated, 1600000000000);
+        let g = parse_conversation(&json!({"id": "C0456", "is_mpim": true, "is_private": true, "name": "mpdm-a--b-1"}));
+        assert_eq!(g.kind, Kind::Group);
+        let p = parse_conversation(&json!({"id": "C0789", "name": "general", "is_general": true}));
+        assert_eq!(p.kind, Kind::Channel);
+        assert!(p.general);
+    }
+
+    #[test]
+    fn updated_falls_back_to_created_in_millis_and_ignores_zero() {
+        assert_eq!(updated(&json!({"updated": 1700000000123i64, "created": 1600000000})), 1700000000123);
+        assert_eq!(updated(&json!({"updated": 0, "created": 1600000000})), 1600000000000);
+        assert_eq!(updated(&json!({"created": 0})), 0);
+        assert_eq!(updated(&json!({"updated": "1700000000123"})), 0);
+    }
+
+    #[test]
+    fn section_prefs_takes_a_json_string_or_an_object() {
+        let o = json!({"L0SEC": {"sidebar": "unreads"}});
+        assert_eq!(section_prefs(&Value::String(o.to_string())), *o.as_object().unwrap());
+        assert_eq!(section_prefs(&o), *o.as_object().unwrap());
+        assert!(section_prefs(&json!("not json")).is_empty());
+        assert!(section_prefs(&json!("[1,2]")).is_empty());
+        assert!(section_prefs(&Value::Null).is_empty());
+    }
+
+    #[test]
+    fn parse_message_reads_a_thread_parent() {
+        let m = parse_message(&json!({
+            "type": "message", "ts": "1700000000.000100", "user": "U0ME", "text": "deploy done",
+            "thread_ts": "1700000000.000100", "reply_count": 2, "latest_reply": "1700000100.000200",
+            "reply_users": ["U0AAA", "U0BBB"], "subscribed": true,
+            "reactions": [{"name": "+1::skin-tone-2", "users": ["U0AAA"], "count": 1}],
+            "edited": {"user": "U0ME", "ts": "1700000050.000000"},
+            "pinned_to": ["C0123"]
+        }));
+        assert_eq!((m.ts.as_str(), m.user.as_deref(), m.text.as_str()), ("1700000000.000100", Some("U0ME"), "deploy done"));
+        assert_eq!(m.bot_name, None);
+        assert_eq!(m.subtype, None);
+        assert!(m.system.is_none());
+        assert_eq!((m.reply_count, m.latest_reply.as_deref()), (2, Some("1700000100.000200")));
+        assert_eq!(m.reply_users, ["U0AAA", "U0BBB"]);
+        assert!(m.subscribed);
+        assert_eq!(m.reactions.len(), 1);
+        assert_eq!((m.reactions[0].name.as_str(), m.reactions[0].count), ("+1::skin-tone-2", 1));
+        assert_eq!(m.edited.map(|e| e.ts), Some("1700000050.000000".into()));
+        assert_eq!(m.pinned_to, ["C0123"]);
+        assert!(m.files.is_empty());
+    }
+
+    #[test]
+    fn parse_message_names_a_bot_and_picks_its_icon() {
+        let m = parse_message(&json!({
+            "ts": "1700000000.000300", "subtype": "bot_message", "bot_id": "B0123", "text": "build failed",
+            "bot_profile": {"name": "CI", "icons": {"image_36": "https://example.com/36.png", "image_72": "https://example.com/72.png"}},
+            "icons": {"image_72": "not-a-url"}
+        }));
+        assert_eq!(m.user, None);
+        assert_eq!(m.bot_name.as_deref(), Some("CI"));
+        assert_eq!(m.bot_id.as_deref(), Some("B0123"));
+        // The message's own icon is not a URL, so the profile's 72px one is used.
+        assert_eq!(m.bot_icon.as_deref(), Some("https://example.com/72.png"));
+        assert_eq!(m.subtype.as_deref(), Some("bot_message"));
+        assert!(m.system.is_some());
+    }
+
+    #[test]
+    fn parse_message_keeps_system_fields_and_drops_bad_reactions() {
+        let m = parse_message(&json!({
+            "ts": "1700000000.000400", "user": "U0ME", "subtype": "channel_name",
+            "name": "ops", "old_name": "ops-old", "text": "renamed",
+            "user_profile": {"display_name": "me"}, "bot_id": "",
+            "reactions": [{"name": "eyes"}, {"count": 3}]
+        }));
+        let s = m.system.unwrap();
+        assert_eq!((s.name.as_deref(), s.old_name.as_deref(), s.topic), (Some("ops"), Some("ops-old"), None));
+        // A person's display name is not taken as a bot name.
+        assert_eq!(m.bot_name, None);
+        assert_eq!(m.bot_id, None);
+        // One reaction without a name loses them all.
+        assert!(m.reactions.is_empty());
+    }
+
+    #[test]
+    fn parse_file_prefers_the_largest_thumb_and_its_size() {
+        let f = parse_file(&json!({
+            "id": "F0123", "name": "shot.png", "mimetype": "image/png", "filetype": "png", "pretty_type": "PNG",
+            "url_private": "https://files.slack.com/full.png", "url_private_download": "https://files.slack.com/dl.png",
+            "thumb_360": "https://files.slack.com/360.png", "thumb_360_w": 360, "thumb_360_h": 200,
+            "thumb_480": "https://files.slack.com/480.png", "thumb_480_w": 480, "thumb_480_h": 267,
+            "original_w": 1920, "original_h": 1067, "size": 12345
+        }));
+        assert_eq!(f.thumb.as_deref(), Some("https://files.slack.com/480.png"));
+        assert_eq!((f.w, f.h), (480, 267));
+        assert_eq!(f.full.as_deref(), Some("https://files.slack.com/full.png"));
+        assert_eq!(f.download.as_deref(), Some("https://files.slack.com/dl.png"));
+        assert_eq!((f.size, f.filetype.as_str(), f.mimetype.as_str()), (12345, "png", "image/png"));
+    }
+
+    #[test]
+    fn parse_file_external_doc_has_no_thumb_nor_download() {
+        let f = parse_file(&json!({
+            "id": "F0456", "title": "Roadmap", "mimetype": "application/vnd.google-apps.document",
+            "is_external": true, "url_private": "https://docs.example.com/d/1", "original_w": 10, "original_h": 20
+        }));
+        assert_eq!(f.name, "Roadmap");
+        assert_eq!(f.thumb, None);
+        assert_eq!(f.download, None);
+        assert_eq!((f.w, f.h), (10, 20));
+    }
+}

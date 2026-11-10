@@ -322,3 +322,62 @@ fn status(as_json: bool) -> i32 {
     }
     0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(a: &[&str]) -> Vec<String> {
+        a.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn team_name_keeps_ids_and_normalises_addresses() {
+        assert_eq!(team_name("T0AAA").as_deref(), Some("T0AAA"));
+        assert_eq!(team_name("https://acme.slack.com/").as_deref(), Some("acme"));
+        // A lone `T` is a one-letter address, not an id.
+        assert_eq!(team_name("T").as_deref(), Some("t"));
+        assert_eq!(team_name("acme!"), None);
+    }
+
+    #[test]
+    fn take_team_pulls_flag_out_of_args() {
+        let (rest, team) = take_team(&args(&["C0123", "--team", "acme.slack.com", "--background"]));
+        assert_eq!(rest, args(&["C0123", "--background"]));
+        assert_eq!(team.as_deref(), Some("acme"));
+        // A trailing `--team` without a value names no workspace.
+        let (rest, team) = take_team(&args(&["C0123", "--team"]));
+        assert_eq!(rest, args(&["C0123"]));
+        assert_eq!(team, None);
+    }
+
+    #[test]
+    fn permalink_parses_message_link_with_thread() {
+        let link = "https://acme.slack.com/archives/C0123/p1760000000000100?thread_ts=1759999999.000200&cid=C0123";
+        assert_eq!(
+            permalink(link),
+            Some((Some("acme".into()), "C0123".into(), Some("1760000000.000100".into()), Some("1759999999.000200".into())))
+        );
+    }
+
+    #[test]
+    fn permalink_drops_thread_when_link_is_the_thread_parent() {
+        let link = "https://acme.slack.com/archives/C0123/p1760000000000100?thread_ts=1760000000.000100";
+        assert_eq!(permalink(link), Some((Some("acme".into()), "C0123".into(), Some("1760000000.000100".into()), None)));
+    }
+
+    #[test]
+    fn permalink_parses_conversation_and_web_client_links() {
+        assert_eq!(permalink("https://acme.slack.com/archives/C0123"), Some((Some("acme".into()), "C0123".into(), None, None)));
+        assert_eq!(permalink("https://app.slack.com/client/T0AAA/C0123"), Some((Some("T0AAA".into()), "C0123".into(), None, None)));
+    }
+
+    #[test]
+    fn permalink_rejects_names_and_foreign_links() {
+        assert_eq!(permalink("general"), None);
+        assert_eq!(permalink("C0123"), None);
+        assert_eq!(permalink("https://example.com/archives/C0123"), None);
+        assert_eq!(permalink("https://app.slack.com/client/T0AAA"), None);
+        assert_eq!(permalink("https://acme.slack.com/archives/C01-23"), None);
+    }
+}

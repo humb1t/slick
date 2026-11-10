@@ -892,3 +892,30 @@ pub fn ts_ms(ts: &str) -> i64 {
     let ms: i64 = frac.get(..3).and_then(|f| f.parse().ok()).unwrap_or(0);
     secs.parse::<i64>().map_or(0, |s| s * 1000 + ms)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn search_ignores_accents_and_ranks_word_starts() {
+        assert_eq!(search("João Silva", "joao"), Some((0, vec![(0, 4)])));
+        assert_eq!(search("João Silva", "sil jo"), Some((1, vec![(5, 8), (0, 2)])));
+        assert_eq!(search("Maria Antonieta", "toni"), Some((2, vec![(8, 12)])));
+        assert_eq!(search("Maria", "bob"), None);
+    }
+
+    #[test]
+    fn search_ranges_cover_separate_accents() {
+        // "José" with the accent typed apart, as macOS writes it.
+        assert_eq!(search("Jose\u{301} Lima", "jose"), Some((0, vec![(0, 5)])));
+    }
+
+    #[test]
+    fn emoji_reads_block_kit_hex_code_points() {
+        assert_eq!(emoji("1f44d").as_deref(), Some("👍"));
+        assert_eq!(emoji("1f44d-1f3fd").as_deref(), Some("👍🏽"));
+        assert_eq!(emoji(""), None);
+        assert_eq!(emoji("zz"), None);
+    }
+}
