@@ -1,0 +1,48 @@
+# Every pull request and push to master: slick builds (with and without the
+# demo workspace), its tests pass, and clippy has its say. Linux only, the
+# platform most changes are made on; release.yml still builds the others.
+# Clippy reports but doesn't fail: the code has warnings from before.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System libraries (the sign-in window is GTK/WebKitGTK)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --locked
+
+      - name: Build with the demo workspace
+        run: cargo build --locked --features demo
+
+      - name: Test
+        run: cargo test --locked --features demo
+
+      - name: Clippy
+        run: cargo clippy --locked --all-targets --features demo
