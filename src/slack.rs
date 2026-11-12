@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub type Res<T> = Result<T, String>;
 
@@ -26,7 +26,16 @@ pub struct Slack {
     wanted: Arc<Mutex<Vec<String>>>,
     /// Away set by hand: the socket stops saying someone is there (`rtm`).
     away: Arc<std::sync::atomic::AtomicBool>,
+    /// The last `client.userBoot` answer, the token it was for and when it came
+    /// (`user_boot`): start-up asks for it up to three times at once.
+    boot_cache: Arc<Mutex<Option<(String, Instant, Value)>>>,
+    /// The edge API's org id (`org`) and the token it was for: it doesn't change in a session.
+    org_cache: Arc<Mutex<Option<(String, String)>>>,
 }
+
+/// How long a `client.userBoot` answer is used again: start-up's calls, the
+/// last of them `REST_AFTER` after the first, but not a later refresh.
+const BOOT_FOR: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug)]
 pub struct AuthInfo {
@@ -454,7 +463,14 @@ impl Slack {
             .timeout(Duration::from_secs(20))
             .user_agent(concat!("slick/", env!("CARGO_PKG_VERSION")))
             .build();
-        Self { agent, creds: Arc::new(RwLock::new(creds)), wanted: Default::default(), away: Default::default() }
+        Self {
+            agent,
+            creds: Arc::new(RwLock::new(creds)),
+            wanted: Default::default(),
+            away: Default::default(),
+            boot_cache: Default::default(),
+            org_cache: Default::default(),
+        }
     }
 
     /// The session in use (`config::save_workspace` after `auth.test`, the cookie check).
@@ -530,6 +546,9 @@ impl Slack {
         if let Ok(mut c) = self.creds.write() {
             *c = creds;
         }
+        // Another session: nothing the old one was told is its.
+        *self.boot_cache.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *self.org_cache.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
     fn authed(&self, req: ureq::Request) -> ureq::Request {
@@ -792,7 +811,7 @@ impl Slack {
     /// have them, and `ims`. An open one it leaves out (`has_more_mpdms`) is asked
     /// for on its own. Session tokens only.
     fn boot_conversations(&self) -> Res<Vec<Conversation>> {
-        let v = self.call("client.userBoot", &[])?;
+        let v = self.user_boot()?;
         let mut seen = HashSet::new();
         let mut out: Vec<Conversation> = ["channels", "mpims", "ims"]
             .iter()
@@ -859,8 +878,29 @@ impl Slack {
 
     /// The id the edge API is addressed by: the org's on Enterprise Grid, else the workspace's.
     fn org(&self) -> Res<String> {
+        let token = self.creds().token;
+        let mut cache = self.org_cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((_, org)) = cache.as_ref().filter(|(t, _)| *t == token) {
+            return Ok(org.clone());
+        }
         let v = self.call("auth.test", &[])?;
-        Ok([&v["enterprise_id"], &v["team_id"]].iter().find_map(|i| i.as_str().filter(|s| !s.is_empty())).unwrap_or_default().to_string())
+        let org = [&v["enterprise_id"], &v["team_id"]].iter().find_map(|i| i.as_str().filter(|s| !s.is_empty())).unwrap_or_default().to_string();
+        *cache = Some((token, org.clone()));
+        Ok(org)
+    }
+
+    /// `client.userBoot`, its answer shared for `BOOT_FOR` by `boot` and the
+    /// fallbacks of `conversations` and `stars`, which start-up runs together:
+    /// the first one asks, the others wait for it and take its answer.
+    fn user_boot(&self) -> Res<Value> {
+        let token = self.creds().token;
+        let mut cache = self.boot_cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((_, _, v)) = cache.as_ref().filter(|(t, at, _)| *t == token && at.elapsed() < BOOT_FOR) {
+            return Ok(v.clone());
+        }
+        let v = self.call("client.userBoot", &[])?;
+        *cache = Some((token, Instant::now(), v.clone()));
+        Ok(v)
     }
 
     /// Slack's edge API (`edgeapi.slack.com/cache/<org>/<path>`), which the web
@@ -955,7 +995,7 @@ impl Slack {
 
     /// Undocumented, like `sections`: the start-up call of Slack's web client.
     pub fn boot(&self) -> Res<Boot> {
-        let v = self.call("client.userBoot", &[])?;
+        let v = self.user_boot()?;
         Ok(Boot {
             open: v["is_open"].as_array().into_iter().flatten().filter_map(|i| i.as_str().map(String::from)).collect(),
             sidebar_avatars: v["prefs"]["show_sidebar_avatars"].as_bool().unwrap_or(true),
@@ -1023,7 +1063,7 @@ impl Slack {
             Ok(items) => items,
             // Restricted like `users.conversations`: `client.userBoot` has the starred ones too.
             Err(e) if e.ends_with("enterprise_is_restricted") => {
-                let v = self.call("client.userBoot", &[]).map_err(|_| e)?;
+                let v = self.user_boot().map_err(|_| e)?;
                 return Ok(v["starred"].as_array().into_iter().flatten().filter_map(|i| i.as_str().map(String::from)).collect());
             }
             Err(e) => return Err(e),
